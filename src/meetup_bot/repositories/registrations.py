@@ -37,6 +37,19 @@ async def waitlist_position(session: AsyncSession, registration: Registration) -
     return int(ahead or 0)
 
 
+async def list_waitlist(session: AsyncSession, event_id: int) -> list[Registration]:
+    """Очередь встречи в порядке постановки (created_at, затем id)."""
+    rows = await session.scalars(
+        select(Registration)
+        .where(
+            Registration.event_id == event_id,
+            Registration.status == RegistrationStatus.WAITLIST.value,
+        )
+        .order_by(Registration.created_at, Registration.id)
+    )
+    return list(rows.all())
+
+
 async def list_active_with_users(
     session: AsyncSession, event_id: int
 ) -> list[tuple[Registration, User | None]]:

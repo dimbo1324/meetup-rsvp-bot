@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import enum
-from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,6 +21,10 @@ from meetup_bot.db.models import (
 )
 from meetup_bot.repositories import audit, bans, events, registrations, users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.locks import EventLocks
+from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
+from meetup_bot.services.rules import RulesSettings
+from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 __all__ = [
     "CancelResult",
@@ -76,6 +79,8 @@ class CancelResult:
     seats_taken: int = 0
     capacity: int = 0
     was_waitlist: bool = False
+    # Кого освобождённое место продвинуло из очереди (уже закоммичено)
+    promoted: tuple[Promotion, ...] = ()
 
     @property
     def changed_state(self) -> bool:
@@ -90,35 +95,95 @@ class RegistrationOptions:
     plus_one_enabled: bool = False
 
 
+PROMOTED_DM_TEXT = "Освободилось место — вы записаны на встречу!"
+
+
 class RegistrationService:
     def __init__(
         self,
         sessions: async_sessionmaker[AsyncSession],
         clock: Clock,
         options: RegistrationOptions | None = None,
+        *,
+        locks: EventLocks | None = None,
+        notifier: Notifier | None = None,
+        post_refresher: PostRefresher | None = None,
+        rules_provider: Callable[[], RulesSettings] | None = None,
+        options_provider: Callable[[], RegistrationOptions] | None = None,
+        render_promoted: Callable[[Promotion], str] | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
         self._options = options or RegistrationOptions()
-        # Процесс один, поэтому блокировки в памяти достаточно (раздел 9.3)
-        self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Реестр общий для всех сервисов: процесс один, блокировок в памяти достаточно (9.3)
+        self._locks = locks or EventLocks()
+        self._notifier: Notifier = notifier or NullNotifier()
+        self._post_refresher: PostRefresher = post_refresher or NullPostRefresher()
+        self._rules_provider: Callable[[], RulesSettings] = rules_provider or RulesSettings
+        self._options_provider = options_provider
+        self._render_promoted = render_promoted
+
+    def _current_options(self) -> RegistrationOptions:
+        return self._options_provider() if self._options_provider else self._options
 
     async def register(self, event_id: int, user: UserInfo, guests: int = 0) -> RegisterResult:
+        options = self._current_options()
         if guests not in (0, 1):
             raise ValueError("guests должен быть 0 или 1")
-        if guests and not self._options.plus_one_enabled:
+        if guests and not options.plus_one_enabled:
             raise ValueError("запись с гостем выключена настройкой plus_one_enabled")
 
         # Блокировка + BEGIN IMMEDIATE (в движке) + уникальный частичный индекс: три линии защиты
-        async with self._locks[event_id], self._sessions() as session, session.begin():
-            return await self._register(session, event_id, user, guests)
+        async with (
+            self._locks.lock(event_id),
+            self._sessions() as session,
+            session.begin(),
+        ):
+            result = await self._register(session, event_id, user, guests, options)
+
+        # Побочные эффекты — строго после коммита и вне блокировки
+        if result.changed_state:
+            self._post_refresher.schedule(event_id)
+        if result.filled_event and self._rules_provider().notify_admins_on_full:
+            await self._notifier.send_service(
+                f"Встреча заполнена: занято {result.seats_taken} из {result.capacity} мест."
+            )
+        return result
 
     async def cancel(self, event_id: int, user_id: int) -> CancelResult:
-        async with self._locks[event_id], self._sessions() as session, session.begin():
-            return await self._cancel(session, event_id, user_id)
+        options = self._current_options()
+        rules = self._rules_provider()
+        async with (
+            self._locks.lock(event_id),
+            self._sessions() as session,
+            session.begin(),
+        ):
+            result = await self._cancel(session, event_id, user_id, options, rules)
+
+        if not result.changed_state:
+            return result
+        self._post_refresher.schedule(event_id)
+        for promotion in result.promoted:
+            if promotion.user_id is not None:
+                text = (
+                    self._render_promoted(promotion) if self._render_promoted else PROMOTED_DM_TEXT
+                )
+                await self._notifier.send_dm(promotion.user_id, text)
+        # Выход из очереди мест не освобождает, поэтому админам о нём не сообщаем
+        if rules.notify_admins_on_cancel and not result.was_waitlist:
+            await self._notifier.send_service(
+                f"Отмена записи: пользователь {user_id}, занято "
+                f"{result.seats_taken} из {result.capacity} мест."
+            )
+        return result
 
     async def _register(
-        self, session: AsyncSession, event_id: int, user: UserInfo, guests: int
+        self,
+        session: AsyncSession,
+        event_id: int,
+        user: UserInfo,
+        guests: int,
+        options: RegistrationOptions,
     ) -> RegisterResult:
         now = self._clock.now()
         event = await events.get(session, event_id)
@@ -158,7 +223,7 @@ class RegistrationService:
         requested = 1 + guests
         free = event.capacity - taken
         if requested > free:
-            if self._options.waitlist_enabled:
+            if options.waitlist_enabled:
                 registration = await self._add(
                     session, event_id, user, guests, RegistrationStatus.WAITLIST
                 )
@@ -216,7 +281,14 @@ class RegistrationService:
         await session.flush()
         return registration
 
-    async def _cancel(self, session: AsyncSession, event_id: int, user_id: int) -> CancelResult:
+    async def _cancel(
+        self,
+        session: AsyncSession,
+        event_id: int,
+        user_id: int,
+        options: RegistrationOptions,
+        rules: RulesSettings,
+    ) -> CancelResult:
         now = self._clock.now()
         event = await events.get(session, event_id)
         if event is None:
@@ -248,5 +320,11 @@ class RegistrationService:
             target_user_id=user_id,
             payload={"was_waitlist": was_waitlist},
         )
+        promoted: list[Promotion] = []
+        # Место освобождает только отмена активной записи, и только при включённой очереди
+        if not was_waitlist and options.waitlist_enabled:
+            promoted = await promote_waitlist(
+                session, event, now, late_promotion_hours=rules.late_promotion_hours
+            )
         taken = await events.seats_taken(session, event_id)
-        return CancelResult(CancelStatus.OK, taken, event.capacity, was_waitlist)
+        return CancelResult(CancelStatus.OK, taken, event.capacity, was_waitlist, tuple(promoted))
