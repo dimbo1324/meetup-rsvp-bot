@@ -46,6 +46,8 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["DTZ"]
+# Файлы миграций генерирует Alembic
+"alembic/versions/*" = ["E501", "I001", "UP", "RUF"]
 
 [tool.mypy]
 python_version = "3.14"

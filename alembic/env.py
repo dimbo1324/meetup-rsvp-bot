@@ -9,6 +9,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.engine import Connection
 
+from meetup_bot.db import models  # noqa: F401  (регистрирует таблицы в метаданных)
 from meetup_bot.db.base import Base
 from meetup_bot.db.session import create_engine
 

@@ -1,4 +1,4 @@
-"""Движок и фабрика сессий; PRAGMA SQLite выставляются при каждом подключении."""
+"""Движок и фабрика сессий; настройки SQLite выставляются при каждом подключении."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import (
 
 
 def _apply_sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:
+    # Автокоммит на уровне драйвера: транзакциями управляем сами (см. _begin_immediate)
+    dbapi_connection.isolation_level = None
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -24,10 +26,17 @@ def _apply_sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:
         cursor.close()
 
 
+def _begin_immediate(connection: Any) -> None:
+    # Блокировка записи берётся сразу, а не при первой записи: проверка мест и вставка
+    # записи не могут выполниться в двух транзакциях одновременно (раздел 9.3)
+    connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     engine = create_async_engine(database_url)
     if engine.dialect.name == "sqlite":
         event.listen(engine.sync_engine, "connect", _apply_sqlite_pragmas)
+        event.listen(engine.sync_engine, "begin", _begin_immediate)
     return engine
 
 

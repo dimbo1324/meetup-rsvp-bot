@@ -8,6 +8,7 @@ Create Date: ${create_date}
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+import meetup_bot.db.types  # noqa: F401  (нужен миграциям с UtcDateTime)
 from alembic import op
 ${imports if imports else ""}
 
