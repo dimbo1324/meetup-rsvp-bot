@@ -12,6 +12,8 @@ from meetup_bot.db import models  # noqa: F401  (регистрирует таб
 from meetup_bot.db.base import Base
 from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.services.events import EventService
+from tests.helpers import App, make_app
+from tests.tg_fake import Harness
 
 
 @pytest.fixture
@@ -45,3 +47,19 @@ def sessions(db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 @pytest.fixture
 def event_service(sessions: async_sessionmaker[AsyncSession], clock: FakeClock) -> EventService:
     return EventService(sessions, clock)
+
+
+@pytest.fixture
+async def app(tmp_path: Path, clock: FakeClock) -> AsyncIterator[App]:
+    """Полное приложение на фейковых часах (пятница 12:00 UTC); владелец id=1, админ id=2."""
+    application = await make_app(tmp_path, clock)
+    yield application
+    await application.engine.dispose()
+
+
+@pytest.fixture
+async def tg(app: App) -> AsyncIterator[Harness]:
+    """Диспетчер с хендлерами и диалогами поверх фейковой сессии бота."""
+    harness = Harness(app)
+    yield harness
+    await harness.close()
