@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+DEFAULT_TIMEZONE = "America/Montevideo"
+
 
 class InvalidEventTimes(ValueError):
     """Нарушен инвариант порядка моментов встречи."""
@@ -19,7 +21,7 @@ class InvalidEventTimes(ValueError):
 class ScheduleSettings:
     """Настройки расписания; значения по умолчанию — из раздела 7 спецификации."""
 
-    timezone: str = "America/Montevideo"
+    timezone: str = DEFAULT_TIMEZONE
     event_weekday: int = 5
     event_time: time = time(17, 0)
     cancel_deadline_days_before: int = 1

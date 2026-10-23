@@ -26,12 +26,14 @@ HEADER = [
     "registered_at",
     "attendance",
 ]
-_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _safe(value: str) -> str:
     """Защита от CSV-инъекции: Excel исполняет ячейки, начинающиеся с формульных символов."""
-    return "'" + value if value.startswith(_FORMULA_PREFIXES) else value
+    # Excel пропускает ведущие пробелы и всё равно исполняет формулу, поэтому смотрим и на lstrip
+    dangerous = value.startswith(_FORMULA_PREFIXES) or value.lstrip().startswith(_FORMULA_PREFIXES)
+    return "'" + value if dangerous else value
 
 
 class ExportService:
