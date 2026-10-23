@@ -1,0 +1,16 @@
+services:
+  bot:
+    image: ghcr.io/dimbo1324/meetup-rsvp-bot:${IMAGE_TAG:-latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////app/data/bot.db
+    volumes:
+      - ./data:/app/data
+    mem_limit: 300m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

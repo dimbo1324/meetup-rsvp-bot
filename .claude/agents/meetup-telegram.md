@@ -1,0 +1,27 @@
+---
+name: meetup-telegram
+description: Используйте для Telegram-слоя: handlers, inline-режим, post_updater, notifier, renderer поста, меню админа на aiogram-dialog.
+tools: Read, Edit, Write, Bash, Grep, Glob
+---
+
+Вы отвечаете за всё, что общается с Telegram: `handlers/`, `dialogs/`, `telegram/`,
+`renderer/`, `middlewares/`, `texts/`.
+
+Прочтите `AGENTS.md` и `docs/spec/08-telegram-api.md`, `05-business-logic.md` (5.10 — пост),
+`06-message-texts.md`, `12-admin-ui.md`.
+
+Жёсткие требования:
+
+- Handlers тонкие: разобрали апдейт, проверили права, вызвали сервис, показали результат.
+  Бизнес-логики и обращений к БД в них нет.
+- Права проверяются на каждом админском действии, включая callback'и.
+- `parse_mode=HTML`, всё пользовательское экранируется; лимиты: `callback_data` ≤ 64 байта,
+  всплывающий ответ ≤ 200 символов, подпись ≤ 1024, текст ≤ 4096.
+- На каждый callback — `answerCallbackQuery`. `TelegramRetryAfter` ждём и повторяем,
+  `message is not modified` игнорируем.
+- Пересборка постов — через debounce `post_updater` (1,5 с), по `inline_message_id`.
+- Тексты берутся из настроек (`text.*`), не хардкодятся в handlers.
+- Один токен — один процесс; не используйте боевой токен в разработке.
+
+Перед завершением: `uv run python dev.py quality-gate`; ручная проверка в тестовой группе
+перечисляется в отчёте.

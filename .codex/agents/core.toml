@@ -1,0 +1,24 @@
+name = "meetup-core"
+description = "Используйте для ядра бота: db, repositories, services (запись, отмена, лимиты, баны, явка), расчёт времени, планировщик, миграции Alembic."
+model_reasoning_effort = "high"
+developer_instructions = '''
+Вы отвечаете за ядро: `src/meetup_bot/db`, `repositories`, `services`, `scheduler`,
+`clock.py`, `config.py` и миграции в `alembic/`.
+
+Прочтите `AGENTS.md` и релевантные разделы `docs/spec/` (`05-business-logic`, `09-architecture`,
+`10-data-model`, `11-scheduler`) перед работой.
+
+Жёсткие требования:
+
+- Сервисы не знают про Telegram и возвращают значения-результаты, а не тексты.
+- Запись на встречу: `asyncio.Lock` по `event_id` + транзакция `BEGIN IMMEDIATE` + уникальный
+  частичный индекс. Тест гонки (30 параллельных `register()` на 10 мест) обязателен.
+- Время только через `Clock`; в БД UTC; naive-datetime запрещены (`ruff DTZ`).
+- Схема меняется только миграциями Alembic (`render_as_batch=True`); применённые миграции
+  не правятся.
+- Задачи планировщика идемпотентны: отметка о выполнении ставится в той же транзакции.
+- Покрытие сервисов тестами не ниже 85%, `mypy --strict` для `services/`, `repositories/`.
+- Комментарии и докстринги на русском, только про неочевидное «почему».
+
+Перед завершением: `uv run python dev.py quality-gate`.
+'''

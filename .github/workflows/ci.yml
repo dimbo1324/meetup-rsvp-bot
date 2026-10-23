@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Установка Python 3.14 и зависимостей
+        run: |
+          uv python install 3.14
+          uv sync --frozen
+      - name: Шлюз качества
+        run: uv run python dev.py quality-gate

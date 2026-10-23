@@ -1,0 +1,76 @@
+[project]
+name = "meetup-rsvp-bot"
+version = "0.1.0"
+description = "Telegram-бот для записи на встречи с ограниченным числом мест"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "aiogram>=3.31,<4",
+    "aiogram-dialog>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.1,<2.2",
+    "aiosqlite>=0.22",
+    "alembic>=1.20",
+    "pydantic-settings>=2.16",
+    "tzdata>=2026.5",
+    "uvloop>=0.23; sys_platform == 'linux'",
+    "structlog>=26.1",
+    "sentry-sdk>=2.73",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "pytest-cov",
+    "ruff>=0.17",
+    "mypy",
+    "pre-commit",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meetup_bot"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF", "DTZ"]
+# Кириллица в комментариях и строках — норма проекта, а не «похожие символы»
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["DTZ"]
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "src"
+files = ["src", "scripts", "dev.py"]
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "meetup_bot.services.*",
+    "meetup_bot.repositories.*",
+    "meetup_bot.renderer.*",
+    "meetup_bot.clock",
+    "meetup_bot.config",
+    "meetup_bot.db.*",
+]
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["src/meetup_bot"]
+branch = true
