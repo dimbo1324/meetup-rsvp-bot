@@ -1,43 +1,40 @@
-# Чек-лист задачи: M0 — каркас репозитория и система агентов
+# Чек-лист задачи: M1 — ядро записи
 
-Ветка: `chore/bootstrap-repo-infrastructure`
+Ветка: `feat/m1-registration-core`
 
-Обозначения: `+` — сделано, `-` — не сделано или сделано частично.
+Читать: `docs/spec/05-business-logic.md` (5.1–5.4, 5.10), `10-data-model.md`, `09-architecture.md` (9.3), `16-testing.md`.
 
 ## Подготовка
 
-- [+] Изучить `SPEC.md` и эталонные репозитории `codepack`, `CogniBoiler`
-- [+] Проверить установленный стек (Python 3.14.7, uv, git, Docker — всё было на месте; `gh` не установлен и не нужен)
+- [x] Ритуал ориентации выполнен (git log, ROADMAP, overview, open-questions: блокирующих вопросов нет, действуют значения по умолчанию)
+- [x] Рабочая ветка создана от актуального `main`
 
 ## Реализация
 
-- [+] Система правил: `.ai/universal` (9 модулей), `.ai/project` (4 модуля), `CLAUDE.md`, генерируемый `AGENTS.md` (28.1 из 30 КиБ)
-- [+] Рабочие области `.claude/` и `.codex/` (8 агентов, 5 навыков, зеркала; паритет проверяет шлюз)
-- [+] Конфигурация: `pyproject.toml`, ruff/mypy/pytest, pre-commit, `.editorconfig`, `.gitignore`, `.env.example`
-- [+] Каркас кода: `config`, `clock`, `db`, Alembic
-- [+] `dev.py`, Dockerfile, compose, CI, шаблон PR, dependabot
-- [+] Документация: `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `docs/` (spec, ROADMAP, open-questions, architecture)
-- [+] `SPEC.md` разбит на `docs/spec/` (21 раздел + индекс) и удалён; разделы 18 и 19 вынесены в живые `ROADMAP.md` и `open-questions.md`
+- [ ] PRAGMA + `BEGIN IMMEDIATE` для SQLite в `db/session.py`
+- [ ] Модели всех таблиц раздела 10 (`db/models.py`) и первая миграция Alembic
+- [ ] Расчёт моментов времени 5.2 с инвариантами (`services/timing.py`), учёт часового пояса `America/Montevideo`
+- [ ] Репозитории: events, registrations, users, bans, audit
+- [ ] `services/events.py`: создание встречи с вычисленными моментами
+- [ ] `services/registration.py`: `register` (5.3) и `cancel` (5.4), блокировка по `event_id`, значения-результаты
+- [ ] `renderer/post.py`: текст, клавиатура, хеш, экранирование, контроль длины 1024/4096
 
-## Проверка
+## Проверка (тест-кейсы `docs/spec/16-testing.md`)
 
-- [+] `uv sync` проходит на Python 3.14
-- [+] `dev.py quality-gate` зелёный (синхронизация, зеркала, lint, mypy, 13 тестов pytest)
-- [+] Alembic применяется к чистой базе (покрыто тестом `tests/test_alembic.py`)
-- [+] pre-commit-хук установлен
-- [+] `docker build` образа проходит
-- [-] Запуск контейнера и healthcheck не проверялись: бот пока заглушка, файл-пульс появится в M4
-- [-] CI на GitHub не запускался (будет виден после пуша)
+- [ ] 1 — 11-я запись получает `FULL`
+- [ ] 2 — 30 параллельных `register()` на 10 мест → ровно 10 `OK`
+- [ ] 3 — двойное нажатие → `ALREADY`
+- [ ] 4 — отмена за минуту до и через минуту после дедлайна → `OK` / `TOO_LATE`
+- [ ] 5 — забаненный → `BANNED`
+- [ ] 6 — запись после `registration_closes_at` → `CLOSED`
+- [ ] 17 — суббота 17:00 в Монтевидео = 20:00 UTC
+- [ ] 18 — имя с `<b>` и `&` экранируется
+- [ ] 19 — пост с фото и 10 длинными именами: подпись ≤ 1024, хвост «… и ещё N»
+- [ ] `dev.py quality-gate` зелёный; `mypy --strict` для services/repositories/renderer/db; покрытие сервисов ≥ 85%
+- [ ] Миграция применяется к чистой базе и совпадает с моделями
 
 ## Завершение
 
-- [+] Заполнить чек-лист
-- [+] Коммит, слияние fast-forward в `main`, пуш
-
-## Отклонения и заметки
-
-- Чек-лист закоммитлен вместе с работой, а не до неё (правило `02-task-checklist.md` нарушено: задача
-  создавала сам процесс). В следующих задачах — по правилу.
-- `alembic.ini` содержит комментарий на английском: файл обязан быть ASCII (configparser читает cp1252
-  на Windows) — осознанное исключение из языковой политики, закреплено тестом.
-- `deploy.yml` и тестовые боты вынесены за рамки M0 (веха M7 и сторона владельца).
+- [ ] Документы: `ROADMAP.md` (**Статус.** M1), `overview.md`, `CHANGELOG.md`
+- [ ] Ревью diff (`code-review`), чек-лист заполнен `+`/`-`
+- [ ] Коммит, слияние fast-forward в `main`, пуш
