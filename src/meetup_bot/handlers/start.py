@@ -1,4 +1,4 @@
-"""Личка с ботом: /start, /help, /menu, /cancel, dev-команда и события членства бота."""
+"""Личка с ботом: /start, /help, dev-команда и события членства бота."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ WELCOME_USER = (
 )
 WELCOME_ADMIN_EXTRA = (
     "\n\nВы администратор. Чтобы разослать пост, наберите @{bot} в нужном чате и выберите "
-    "встречу. Меню администратора появится в одной из следующих версий."
+    "встречу. Меню администратора — команда /menu."
 )
 REMIND_ON = "Напоминания включены. Я напишу вам перед встречей и если освободится место."
 ABOUT_TEXT = (
@@ -51,8 +51,6 @@ HELP_ADMIN = (
     "• /menu — меню администратора, /cancel — выйти из текущего диалога.\n"
     "Меню появится в одной из следующих версий."
 )
-MENU_STUB = "Меню админа появится в следующей версии."
-NOT_ADMIN = "Нет доступа."
 
 
 @private.message(Command("start"))
@@ -95,25 +93,6 @@ async def cmd_help(
         await message.answer(HELP_ADMIN.format(bot=bot_username))
     else:
         await message.answer(HELP_USER)
-
-
-@private.message(Command("menu"))
-async def cmd_menu(
-    message: Message, user_info: UserInfo, sessions: async_sessionmaker[AsyncSession]
-) -> None:
-    if await check_admin(sessions, user_info.id):
-        await message.answer(MENU_STUB)
-    else:
-        await message.answer(NOT_ADMIN)
-
-
-@private.message(Command("cancel"))
-async def cmd_cancel(
-    message: Message, user_info: UserInfo, sessions: async_sessionmaker[AsyncSession]
-) -> None:
-    # Диалогов пока нет; обработчик нужен, чтобы команда не оставалась без ответа
-    if await check_admin(sessions, user_info.id):
-        await message.answer(MENU_STUB)
 
 
 @private.message(Command("dev_shift"))
