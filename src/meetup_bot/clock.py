@@ -30,3 +30,21 @@ class FakeClock:
 
     def advance(self, delta: timedelta) -> None:
         self._current += delta
+
+
+class ShiftableClock:
+    """Системные часы со сдвигом для dev-команды `/dev_shift`; в бою сдвиг всегда нулевой."""
+
+    def __init__(self, base: Clock) -> None:
+        self._base = base
+        self._shift = timedelta(0)
+
+    def now(self) -> datetime:
+        return self._base.now() + self._shift
+
+    def shift(self, delta: timedelta) -> None:
+        self._shift += delta
+
+    @property
+    def offset(self) -> timedelta:
+        return self._shift

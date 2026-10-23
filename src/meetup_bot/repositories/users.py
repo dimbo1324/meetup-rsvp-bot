@@ -40,3 +40,11 @@ async def upsert(session: AsyncSession, info: UserInfo, now: datetime) -> User:
         user.updated_at = now
     await session.flush()
     return user
+
+
+async def set_dm_available(session: AsyncSession, user_id: int, value: bool, now: datetime) -> None:
+    """Можно ли писать пользователю в личку: true после /start, false после блокировки бота."""
+    user = await session.get(User, user_id)
+    if user is not None and user.dm_available != value:
+        user.dm_available = value
+        user.updated_at = now
