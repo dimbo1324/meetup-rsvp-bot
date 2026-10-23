@@ -1,51 +1,28 @@
-# Чек-лист задачи: M1 — ядро записи
+# Чек-лист задачи: бизнес-логика вех M3–M6 и M9 (без тестов и Telegram-слоя)
 
-Ветка: `feat/m1-registration-core`
-
-Читать: `docs/spec/05-business-logic.md` (5.1–5.4, 5.10), `10-data-model.md`, `09-architecture.md` (9.3), `16-testing.md`.
+Ветка: `feat/business-logic-m3-m9`. Модель работы: лид-оркестратор + 5 агентов в отдельных worktree.
+Тесты и Telegram-интерфейс (aiogram, dialogs, handlers, post_updater) вне объёма — по решению владельца.
 
 ## Подготовка
 
-- [x] Ритуал ориентации выполнен (git log, ROADMAP, overview, open-questions: блокирующих вопросов нет, действуют значения по умолчанию)
-- [x] Рабочая ветка создана от актуального `main`
+- [+] Общие контракты: `errors`, `locks`, `ports`, `rules`, заглушка `waitlist`
 
-## Реализация
+## Реализация (по агентам)
 
-- [+] PRAGMA + `BEGIN IMMEDIATE` для SQLite в `db/session.py`
-- [+] Модели всех таблиц раздела 10 (`db/models.py`) и первая миграция Alembic
-- [+] Расчёт моментов времени 5.2 с инвариантами (`services/timing.py`), учёт часового пояса `America/Montevideo`
-- [+] Репозитории: events, registrations, users, bans, audit
-- [+] `services/events.py`: создание встречи с вычисленными моментами
-- [+] `services/registration.py`: `register` (5.3) и `cancel` (5.4), блокировка по `event_id`, значения-результаты
-- [+] `renderer/post.py`: текст, клавиатура, хеш, экранирование, контроль длины 1024/4096
+- [ ] A. Настройки и тексты (M6): `services/settings.py`, `texts/defaults.py`, `repositories/settings.py`
+- [ ] B. Админы, встречи, участники, CSV (M3): `services/admins.py`, `events.py`, `participants.py`, `export.py`
+- [ ] C. Баны и явка (M5): `services/bans.py`, `services/attendance.py`
+- [ ] D. Лист ожидания (M9): `services/waitlist.py`, правки `services/registration.py`
+- [ ] E. Планировщик (M4): `services/lifecycle.py`, `scheduler/` (тик, задачи, бэкап, пульс)
 
-## Проверка (тест-кейсы `docs/spec/16-testing.md`)
+## Проверка
 
-- [+] 1 — 11-я запись получает `FULL`
-- [+] 2 — 30 параллельных `register()` на 10 мест → ровно 10 `OK`
-- [+] 3 — двойное нажатие → `ALREADY`
-- [+] 4 — отмена за минуту до и через минуту после дедлайна → `OK` / `TOO_LATE`
-- [+] 5 — забаненный → `BANNED`
-- [+] 6 — запись после `registration_closes_at` → `CLOSED`
-- [+] 17 — суббота 17:00 в Монтевидео = 20:00 UTC
-- [+] 18 — имя с `<b>` и `&` экранируется
-- [+] 19 — пост с фото и 10 длинными именами: подпись ≤ 1024, хвост «… и ещё N»
-- [+] `dev.py quality-gate` зелёный; `mypy --strict` для services/repositories/renderer/db; покрытие сервисов ≥ 85%
-- [+] Миграция применяется к чистой базе и совпадает с моделями
+- [ ] Слияние веток агентов без конфликтов
+- [ ] `ruff`, `mypy --strict`, существующие 51 тест зелёные
+- [ ] Аудит соответствия спецификации (разделы 5, 7, 10, 11)
+- [ ] Код-ревью и ревью безопасности; находки исправлены
 
 ## Завершение
 
-- [+] Документы: `ROADMAP.md` (**Статус.** M1), `overview.md`, `CHANGELOG.md`
-- [+] Ревью diff (`code-review`), чек-лист заполнен `+`/`-`
-- [+] Коммит, слияние fast-forward в `main`, пуш
-
-## Итоги и заметки
-
-- Результаты: 51 тест зелёный, `quality-gate` пройден, покрытие `services/` 97–100%, `mypy --strict` без замечаний.
-- Кейс 2 проверен дважды: с блокировкой сервиса и без неё (30 экземпляров сервиса) — тогда защищают только
-  `BEGIN IMMEDIATE` и уникальный индекс.
-- [-] Продвижение из очереди (кейс 12) и обработка `IntegrityError` как `ALREADY` не реализованы: первое — M9,
-  второе недостижимо при одном процессе (блокировка + индекс), ошибка пробросится в общий обработчик.
-- Находка: без `relationship()` SQLAlchemy не гарантирует порядок вставки по FK — в коде, где
-  вставляются связанные строки, нужен явный `flush()` (в `users.upsert` он есть).
-- Настройки (`ScheduleSettings`, `RegistrationOptions`) пока значения по умолчанию в коде; чтение из БД — M6.
+- [ ] `ROADMAP.md`, `overview.md`, `CHANGELOG.md`, `invariants.md` обновлены
+- [ ] Чек-лист заполнен, слияние fast-forward в `main`, пуш
