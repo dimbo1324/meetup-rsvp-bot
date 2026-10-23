@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    false,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -137,6 +138,7 @@ class Registration(Base):
             sqlite_where=text("status IN ('active', 'waitlist') AND user_id IS NOT NULL"),
         ),
         Index("ix_registrations_event_status_created_at", "event_id", "status", "created_at"),
+        Index("ix_registrations_user_id", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -192,6 +194,8 @@ class Ban(Base):
     banned_at: Mapped[datetime] = mapped_column(UtcDateTime)
     unbanned_by: Mapped[int | None] = mapped_column(BigInteger, default=None)
     unbanned_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
+    # Бан снят автоматически из-за исправления явки: такой «разбан» не обнуляет счётчик неявок
+    auto_removed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class Setting(Base):

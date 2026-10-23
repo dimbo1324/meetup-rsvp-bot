@@ -23,7 +23,7 @@ from meetup_bot.repositories import audit, bans, events, registrations, users
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
-from meetup_bot.services.rules import RulesSettings
+from meetup_bot.services.rules import RegistrationOptions, RulesSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 __all__ = [
@@ -85,14 +85,6 @@ class CancelResult:
     @property
     def changed_state(self) -> bool:
         return self.status is CancelStatus.OK
-
-
-@dataclass(frozen=True)
-class RegistrationOptions:
-    """Включаемые настройки правил; по умолчанию выключены (раздел 7)."""
-
-    waitlist_enabled: bool = False
-    plus_one_enabled: bool = False
 
 
 PROMOTED_DM_TEXT = "Освободилось место — вы записаны на встречу!"

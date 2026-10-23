@@ -17,8 +17,7 @@ from meetup_bot.clock import Clock
 from meetup_bot.repositories import admins, audit
 from meetup_bot.repositories import settings as settings_repo
 from meetup_bot.services.errors import DomainError
-from meetup_bot.services.registration import RegistrationOptions
-from meetup_bot.services.rules import RulesSettings
+from meetup_bot.services.rules import RegistrationOptions, RulesSettings
 from meetup_bot.services.settings_schema import (
     SAMPLE_VARS,
     SCHEMA,

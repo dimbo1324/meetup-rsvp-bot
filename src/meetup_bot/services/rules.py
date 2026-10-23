@@ -10,6 +10,14 @@ from datetime import time
 
 
 @dataclass(frozen=True)
+class RegistrationOptions:
+    """Включаемые настройки правил записи; по умолчанию выключены (раздел 7)."""
+
+    waitlist_enabled: bool = False
+    plus_one_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class RulesSettings:
     ban_after_no_shows: int = 1
     remove_banned_from_future_events: bool = True
