@@ -36,7 +36,9 @@ _DEFAULT_TEMPLATES = {
 
 
 def default_render_text(key: str, params: dict[str, Any]) -> str:
-    return _DEFAULT_TEMPLATES[key].format(**params)
+    safe = escape_params(params)
+    safe["reason_line"] = f" Причина: {safe['reason']}" if safe.get("reason") else ""
+    return _DEFAULT_TEMPLATES[key].format(**safe)
 
 
 def escape_params(params: dict[str, Any]) -> dict[str, Any]:

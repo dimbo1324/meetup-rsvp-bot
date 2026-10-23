@@ -22,7 +22,6 @@ from meetup_bot.services.admin_support import (
     Provided,
     RenderText,
     default_render_text,
-    escape_params,
     format_local,
     resolve,
     send_dms,
@@ -365,7 +364,10 @@ class EventService:
             )
         safe_schedule(self._refresher, event_id)
         tz = schedule.timezone
-        text = self._render("event_moved", {"starts_at": format_local(times.starts_at, tz)})
+        text = self._render(
+            "event_moved",
+            {"starts_at": format_local(times.starts_at, tz), "place": event.place},
+        )
         # Продвинутые из очереди получают только «место освободилось» с уже новым временем
         await send_dms(self._notifier, [u for u in recipients if u not in promoted_ids], text)
         await self._notify_promoted(promoted_ids, times.starts_at, tz)
@@ -461,14 +463,11 @@ class EventService:
             )
             starts_at = event.starts_at
         safe_schedule(self._refresher, event_id)
-        # Причина вводится админом вручную, а ЛС уходят в parse_mode=HTML — экранируем
-        params = escape_params(
-            {
-                "starts_at": format_local(starts_at, self._schedule_settings().timezone),
-                "reason": reason or "",
-            }
-        )
-        params["reason_line"] = f" Причина: {params['reason']}" if reason else ""
+        # Значения передаются сырыми: экранирует рендер текстов (parse_mode=HTML у ЛС)
+        params = {
+            "starts_at": format_local(starts_at, self._schedule_settings().timezone),
+            "reason": reason or "",
+        }
         await send_dms(self._notifier, recipients, self._render("event_cancelled", params))
 
     async def edit_moments(

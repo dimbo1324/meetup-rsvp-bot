@@ -1,0 +1,215 @@
+"""Корень сборки: единственное место, где сервисы связываются друг с другом.
+
+Здесь принимаются решения, общие для всех сервисов: один реестр блокировок встреч, один
+снимок настроек (синхронные провайдеры читают кэш `SettingsService`, а не БД), единые
+тексты уведомлений. Telegram-слой (веха M2) передаёт сюда реализации портов
+`Notifier` и `PostRefresher`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from meetup_bot.clock import Clock
+from meetup_bot.scheduler.backup import BackupTask, SendDocument
+from meetup_bot.scheduler.tasks import (
+    AttendanceExpireTask,
+    AttendancePromptTask,
+    AttendanceReminderTask,
+    AutoCreateTask,
+    CloseRegistrationTask,
+    FinishEventsTask,
+    ReminderTask,
+    ScheduledTask,
+)
+from meetup_bot.scheduler.tick import Scheduler
+from meetup_bot.services.admin_support import format_local
+from meetup_bot.services.admins import AdminService
+from meetup_bot.services.attendance import AttendanceService
+from meetup_bot.services.bans import BanService
+from meetup_bot.services.events import EventService
+from meetup_bot.services.export import ExportService
+from meetup_bot.services.lifecycle import EventDefaults, LifecycleService
+from meetup_bot.services.locks import EventLocks
+from meetup_bot.services.participants import ParticipantService
+from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
+from meetup_bot.services.registration import RegistrationService
+from meetup_bot.services.settings import SettingsService
+from meetup_bot.services.waitlist import Promotion
+
+
+@dataclass(frozen=True)
+class Services:
+    locks: EventLocks
+    settings: SettingsService
+    admins: AdminService
+    events: EventService
+    registration: RegistrationService
+    participants: ParticipantService
+    bans: BanService
+    attendance: AttendanceService
+    lifecycle: LifecycleService
+    export: ExportService
+    scheduler: Scheduler
+
+
+def make_text_renderer(settings: SettingsService) -> Any:
+    """Адаптер «ключ сервиса → настраиваемый текст `text.*`».
+
+    Сервисы передают сырые значения и дату одной строкой «суббота, 1 ноября, 17:00»;
+    экранирование для HTML выполняет `render_text_now`, поэтому здесь его нет.
+    """
+
+    def render(key: str, params: dict[str, Any]) -> str:
+        weekday, date, time_ = _split_when(str(params.get("starts_at", "")))
+        reason = str(params.get("reason") or "")
+        return settings.render_text_now(
+            f"text.{key}",
+            weekday=weekday,
+            date=date,
+            time=time_,
+            place=str(params.get("place") or ""),
+            reason=f"Причина: {reason}" if reason else "",
+            name=str(params.get("name") or ""),
+        )
+
+    return render
+
+
+def _split_when(value: str) -> tuple[str, str, str]:
+    parts = value.split(", ")
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    return "", value, ""
+
+
+def make_promoted_renderer(settings: SettingsService) -> Any:
+    def render(promotion: Promotion) -> str:
+        weekday, date, time_ = _split_when(
+            format_local(promotion.starts_at, settings.timezone_now().key)
+        )
+        return settings.render_text_now(
+            "text.promoted", weekday=weekday, date=date, time=time_, place=promotion.place
+        )
+
+    return render
+
+
+async def build_services(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: Clock,
+    *,
+    db_path: Path,
+    backups_dir: Path,
+    heartbeat_path: Path,
+    notifier: Notifier | None = None,
+    post_refresher: PostRefresher | None = None,
+    send_backup: SendDocument | None = None,
+) -> Services:
+    """Собирает все сервисы и планировщик. Вызывать один раз при старте приложения."""
+    notifier = notifier or NullNotifier()
+    post_refresher = post_refresher or NullPostRefresher()
+    locks = EventLocks()
+
+    settings = SettingsService(sessions, clock)
+    await settings.load()
+    render = make_text_renderer(settings)
+    render_promoted = make_promoted_renderer(settings)
+
+    def defaults() -> EventDefaults:
+        d = settings.defaults_now()
+        return EventDefaults(
+            capacity=d.capacity,
+            description_html=d.description_html,
+            place=d.place,
+            place_url=d.place_url,
+            photo_file_id=d.photo_file_id,
+        )
+
+    events = EventService(
+        sessions,
+        clock,
+        settings.schedule_now,
+        locks=locks,
+        notifier=notifier,
+        post_refresher=post_refresher,
+        rules=settings.rules_now,
+        render_text=render,
+    )
+    registration = RegistrationService(
+        sessions,
+        clock,
+        locks=locks,
+        notifier=notifier,
+        post_refresher=post_refresher,
+        rules_provider=settings.rules_now,
+        options_provider=settings.options_now,
+        render_promoted=render_promoted,
+    )
+    bans = BanService(
+        sessions,
+        clock,
+        locks,
+        notifier,
+        post_refresher,
+        rules_provider=settings.rules_now,
+        render_promoted=render_promoted,
+    )
+    attendance = AttendanceService(sessions, clock, locks, bans, rules_provider=settings.rules_now)
+    participants = ParticipantService(
+        sessions,
+        clock,
+        locks,
+        notifier,
+        post_refresher,
+        settings.rules_now,
+        settings.schedule_now,
+        render,
+        ban_service=bans,
+    )
+    lifecycle = LifecycleService(
+        sessions,
+        clock,
+        locks,
+        notifier,
+        post_refresher,
+        events=events,
+        schedule=settings.schedule_now,
+        defaults_provider=defaults,
+    )
+
+    # Порядок важен: сначала создаём и напоминаем, потом закрываем и завершаем, затем явка
+    tasks: list[ScheduledTask] = [
+        AutoCreateTask(lifecycle, settings.rules_now),
+        ReminderTask(sessions, notifier, settings.rules_now, settings.schedule_now),
+        CloseRegistrationTask(lifecycle),
+        FinishEventsTask(lifecycle),
+        AttendancePromptTask(sessions, notifier),
+        AttendanceReminderTask(sessions, notifier, settings.schedule_now),
+        AttendanceExpireTask(attendance),
+        BackupTask(
+            db_path,
+            backups_dir,
+            timezone=lambda: settings.timezone_now().key,
+            send_document=send_backup,
+        ),
+    ]
+    scheduler = Scheduler(clock, tasks, heartbeat_path=heartbeat_path)
+
+    return Services(
+        locks=locks,
+        settings=settings,
+        admins=AdminService(sessions, clock),
+        events=events,
+        registration=registration,
+        participants=participants,
+        bans=bans,
+        attendance=attendance,
+        lifecycle=lifecycle,
+        export=ExportService(sessions, clock),
+        scheduler=scheduler,
+    )
