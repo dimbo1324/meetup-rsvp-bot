@@ -79,7 +79,8 @@ def get_sessions(manager: DialogManager) -> async_sessionmaker[AsyncSession]:
 
 def actor_id(manager: DialogManager) -> int:
     """ID пользователя, нажавшего кнопку (не чата)."""
-    return manager.event.from_user.id
+    user = manager.middleware_data["event_from_user"]
+    return int(user.id)
 
 
 async def is_admin(manager: DialogManager) -> bool:
