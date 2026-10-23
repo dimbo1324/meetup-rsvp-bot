@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.repositories import users
+from meetup_bot.telegram.attendance_ui import AttendanceUI, SheetStatus
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class TelegramNotifier:
         self._sessions = sessions
         self._clock = clock
         self._service_chat_id = service_chat_id
+        self._attendance_ui: AttendanceUI | None = None
 
     async def send_dm(self, user_id: int, text: str) -> bool:
         for attempt in range(2):
@@ -86,7 +88,12 @@ class TelegramNotifier:
             except TelegramAPIError as exc:
                 logger.warning("служебное сообщение не доставлено: %s", exc.message)
 
+    def attach_attendance_ui(self, ui: AttendanceUI) -> None:
+        """Привязка поздняя: интерфейсу явки нужны сервисы, а сервисам — уведомитель."""
+        self._attendance_ui = ui
+
     async def send_attendance_prompt(self, admin_id: int, event_id: int) -> bool:
-        # Меню отметки явки — отдельный этап
-        logger.info("интерфейс отметки явки — веха M5 (admin=%s, event=%s)", admin_id, event_id)
-        return False
+        if self._attendance_ui is None:
+            logger.warning("интерфейс явки не привязан (event=%s)", event_id)
+            return False
+        return await self._attendance_ui.send_sheet(admin_id, event_id) == SheetStatus.SENT
