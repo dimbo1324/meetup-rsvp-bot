@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -26,12 +27,16 @@ from meetup_bot.services.admin_support import (
     format_local,
     send_dms,
 )
+from meetup_bot.services.bans import BanService
 from meetup_bot.services.errors import InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.rules import RulesSettings
+from meetup_bot.services.safe import safe_schedule
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
+
+logger = logging.getLogger(__name__)
 
 
 def display_name(user: User | None, manual_name: str | None) -> str:
@@ -56,8 +61,11 @@ class RemoveResult:
     registration_id: int
     user_id: int | None
     promoted: tuple[Promotion, ...]
-    # True: неявка записана, и AttendanceService должен пересчитать бан для `user_id`
+    # True: неявка записана и бан нужно пересчитать для `user_id`. Если сервис создан с
+    # `ban_service`, пересчёт уже выполнен (см. `banned`); иначе его делает вызывающий
     ban_recalc_required: bool = False
+    # Пересчёт привёл к выдаче автобана
+    banned: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,21 +95,24 @@ class ParticipantService:
         self,
         sessions: async_sessionmaker[AsyncSession],
         clock: Clock,
-        locks: EventLocks | None = None,
+        locks: EventLocks,
         notifier: Notifier | None = None,
         post_refresher: PostRefresher | None = None,
         rules: RulesSettings | Callable[[], RulesSettings] | None = None,
         schedule: ScheduleSettings | Callable[[], ScheduleSettings] | None = None,
         render_text: RenderText | None = None,
+        *,
+        ban_service: BanService | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
-        self._locks = locks or EventLocks()
+        self._locks = locks
         self._notifier: Notifier = notifier or NullNotifier()
         self._refresher: PostRefresher = post_refresher or NullPostRefresher()
         self._rules = rules
         self._schedule = schedule
         self._render: RenderText = render_text or default_render_text
+        self._bans = ban_service
 
     async def admin_add(
         self,
@@ -150,7 +161,7 @@ class ParticipantService:
                 },
             )
             result = AddResult(registration.id, taken + 1, event.capacity, over)
-        self._refresher.schedule(event_id)
+        safe_schedule(self._refresher, event_id)
         return result
 
     async def admin_remove(
@@ -170,16 +181,25 @@ class ParticipantService:
     ) -> RemoveResult:
         """Отмена после дедлайна: «без штрафа» (как удаление) или «как неявка».
 
-        Бан не пересчитывается здесь: это зона AttendanceService, флаг в результате
-        говорит вызывающему, что пересчёт нужен.
+        Если сервису передан `ban_service`, бан пересчитывается после коммита; иначе флаг
+        `ban_recalc_required` в результате говорит вызывающему, что пересчёт нужен.
         """
-        return await self._release(
+        result = await self._release(
             actor_id,
             event_id,
             registration_id,
             as_no_show=as_no_show,
             action="registration.cancel_no_show" if as_no_show else "registration.admin_remove",
         )
+        if not (result.ban_recalc_required and self._bans and result.user_id is not None):
+            return result
+        # Сбой пересчёта не должен терять уже сохранённую отмену: дожмёт reevaluate_bans
+        try:
+            outcome = await self._bans.recalc_for_attendance(actor_id, result.user_id, event_id)
+        except Exception:
+            logger.exception("не удалось пересчитать бан (user_id=%s)", result.user_id)
+            return result
+        return replace(result, banned=outcome.banned)
 
     async def list_participants(self, actor_id: int, event_id: int) -> ParticipantList:
         async with self._sessions() as session:
@@ -256,7 +276,7 @@ class ParticipantService:
                 promoted=tuple(promotions),
                 ban_recalc_required=as_no_show and registration.user_id is not None,
             )
-        self._refresher.schedule(event_id)
+        safe_schedule(self._refresher, event_id)
         if recipients:
             text = self._render(
                 "promoted",
