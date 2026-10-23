@@ -104,7 +104,7 @@ def cmd_migrate(_: list[str]) -> int:
 
 
 def cmd_run(_: list[str]) -> int:
-    return uv("python", "-m", "meetup_bot")
+    return cmd_migrate([]) or uv("python", "-m", "meetup_bot")
 
 
 def cmd_quality_gate(_: list[str]) -> int:
@@ -134,7 +134,7 @@ COMMANDS: dict[str, tuple[Callable[[list[str]], int], str]] = {
     "test": (cmd_test, "pytest (аргументы передаются дальше)"),
     "quality-gate": (cmd_quality_gate, "полный шлюз качества перед слиянием"),
     "migrate": (cmd_migrate, "alembic upgrade head"),
-    "run": (cmd_run, "запустить бота"),
+    "run": (cmd_run, "применить миграции и запустить бота"),
 }
 
 

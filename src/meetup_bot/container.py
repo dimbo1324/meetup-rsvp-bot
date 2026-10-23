@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,8 @@ class Services:
     lifecycle: LifecycleService
     export: ExportService
     scheduler: Scheduler
+    post_refresher: PostRefresher
+    notifier: Notifier
 
 
 def make_text_renderer(settings: SettingsService) -> Any:
@@ -108,15 +111,19 @@ async def build_services(
     heartbeat_path: Path,
     notifier: Notifier | None = None,
     post_refresher: PostRefresher | None = None,
+    post_refresher_factory: Callable[[SettingsService], PostRefresher] | None = None,
     send_backup: SendDocument | None = None,
 ) -> Services:
     """Собирает все сервисы и планировщик. Вызывать один раз при старте приложения."""
     notifier = notifier or NullNotifier()
-    post_refresher = post_refresher or NullPostRefresher()
     locks = EventLocks()
 
     settings = SettingsService(sessions, clock)
     await settings.load()
+    # Обновитель постов читает настройки (имена в посте, «+1»), поэтому создаётся после них
+    if post_refresher_factory is not None:
+        post_refresher = post_refresher_factory(settings)
+    post_refresher = post_refresher or NullPostRefresher()
     render = make_text_renderer(settings)
     render_promoted = make_promoted_renderer(settings)
 
@@ -212,4 +219,6 @@ async def build_services(
         lifecycle=lifecycle,
         export=ExportService(sessions, clock),
         scheduler=scheduler,
+        post_refresher=post_refresher,
+        notifier=notifier,
     )

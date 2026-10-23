@@ -65,7 +65,7 @@ class TelegramNotifier:
                 if attempt == 1:
                     logger.warning("лимит Telegram при отправке личного сообщения (%s)", user_id)
                     return False
-                await asyncio.sleep(exc.retry_after)
+                await asyncio.sleep(min(exc.retry_after, 30.0))
             except TelegramAPIError as exc:
                 logger.warning("личное сообщение не доставлено (%s): %s", user_id, exc.message)
                 return False
@@ -78,7 +78,7 @@ class TelegramNotifier:
             try:
                 await self._bot.send_message(self._service_chat_id, chunk)
             except TelegramRetryAfter as exc:
-                await asyncio.sleep(exc.retry_after)
+                await asyncio.sleep(min(exc.retry_after, 30.0))
                 try:
                     await self._bot.send_message(self._service_chat_id, chunk)
                 except TelegramAPIError as retry_exc:

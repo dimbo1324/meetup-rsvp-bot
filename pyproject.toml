@@ -65,6 +65,7 @@ module = [
     "meetup_bot.clock",
     "meetup_bot.config",
     "meetup_bot.db.*",
+    "meetup_bot.telegram.*",
 ]
 strict = true
 

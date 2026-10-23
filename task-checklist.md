@@ -1,27 +1,37 @@
 # Чек-лист задачи: M2 — Telegram-слой (посты, кнопки, inline, уведомления)
 
-Ветка: `feat/m2-telegram-layer`. Тесты и меню админа (aiogram-dialog) вне объёма.
-Читать: `docs/spec/08-telegram-api.md`, `05-business-logic.md` (5.3, 5.4, 5.10), `09-architecture.md` (9.4, 9.5), `06-message-texts.md`.
+Ветка: `feat/m2-telegram-layer`. Тесты и меню админа (aiogram-dialog) вне объёма — решение владельца.
+Модель работы: лид + 2 агента реализации (`telegram/`, `handlers/`+`middlewares/`) + 1 агент-ревьюер.
+
+Обозначения: `+` — сделано, `-` — не сделано или сделано частично.
 
 ## Подготовка
 
-- [x] Ритуал ориентации; рабочая ветка от актуального `main`
-- [ ] Контракты: `repositories/event_posts`, `users.set_dm_available`, `ShiftableClock`
+- [+] Ритуал ориентации; рабочая ветка от актуального `main`
+- [+] Контракты: `repositories/event_posts`, `users.set_dm_available`, `ShiftableClock`
 
 ## Реализация
 
-- [ ] `telegram/`: `post_updater` (debounce 1,5 с, правка по `inline_message_id`, ретраи, `is_dead`), `notifier` (порты `Notifier`), `callbacks`, преобразование клавиатуры
-- [ ] `handlers/`: `signup` (кнопки, lazy registration, всплывающие тексты, подсказка про Start), `inline` (`inline_query`, `chosen_inline_result`), `start` (`/start`, `/help`, deep links, `dm_available`, `my_chat_member`), `errors`
-- [ ] `middlewares/`: пользователь (upsert), контекст сервисов
-- [ ] Сборка: `__main__`, приложение (Bot, Dispatcher, `allowed_updates`, команды, стартовое сообщение, планировщик, остановка), dev-команда `/dev_shift`
+- [+] `telegram/`: `PostUpdater` (debounce, повторный проход, ретраи сети/лимитов, оживление/пометка `is_dead`, смена типа поста), `TelegramNotifier`, `SignupCallback`, клавиатуры, `build_post`
+- [+] `handlers/`: кнопки записи/отмены (lazy registration, тексты `text.*`, подсказка про Start, устаревшие кнопки), inline и `chosen_inline_result`, `/start`, `/help`, deep links, `my_chat_member`, `/dev_shift` (dev), глобальный обработчик ошибок
+- [+] `middlewares/user`: upsert пользователя (для inline не пишет в БД)
+- [+] Сборка: `app.py` (безопасный старт/остановка, Sentry без токена и ПД, пересборка постов после рестарта, контроль падения планировщика), `__main__`, `dev.py run` с миграциями
 
 ## Проверка
 
-- [ ] `quality-gate` зелёный (ruff, mypy `--strict`, 51 тест)
-- [ ] Прогон на фейковом Telegram (подмена сессии бота): запись, повторное нажатие, мест нет, отмена, inline, пересборка постов
-- [ ] Ревью diff (права, лимиты Telegram, экранирование, ошибки)
+- [+] `quality-gate` зелёный: ruff, mypy `--strict` (67 файлов), 51 тест
+- [+] Сквозной прогон на фейковой сессии бота (разовый скрипт вне репозитория): `/start`, inline для админа и не-админа, `chosen_inline_result`, запись, повтор, lazy registration второго поста, заполнение, отмена, пометка недоступного поста, закрытая встреча без кнопок, кривой callback
+- [+] Независимое ревью Telegram-слоя; важные находки исправлены (пересборка при «пустом» нажатии, оживление поста, ретраи сети, Sentry, ORM в inline, старт/остановка)
+- [-] Проверка на реальном Telegram не выполнена: нужен тестовый бот и `.env`
+- [-] Автотесты Telegram-слоя не написаны — по решению владельца
+
+## Известный долг (подробно — `docs/open-questions.md` §3)
+
+- Меню админа и интерфейс отметки явки — заглушки; `/menu` и `/cancel` видны всем в списке команд
+- Формулировки ошибок Telegram для inline-сообщений не проверены на живом боте
+- Чтения в БД берут `BEGIN IMMEDIATE`; прочий долг бизнес-логики
 
 ## Завершение
 
-- [ ] Документы (`ROADMAP.md`, `overview.md`, `CHANGELOG.md`), чек-лист `+`/`-`
-- [ ] Слияние fast-forward в `main`, пуш
+- [+] Документы (`ROADMAP.md`, `overview.md`, `CHANGELOG.md`), чек-лист заполнен
+- [+] Слияние fast-forward в `main`, пуш

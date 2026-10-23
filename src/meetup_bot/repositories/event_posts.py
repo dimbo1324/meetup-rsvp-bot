@@ -31,6 +31,10 @@ async def register(
     """
     existing = await get_by_inline_id(session, inline_message_id)
     if existing is not None:
+        if existing.is_dead:
+            # Нажатие на кнопку доказывает, что сообщение живо: помеченное «мёртвым» ошибочно
+            existing.is_dead = False
+            existing.last_render_hash = None
         return existing, False
     post = EventPost(
         event_id=event_id,
@@ -53,6 +57,16 @@ async def list_live(session: AsyncSession, event_id: int) -> list[EventPost]:
             EventPost.inline_message_id.is_not(None),
         )
         .order_by(EventPost.id)
+    )
+    return list(rows.all())
+
+
+async def list_live_event_ids(session: AsyncSession) -> list[int]:
+    """Встречи, у которых есть живые посты: их нужно пересобрать после перезапуска."""
+    rows = await session.scalars(
+        select(EventPost.event_id)
+        .where(EventPost.is_dead.is_(False), EventPost.inline_message_id.is_not(None))
+        .distinct()
     )
     return list(rows.all())
 

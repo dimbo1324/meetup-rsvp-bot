@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import dataclasses
 import logging
 from collections import defaultdict
 
@@ -12,7 +12,9 @@ from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramNetworkError,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,6 +29,8 @@ from meetup_bot.telegram.posts import build_post
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
+# Верхняя граница ожидания при лимитах и сбоях сети, чтобы правка не зависала надолго
+MAX_RETRY_AFTER = 30.0
 
 _NOT_MODIFIED = "message is not modified"
 # Сообщение недоступно навсегда: пост исчез, истёк или не принадлежит боту
@@ -34,8 +38,9 @@ _DEAD_MARKERS = (
     "message_id_invalid",
     "message to edit not found",
     "message can't be edited",
-    "inline message",
 )
+# Тип поста (фото/текст) изменился после рассылки: правим другим методом
+_WRONG_KIND_MARKERS = ("there is no caption in the message", "there is no text in the message")
 
 
 class PostUpdater:
@@ -73,13 +78,15 @@ class PostUpdater:
         except RuntimeError:
             logger.warning("цикл событий не запущен: пересборка постов %s пропущена", event_id)
 
-    async def aclose(self) -> None:
+    async def aclose(self, wait: float = 5.0) -> None:
+        # Дожидаемся уже запланированных правок вместо отмены: очередь живёт только в памяти
+        self._debounce = 0.0
         tasks = list(self._tasks.values())
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=wait)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
         self._rerun.clear()
 
@@ -124,16 +131,24 @@ class PostUpdater:
                 logger.exception("ошибка правки поста %s встречи %s", post_id, event_id)
 
     async def _edit_one(self, post_id: int, inline_id: str, rendered: RenderedPost) -> None:
-        for _ in range(MAX_ATTEMPTS):
+        for attempt in range(MAX_ATTEMPTS):
             try:
                 await self._send_edit(inline_id, rendered)
             except TelegramRetryAfter as exc:
-                await asyncio.sleep(exc.retry_after)
+                await asyncio.sleep(min(exc.retry_after, MAX_RETRY_AFTER))
+                continue
+            except TelegramNetworkError, TelegramServerError:
+                # Сеть или 5xx: ограниченный повтор с нарастающей паузой
+                logger.warning("временный сбой Telegram при правке поста %s", post_id)
+                await asyncio.sleep(min(2**attempt, MAX_RETRY_AFTER))
                 continue
             except TelegramBadRequest as exc:
                 message = exc.message.lower()
                 if _NOT_MODIFIED in message:
                     break  # содержимое уже такое — считаем успехом
+                if any(marker in message for marker in _WRONG_KIND_MARKERS):
+                    rendered = dataclasses.replace(rendered, has_photo=not rendered.has_photo)
+                    continue
                 if any(marker in message for marker in _DEAD_MARKERS):
                     await self._mark_dead(post_id)
                     return

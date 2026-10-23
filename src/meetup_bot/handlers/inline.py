@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
-from meetup_bot.db.models import Event, EventStatus
+from meetup_bot.db.models import EventStatus
 from meetup_bot.handlers._common import check_admin, format_moment
 from meetup_bot.repositories import event_posts
 from meetup_bot.repositories.users import UserInfo
@@ -60,10 +60,10 @@ async def on_inline_query(
             built = await build_post(sessions, services.settings, item.id)
             if built is None:
                 continue
-            _, rendered = built
+            data, rendered = built
             markup = to_markup(rendered)
             result_id = f"{RESULT_PREFIX}{item.id}"
-            photo_file_id = await _photo_file_id(sessions, item.id)
+            photo_file_id = data.photo_file_id
             if photo_file_id and rendered.has_photo:
                 results.append(
                     InlineQueryResultCachedPhoto(
@@ -91,12 +91,6 @@ async def on_inline_query(
         logger.warning("отказ при выдаче inline-списка пользователю %s", user_info.id)
     # Без cache_time=0 Telegram показал бы устаревший список (число мест меняется постоянно)
     await query.answer(results, cache_time=0, is_personal=True)
-
-
-async def _photo_file_id(sessions: async_sessionmaker[AsyncSession], event_id: int) -> str | None:
-    async with sessions() as session:
-        event = await session.get(Event, event_id)
-        return event.photo_file_id if event is not None else None
 
 
 @router.chosen_inline_result()

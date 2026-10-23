@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -82,25 +82,24 @@ async def on_signup_callback(
                 if len(text) + 1 + len(hint) <= ALERT_LIMIT:
                     text = f"{text}\n{hint}"
                     url = f"https://t.me/{bot_username}?start=remind"
-            changed = register_result.changed_state
             known_event = register_result.status is not RegisterStatus.NOT_FOUND
         elif action == ACTION_CANCEL:
             cancel_result = await services.registration.cancel(event_id, user_info.id)
             text = _cancel_text(services, cancel_result)
-            changed = cancel_result.changed_state
             known_event = cancel_result.status is not CancelStatus.NOT_FOUND
         else:
             logger.warning("неизвестное действие кнопки: %r", action)
-            changed = False
             known_event = False
         if known_event:
             await _register_inline_post(callback, event_id, sessions, clock)
-        if changed:
-            # Сервис уже ставит пересборку в очередь; повтор безопасен (debounce)
+        if known_event:
+            # Даже если состояние не изменилось: пост мог устареть (5.11), а хеш отсечёт лишнюю
+            # правку. Сервис уже ставит пересборку при изменениях; повтор безопасен (debounce).
             post_updater.schedule(event_id)
     except ValueError:
-        # Запись с гостем при выключенной настройке plus_one_enabled
-        text = NO_GUESTS_TEXT
+        # Запись с гостем при выключенной настройке plus_one_enabled (сервис отвергает так)
+        logger.warning("отказ сервиса записи для встречи %s", event_id, exc_info=True)
+        text = NO_GUESTS_TEXT if action == ACTION_JOIN_PLUS_ONE else GENERIC_ERROR_TEXT
     except DomainError:
         logger.warning("отказ при обработке кнопки, встреча %s", event_id, exc_info=True)
         text = GENERIC_ERROR_TEXT
@@ -174,3 +173,9 @@ def _cancel_text(services: Services, result: CancelResult) -> str:
     return services.settings.render_text_now(
         _CANCEL_TEXT_KEYS[result.status], escape_html=False, **variables
     )
+
+
+@router.callback_query(F.data.startswith("r:"))
+async def on_stale_callback(callback: CallbackQuery) -> None:
+    """Кнопка старого или неизвестного формата: без ответа у пользователя крутятся часики."""
+    await _answer(callback, "Эта кнопка устарела. Откройте свежий пост встречи.", None)

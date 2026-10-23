@@ -70,6 +70,7 @@ class PostData:
     place_url: str = ""
     cancel_reason: str | None = None
     has_photo: bool = False
+    photo_file_id: str | None = None
     show_names: bool = True
     plus_one_enabled: bool = False
 

@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import ChosenInlineResult, InlineQuery, TelegramObject
 from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -41,6 +41,10 @@ class UserMiddleware(BaseMiddleware):
             last_name=tg_user.last_name,
             username=tg_user.username,
         )
+        # Inline-бот публичен: любой, набравший @бота в чужом чате, не должен попадать в БД
+        if isinstance(event, InlineQuery | ChosenInlineResult):
+            data["user_info"] = info
+            return await handler(event, data)
         sessions: async_sessionmaker[AsyncSession] = data["sessions"]
         clock: Clock = data["clock"]
         try:

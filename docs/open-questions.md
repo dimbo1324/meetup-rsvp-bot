@@ -50,4 +50,6 @@
 | 2026-10-23 | Секреты: `bot_token` в `Settings` — обычная строка, нужен `SecretStr`, а в Sentry — scrubbing (`before_send`) |
 | 2026-10-23 | Анонимизация данных по запросу (17.7) не затрагивает `audit_log.payload` (там имена и причины) |
 | 2026-10-23 | `sync_owners`: убранный из `OWNER_IDS` владелец остаётся админом — при компрометации аккаунта снимать вручную (`remove_admin`) |
+| 2026-10-23 | Не проверено на реальном Telegram (нужен тестовый бот): `url` вместе с `show_alert`, приход `inline_message_id` для фото-результатов, точные тексты ошибок для недоступных inline-сообщений |
+| 2026-10-23 | Интерфейс отметки явки (`TelegramNotifier.send_attendance_prompt`) — заглушка: пока админы не получают список для отметки; меню админа (`/menu`) — заглушка |
 | 2026-10-23 | Дублирование: `display_name` и `DEFAULT_TIMEZONE` в `posts.py`; `repositories/admins.py` импортирует `services.errors` |

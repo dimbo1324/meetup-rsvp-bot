@@ -45,6 +45,7 @@ async def load_post_data(
             place_url=event.place_url,
             cancel_reason=event.cancel_reason,
             has_photo=event.photo_file_id is not None,
+            photo_file_id=event.photo_file_id,
             show_names=show_names,
             plus_one_enabled=plus_one_enabled,
         )
