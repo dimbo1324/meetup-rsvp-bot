@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import enum
+import re
 import string
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -14,13 +15,23 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from meetup_bot.services.errors import DomainError
-from meetup_bot.texts.defaults import ALLOWED_PLACEHOLDERS, DEFAULT_TEXTS, TEXT_PREFIX
+from meetup_bot.texts.defaults import (
+    ALLOWED_PLACEHOLDERS,
+    DEFAULT_TEXTS,
+    MESSAGE_TEXT_KEYS,
+    TEXT_PREFIX,
+)
 
 POPUP_MAX_LEN = 200
 PLACE_MAX_LEN = 200
 # Подпись поста с фото ≤ 1024; описание не должно съедать всё место автоблока (5.10)
 DESCRIPTION_WARN_LEN = 700
 DESCRIPTION_MAX_LEN = 3500
+URL_MAX_LEN = 2000
+FILE_ID_MAX_LEN = 256
+# Пределы значений, которые потребители подставляют в тексты (имя пользователя, причина)
+NAME_MAX_LEN = 64
+REASON_MAX_LEN = 200
 
 # Тестовые значения для пробного рендера текстов
 SAMPLE_VARS: dict[str, str] = {
@@ -32,6 +43,18 @@ SAMPLE_VARS: dict[str, str] = {
     "position": "1",
     "name": "Имя",
     "reason": "Причина",
+}
+
+# Худший случай для проверки длины всплывающих окон: длиннейшие реальные значения подстановок
+WORST_CASE_VARS: dict[str, str] = {
+    "date": "25.10.2026",
+    "time": "17:00",
+    "weekday": "воскресенье",
+    "place": "М" * PLACE_MAX_LEN,
+    "deadline": "воскресенье, 23:59",
+    "position": "999",
+    "name": "И" * NAME_MAX_LEN,
+    "reason": "П" * REASON_MAX_LEN,
 }
 
 # Теги, которые принимает Telegram в parse_mode=HTML
@@ -99,6 +122,7 @@ _TEXT_DESCRIPTIONS: dict[str, str] = {
     "text.promoted": "Продвижение из листа ожидания",
     "text.event_cancelled": "Встреча отменена",
     "text.event_moved": "Встреча перенесена",
+    "text.attendance_marked_by": "Подпись «явку отметил(а) …»",
 }
 
 _SPECS: tuple[SettingSpec, ...] = (
@@ -106,9 +130,17 @@ _SPECS: tuple[SettingSpec, ...] = (
     _int("event_weekday", 5, 0, 6, "День встречи (пн = 0, сб = 5)"),
     SettingSpec("event_time", Kind.TIME, "17:00", "Время начала встречи"),
     SettingSpec("default_place", Kind.STR, "", "Место по умолчанию", max_len=PLACE_MAX_LEN),
-    SettingSpec("default_place_url", Kind.URL, "", "Ссылка на карту (https://)"),
+    SettingSpec(
+        "default_place_url", Kind.URL, "", "Ссылка на карту (https://)", max_len=URL_MAX_LEN
+    ),
     SettingSpec("default_description", Kind.HTML, "", "Текст поста по умолчанию (HTML)"),
-    SettingSpec("default_photo_file_id", Kind.OPT_STR, None, "Фото по умолчанию (file_id)"),
+    SettingSpec(
+        "default_photo_file_id",
+        Kind.OPT_STR,
+        None,
+        "Фото по умолчанию (file_id)",
+        max_len=FILE_ID_MAX_LEN,
+    ),
     _bool("auto_create_enabled", True, "Автосоздание встреч"),
     _int("auto_create_weekday", 6, 0, 6, "День недели автосоздания (пн = 0)"),
     SettingSpec("auto_create_time", Kind.TIME, "10:00", "Время автосоздания"),
@@ -129,7 +161,14 @@ _SPECS: tuple[SettingSpec, ...] = (
     _bool("notify_admins_on_cancel", True, "Уведомлять админов об отменах"),
     SettingSpec("timezone", Kind.TIMEZONE, "America/Montevideo", "Часовой пояс (IANA)"),
     *(
-        SettingSpec(key, Kind.TEXT, text, _TEXT_DESCRIPTIONS[key], max_len=POPUP_MAX_LEN)
+        SettingSpec(
+            key,
+            Kind.TEXT,
+            text,
+            _TEXT_DESCRIPTIONS[key],
+            # Лимит 200 — только у всплывающих окон; у сообщений его нет
+            max_len=None if key in MESSAGE_TEXT_KEYS else POPUP_MAX_LEN,
+        )
         for key, text in DEFAULT_TEXTS.items()
     ),
 )
@@ -171,24 +210,86 @@ def check_template(key: str, template: str) -> None:
     template.format(**SAMPLE_VARS)
 
 
+_HREF_HTTPS = re.compile(r"https://[^\s\"<>]+")
+_HREF_USER = re.compile(r"tg://user\?id=\d+")
+_LANG_CLASS = re.compile(r"language-[\w+#.-]+")
+# Telegram понимает четыре именованные сущности и любые числовые
+_ENTITY = re.compile(r"&(?:lt|gt|amp|quot|#\d{1,7}|#[xX][0-9a-fA-F]{1,6});")
+
+
+def _check_attrs(tag: str, attrs: list[tuple[str, str | None]]) -> str | None:
+    """Белый список атрибутов: всё, что не перечислено, отклоняется (возвращает причину)."""
+    names = [name for name, _ in attrs]
+    if len(set(names)) != len(names):
+        return f"повторяющийся атрибут в <{tag}>"
+    pairs = {name: (value or "") for name, value in attrs}
+    if tag == "a":
+        href = pairs.get("href", "")
+        ok_href = _HREF_HTTPS.fullmatch(href) or _HREF_USER.fullmatch(href)
+        if set(pairs) != {"href"} or not ok_href:
+            return "ссылка <a> допускает только href вида https://… или tg://user?id=…"
+    elif tag == "span":
+        if pairs != {"class": "tg-spoiler"}:
+            return '<span> допускается только с class="tg-spoiler"'
+    elif tag in {"code", "pre"}:
+        if pairs and not (set(pairs) == {"class"} and _LANG_CLASS.fullmatch(pairs["class"])):
+            return f'<{tag}> допускает только class="language-…"'
+    elif tag == "tg-emoji":
+        if set(pairs) != {"emoji-id"} or not pairs["emoji-id"].isdigit():
+            return "<tg-emoji> требует числовой emoji-id"
+    elif pairs:
+        return f"тег <{tag}> не принимает атрибутов"
+    return None
+
+
 class _TagChecker(HTMLParser):
-    """Проверяет, что HTML состоит из тегов Telegram и теги закрыты в правильном порядке."""
+    """Проверяет, что HTML состоит из тегов Telegram и теги закрыты в правильном порядке.
+
+    Валидатор строже парсера: Telegram отвечает ошибкой на «странный» HTML уже при
+    публикации поста. Атрибуты — по белому списку, комментарии/декларации/инструкции и
+    голые `<` запрещены (голые `&` ловит `check_html` по сырому тексту).
+    """
 
     def __init__(self) -> None:
-        super().__init__()
+        # convert_charrefs=False: иначе парсер молча «чинит» сущности и «<» в тексте
+        super().__init__(convert_charrefs=False)
         self.stack: list[str] = []
         self.error: str | None = None
 
+    def fail(self, message: str) -> None:
+        if self.error is None:
+            self.error = message
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag not in _TG_TAGS:
-            self.error = f"тег <{tag}> не поддерживается Telegram"
+            self.fail(f"тег <{tag}> не поддерживается Telegram")
+            return
+        reason = _check_attrs(tag, attrs)
+        if reason:
+            self.fail(reason)
         self.stack.append(tag)
 
     def handle_endtag(self, tag: str) -> None:
         if not self.stack or self.stack[-1] != tag:
-            self.error = f"тег </{tag}> закрыт не к месту"
+            self.fail(f"тег </{tag}> закрыт не к месту")
         else:
             self.stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if "<" in data:
+            self.fail("неэкранированный символ «<» (используйте &lt;)")
+
+    def handle_comment(self, data: str) -> None:
+        self.fail("комментарии не поддерживаются")
+
+    def handle_decl(self, decl: str) -> None:
+        self.fail("декларации <!…> не поддерживаются")
+
+    def handle_pi(self, data: str) -> None:
+        self.fail("инструкции <?…> не поддерживаются")
+
+    def unknown_decl(self, data: str) -> None:
+        self.fail("декларации <![…]> не поддерживаются")
 
 
 def check_html(key: str, value: str) -> list[str]:
@@ -200,6 +301,11 @@ def check_html(key: str, value: str) -> list[str]:
     checker = _TagChecker()
     checker.feed(value)
     checker.close()
+    # Сущности парсер не пропускает через handle_data, поэтому «голые» & ищем в сыром тексте
+    if re.search(r"<[^>]*$", value):  # «<b» в конце: парсер молча отбрасывает хвост
+        checker.fail("незакрытый тег в конце текста")
+    if any(not _ENTITY.match(value, m.start()) for m in re.finditer("&", value)):
+        checker.fail("неэкранированный символ «&» (используйте &amp;)")
     if checker.error is None and checker.stack:
         checker.error = f"тег <{checker.stack[-1]}> не закрыт"
     if checker.error:
@@ -235,7 +341,12 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
             return None, warnings
         if not isinstance(value, str) or not value.strip():
             raise SettingsValidationError(key, "Нужна непустая строка или пустое значение.")
-        return value.strip(), warnings
+        value = value.strip()
+        if spec.max_len is not None and len(value) > spec.max_len:
+            raise SettingsValidationError(key, f"Не длиннее {spec.max_len} символов.")
+        if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise SettingsValidationError(key, "Идентификатор не должен содержать пробелов.")
+        return value, warnings
 
     if not isinstance(value, str):
         raise SettingsValidationError(key, "Нужна строка.")
@@ -247,10 +358,18 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
         return value, warnings
     if kind is Kind.URL:
         value = value.strip()
+        max_len = spec.max_len or URL_MAX_LEN
+        if len(value) > max_len:
+            raise SettingsValidationError(key, f"Ссылка не длиннее {max_len} символов.")
+        if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise SettingsValidationError(
+                key, "В ссылке не должно быть пробелов и управляющих символов."
+            )
         if value and (not value.startswith("https://") or len(value) <= len("https://")):
             raise SettingsValidationError(key, "Ссылка должна начинаться с https://")
-        if any(ch.isspace() for ch in value):
-            raise SettingsValidationError(key, "В ссылке не должно быть пробелов.")
+        # Кавычки и скобки разорвали бы атрибут href="…" в посте
+        if any(ch in value for ch in "\"'<>\\"):
+            raise SettingsValidationError(key, "В ссылке недопустимы символы \" ' < > \\")
         return value, warnings
     if kind is Kind.TIMEZONE:
         value = value.strip()
@@ -267,30 +386,66 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
         if not value.strip():
             raise SettingsValidationError(key, "Текст не может быть пустым.")
         check_template(key, value)
-        rendered = value.format(**SAMPLE_VARS)
-        assert spec.max_len is not None
-        if len(rendered) > spec.max_len:
-            raise SettingsValidationError(
-                key,
-                f"Текст слишком длинный: {len(rendered)} из {spec.max_len} символов "
-                "(лимит всплывающего окна Telegram).",
-            )
+        if spec.max_len is not None:
+            # Худший случай: длинное имя, длинное место и т. п.
+            rendered = value.format(**WORST_CASE_VARS)
+            if len(rendered) > spec.max_len:
+                raise SettingsValidationError(
+                    key,
+                    f"Текст слишком длинный: до {len(rendered)} из {spec.max_len} символов "
+                    "с самыми длинными подстановками (лимит всплывающего окна Telegram).",
+                )
         return value, warnings
 
     # Kind.STR
+    value = value.strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SettingsValidationError(key, "Без переводов строк и управляющих символов.")
     if spec.max_len is not None and len(value) > spec.max_len:
         raise SettingsValidationError(key, f"Не длиннее {spec.max_len} символов.")
     return value, warnings
 
 
+def validate_place(value: Any) -> str:
+    """Проверка места встречи по схеме `default_place`; возвращает нормализованное значение."""
+    normalized, _ = validate(get_spec("default_place"), value)
+    return str(normalized)
+
+
+def validate_url(value: Any) -> str:
+    """Проверка ссылки на карту; пустая строка допустима и значит «без ссылки»."""
+    normalized, _ = validate(get_spec("default_place_url"), value)
+    return str(normalized)
+
+
+def validate_capacity(value: Any) -> int:
+    normalized, _ = validate(get_spec("capacity"), value)
+    return int(normalized)
+
+
+def validate_description(value: Any) -> list[str]:
+    """Проверка HTML-описания; ошибки — SettingsValidationError, предупреждения — списком."""
+    _, warnings = validate(get_spec("default_description"), value)
+    return warnings
+
+
 __all__ = [
+    "NAME_MAX_LEN",
+    "REASON_MAX_LEN",
     "SAMPLE_VARS",
     "SCHEMA",
     "TEXT_PREFIX",
+    "WORST_CASE_VARS",
     "Kind",
     "SettingSpec",
     "SettingsValidationError",
+    "check_html",
+    "check_template",
     "get_spec",
     "parse_hhmm",
     "validate",
+    "validate_capacity",
+    "validate_description",
+    "validate_place",
+    "validate_url",
 ]

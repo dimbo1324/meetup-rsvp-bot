@@ -1,11 +1,19 @@
 """Сервис настроек: значения из БД поверх умолчаний из кода (раздел 7 спецификации).
 
 Каждое изменение проверяется схемой, требует прав админа и пишется в audit_log.
+
+Потребители (регистрация, баны, явка…) получают настройки через СИНХРОННЫЕ провайдеры,
+потому что вызываются под открытой транзакцией записи: открыть из неё ещё одну сессию к
+SQLite значит самоблокироваться. Поэтому весь набор переопределений держится в памяти
+(`load()` при старте), а `*_now()` читают только кэш.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
+import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import time
 from typing import Any
@@ -23,23 +31,37 @@ from meetup_bot.services.settings_schema import (
     SCHEMA,
     SettingSpec,
     SettingsValidationError,
+    check_template,
     get_spec,
     parse_hhmm,
     validate,
 )
 from meetup_bot.services.timing import ScheduleSettings
-from meetup_bot.texts.defaults import ALLOWED_PLACEHOLDERS
+from meetup_bot.texts.defaults import ALLOWED_PLACEHOLDERS, DEFAULT_TEXTS, TEXT_PREFIX
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DefaultEventParams",
+    "SettingsNotLoaded",
     "SettingsService",
     "SettingsValidationError",
 ]
 
 
+class SettingsNotLoaded(RuntimeError):
+    """Синхронное чтение до `await SettingsService.load()` — ошибка порядка запуска."""
+
+    def __init__(self) -> None:
+        super().__init__("настройки не загружены: вызовите `await settings.load()` при старте")
+
+
 @dataclass(frozen=True)
 class DefaultEventParams:
-    """Параметры новой встречи по умолчанию (настройки влияют только на новые встречи)."""
+    """Параметры новой встречи по умолчанию (настройки влияют только на новые встречи).
+
+    Имена полей совпадают с `EventDefaults` из services/lifecycle.py.
+    """
 
     capacity: int
     place: str
@@ -55,105 +77,65 @@ def _to_time(value: str) -> time:
     return time(*parsed)
 
 
+class _BlankMissing(defaultdict[str, str]):
+    """Для format_map: отсутствующая подстановка даёт пустую строку, а не KeyError."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        super().__init__(str, values)
+
+
 class SettingsService:
     def __init__(self, sessions: async_sessionmaker[AsyncSession], clock: Clock) -> None:
         self._sessions = sessions
         self._clock = clock
-        # Кэш переопределений из БД; процесс один, поэтому достаточно сбрасывать его при записи
+        # Кэш переопределений из БД. None — ещё не загружен. После записи обновляется по
+        # месту (а не сбрасывается), чтобы синхронные читатели всегда видели актуальное.
         self._overrides: dict[str, Any] | None = None
+        # Растёт при каждой записи: загрузка, начатая до записи, не должна затереть кэш
+        # устаревшим словарём
+        self._version = 0
         self._load_lock = asyncio.Lock()
+        # Записи сериализуем, чтобы порядок в БД и в кэше совпадал
+        self._write_lock = asyncio.Lock()
+
+    # ---- загрузка и кэш -------------------------------------------------------------
+
+    async def load(self) -> None:
+        """Прогревает кэш (вызывать при старте до первой работы потребителей)."""
+        await self._load()
 
     async def _load(self) -> dict[str, Any]:
-        overrides = self._overrides
-        if overrides is not None:
-            return overrides
         async with self._load_lock:
-            if self._overrides is None:
+            while self._overrides is None:
+                version = self._version
                 async with self._sessions() as session:
                     stored = await settings_repo.get_all(session)
+                if version != self._version:
+                    continue  # пока читали, кто-то записал: читаем заново
                 # Ключи, удалённые из схемы в новых версиях, игнорируем
                 self._overrides = {k: v for k, v in stored.items() if k in SCHEMA}
             return self._overrides
 
-    async def get(self, key: str) -> Any:
-        spec = get_spec(key)
-        overrides = await self._load()
-        return overrides.get(key, spec.default)
+    def _cache(self) -> dict[str, Any]:
+        if self._overrides is None:
+            raise SettingsNotLoaded
+        return self._overrides
 
-    async def get_all(self) -> dict[str, Any]:
-        overrides = await self._load()
+    # ---- синхронное чтение из кэша --------------------------------------------------
+
+    def get_now(self, key: str) -> Any:
+        spec = get_spec(key)
+        return self._cache().get(key, spec.default)
+
+    def _all_now(self) -> dict[str, Any]:
+        overrides = self._cache()
         return {key: overrides.get(key, spec.default) for key, spec in SCHEMA.items()}
 
-    def spec(self, key: str) -> SettingSpec:
-        return get_spec(key)
+    def timezone_now(self) -> ZoneInfo:
+        return ZoneInfo(str(self.get_now("timezone")))
 
-    async def is_default(self, key: str) -> bool:
-        get_spec(key)
-        return key not in await self._load()
-
-    async def set(self, key: str, value: Any, actor_id: int) -> list[str]:
-        """Сохраняет значение; возвращает предупреждения (ошибки — SettingsValidationError)."""
-        spec = get_spec(key)
-        normalized, warnings = validate(spec, value)
-        old = await self.get(key)
-        now = self._clock.now()
-        try:
-            async with self._sessions() as session, session.begin():
-                await admins.require_admin(session, actor_id)
-                await settings_repo.upsert(session, key, normalized, actor_id=actor_id, now=now)
-                await audit.add(
-                    session,
-                    action="settings.update",
-                    now=now,
-                    actor_id=actor_id,
-                    payload={"key": key, "old": old, "new": normalized},
-                )
-        finally:
-            self._overrides = None
-        return warnings
-
-    async def reset(self, key: str, actor_id: int) -> None:
-        """Возвращает настройку к значению по умолчанию (удаляет строку из БД)."""
-        get_spec(key)
-        old = await self.get(key)
-        now = self._clock.now()
-        try:
-            async with self._sessions() as session, session.begin():
-                await admins.require_admin(session, actor_id)
-                await settings_repo.delete_key(session, key)
-                await audit.add(
-                    session,
-                    action="settings.reset",
-                    now=now,
-                    actor_id=actor_id,
-                    payload={"key": key, "old": old, "new": SCHEMA[key].default},
-                )
-        finally:
-            self._overrides = None
-
-    async def render_text(self, key: str, **variables: object) -> str:
-        """Подставляет значения в текст `text.*`; неизвестная подстановка — ошибка."""
-        if not key.startswith("text.") or key not in SCHEMA:
-            raise SettingsValidationError(key, f"«{key}» не является текстом бота.")
-        unknown = set(variables) - ALLOWED_PLACEHOLDERS
-        if unknown:
-            raise SettingsValidationError(
-                key, f"Неизвестные подстановки: {', '.join(sorted(unknown))}."
-            )
-        template = str(await self.get(key))
-        # Пустую подстановку за потребителя не додумываем: это скрыло бы его ошибку
-        try:
-            return template.format(**variables)
-        except KeyError as exc:
-            raise SettingsValidationError(
-                key, f"Для текста не передана подстановка {{{exc.args[0]}}}."
-            ) from exc
-
-    async def timezone(self) -> ZoneInfo:
-        return ZoneInfo(str(await self.get("timezone")))
-
-    async def schedule_settings(self) -> ScheduleSettings:
-        v = await self.get_all()
+    def schedule_now(self) -> ScheduleSettings:
+        v = self._all_now()
         return ScheduleSettings(
             timezone=v["timezone"],
             event_weekday=v["event_weekday"],
@@ -165,14 +147,14 @@ class SettingsService:
             attendance_prompt_hours_after=v["attendance_prompt_hours_after"],
         )
 
-    async def registration_options(self) -> RegistrationOptions:
-        v = await self.get_all()
+    def options_now(self) -> RegistrationOptions:
+        v = self._all_now()
         return RegistrationOptions(
             waitlist_enabled=v["waitlist_enabled"], plus_one_enabled=v["plus_one_enabled"]
         )
 
-    async def rules_settings(self) -> RulesSettings:
-        v = await self.get_all()
+    def rules_now(self) -> RulesSettings:
+        v = self._all_now()
         return RulesSettings(
             ban_after_no_shows=v["ban_after_no_shows"],
             remove_banned_from_future_events=v["remove_banned_from_future_events"],
@@ -187,8 +169,8 @@ class SettingsService:
             auto_create_time=_to_time(v["auto_create_time"]),
         )
 
-    async def default_event_params(self) -> DefaultEventParams:
-        v = await self.get_all()
+    def defaults_now(self) -> DefaultEventParams:
+        v = self._all_now()
         return DefaultEventParams(
             capacity=v["capacity"],
             place=v["default_place"],
@@ -196,6 +178,120 @@ class SettingsService:
             description_html=v["default_description"],
             photo_file_id=v["default_photo_file_id"],
         )
+
+    def render_text_now(self, key: str, *, escape_html: bool = True, **variables: object) -> str:
+        """Подставляет значения в текст `text.*`.
+
+        `escape_html=True` — для текстов, уходящих сообщением в parse_mode=HTML (значения
+        вроде имени или причины иначе сломали бы разметку); для всплывающих окон передают
+        False, там HTML не интерпретируется. Испорченный в БД шаблон не должен ронять
+        уведомление: логируем и берём текст по умолчанию. Отсутствующие подстановки
+        заменяются пустой строкой, лишние — игнорируются.
+        """
+        if not key.startswith(TEXT_PREFIX):
+            key = TEXT_PREFIX + key
+        if key not in DEFAULT_TEXTS:
+            raise SettingsValidationError(key, f"«{key}» не является текстом бота.")
+        unknown = set(variables) - ALLOWED_PLACEHOLDERS
+        if unknown:
+            logger.warning("текст %s: лишние подстановки проигнорированы: %s", key, sorted(unknown))
+        values = {
+            name: (html.escape(str(value), quote=False) if escape_html else str(value))
+            for name, value in variables.items()
+            if name in ALLOWED_PLACEHOLDERS and value is not None
+        }
+        template = str(self.get_now(key))
+        try:
+            check_template(key, template)
+            return template.format_map(_BlankMissing(values))
+        except SettingsValidationError, ValueError, IndexError, KeyError:
+            logger.exception("шаблон %s испорчен, используется текст по умолчанию", key)
+            return DEFAULT_TEXTS[key].format_map(_BlankMissing(values))
+
+    # ---- асинхронный интерфейс (обёртки над теми же данными) ------------------------
+
+    async def get(self, key: str) -> Any:
+        await self._load()
+        return self.get_now(key)
+
+    async def get_all(self) -> dict[str, Any]:
+        await self._load()
+        return self._all_now()
+
+    def spec(self, key: str) -> SettingSpec:
+        return get_spec(key)
+
+    async def is_default(self, key: str) -> bool:
+        get_spec(key)
+        return key not in await self._load()
+
+    async def set(self, key: str, value: Any, actor_id: int) -> list[str]:
+        """Сохраняет значение; возвращает предупреждения (ошибки — SettingsValidationError)."""
+        await self._load()
+        async with self._write_lock:
+            now = self._clock.now()
+            async with self._sessions() as session, session.begin():
+                # Права проверяем первыми: не-админ не должен узнавать детали схемы
+                await admins.require_admin(session, actor_id)
+                spec = get_spec(key)
+                normalized, warnings = validate(spec, value)
+                old = self.get_now(key)
+                await settings_repo.upsert(session, key, normalized, actor_id=actor_id, now=now)
+                await audit.add(
+                    session,
+                    action="settings.update",
+                    now=now,
+                    actor_id=actor_id,
+                    payload={"key": key, "old": old, "new": normalized},
+                )
+            # Только после успешного коммита; кэш уже загружен, обновляем по месту
+            self._version += 1
+            self._cache()[key] = normalized
+        return warnings
+
+    async def reset(self, key: str, actor_id: int) -> None:
+        """Возвращает настройку к значению по умолчанию (удаляет строку из БД)."""
+        await self._load()
+        async with self._write_lock:
+            now = self._clock.now()
+            async with self._sessions() as session, session.begin():
+                await admins.require_admin(session, actor_id)
+                spec = get_spec(key)
+                old = self.get_now(key)
+                if await settings_repo.delete_key(session, key):
+                    await audit.add(
+                        session,
+                        action="settings.reset",
+                        now=now,
+                        actor_id=actor_id,
+                        payload={"key": key, "old": old, "new": spec.default},
+                    )
+            self._version += 1
+            self._cache().pop(key, None)
+
+    async def render_text(self, key: str, *, escape_html: bool = True, **variables: object) -> str:
+        await self._load()
+        return self.render_text_now(key, escape_html=escape_html, **variables)
+
+    async def timezone(self) -> ZoneInfo:
+        await self._load()
+        return self.timezone_now()
+
+    async def schedule_settings(self) -> ScheduleSettings:
+        await self._load()
+        return self.schedule_now()
+
+    async def registration_options(self) -> RegistrationOptions:
+        await self._load()
+        return self.options_now()
+
+    async def rules_settings(self) -> RulesSettings:
+        await self._load()
+        return self.rules_now()
+
+    async def default_event_params(self) -> DefaultEventParams:
+        await self._load()
+        return self.defaults_now()
 
 
 # SAMPLE_VARS реэкспортируется для UI предпросмотра текстов

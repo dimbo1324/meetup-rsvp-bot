@@ -12,6 +12,18 @@ ALLOWED_PLACEHOLDERS: frozenset[str] = frozenset(
     {"date", "time", "weekday", "place", "deadline", "position", "name", "reason"}
 )
 
+# Тексты-сообщения (уходят обычным сообщением в HTML, а не во всплывающее окно): для них
+# нет лимита 200 символов, зато подставляемые значения экранируются под parse_mode=HTML
+MESSAGE_TEXT_KEYS: frozenset[str] = frozenset(
+    {
+        "text.reminder",
+        "text.promoted",
+        "text.event_cancelled",
+        "text.event_moved",
+        "text.attendance_marked_by",
+    }
+)
+
 DEFAULT_TEXTS: dict[str, str] = {
     "text.registered": (
         "Вы записаны на {weekday}, {date}, {time}. "
@@ -46,4 +58,5 @@ DEFAULT_TEXTS: dict[str, str] = {
     "text.promoted": "Освободилось место — вы записаны на {weekday}, {date}, {time}!",
     "text.event_cancelled": "Встреча {date} отменена. {reason}",
     "text.event_moved": "Встреча перенесена: теперь {weekday}, {date}, {time}, {place}.",
+    "text.attendance_marked_by": "Явку отметил(а) {name}",
 }

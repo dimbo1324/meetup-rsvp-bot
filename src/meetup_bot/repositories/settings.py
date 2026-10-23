@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meetup_bot.db.models import Setting
@@ -29,6 +29,10 @@ async def upsert(
     await session.flush()
 
 
-async def delete_key(session: AsyncSession, key: str) -> None:
-    """Удаляет переопределение — настройка возвращается к значению по умолчанию."""
-    await session.execute(delete(Setting).where(Setting.key == key))
+async def delete_key(session: AsyncSession, key: str) -> bool:
+    """Удаляет переопределение — настройка возвращается к значению по умолчанию.
+
+    Возвращает False, если строки не было (тогда аудит писать незачем).
+    """
+    result = await session.execute(delete(Setting).where(Setting.key == key))
+    return bool(cast("CursorResult[Any]", result).rowcount)
