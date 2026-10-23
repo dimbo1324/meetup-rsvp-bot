@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import enum
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -18,13 +20,18 @@ from meetup_bot.db.models import (
     Registration,
     RegistrationSource,
     RegistrationStatus,
+    User,
 )
 from meetup_bot.repositories import audit, bans, events, registrations, users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.admin_support import send_dms
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.rules import RegistrationOptions, RulesSettings
+from meetup_bot.services.safe import safe_schedule, safe_send_service
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CancelResult",
@@ -66,6 +73,11 @@ class RegisterResult:
     cancel_deadline_passed: bool = False
     # Эта запись заняла последнее свободное место (для уведомления админов)
     filled_event: bool = False
+    # Данные для подстановок в тексты без обращения handler-а к БД
+    starts_at: datetime | None = None
+    cancel_deadline_at: datetime | None = None
+    place: str = ""
+    dm_available: bool = False
 
     @property
     def changed_state(self) -> bool:
@@ -81,6 +93,8 @@ class CancelResult:
     was_waitlist: bool = False
     # Кого освобождённое место продвинуло из очереди (уже закоммичено)
     promoted: tuple[Promotion, ...] = ()
+    starts_at: datetime | None = None
+    place: str = ""
 
     @property
     def changed_state(self) -> bool:
@@ -107,8 +121,11 @@ class RegistrationService:
         self._sessions = sessions
         self._clock = clock
         self._options = options or RegistrationOptions()
-        # Реестр общий для всех сервисов: процесс один, блокировок в памяти достаточно (9.3)
-        self._locks = locks or EventLocks()
+        # Реестр должен быть общим для всех сервисов (9.3); собственный допустим лишь в тестах
+        if locks is None:
+            logger.warning("RegistrationService без общего EventLocks: блокировки изолированы")
+            locks = EventLocks()
+        self._locks = locks
         self._notifier: Notifier = notifier or NullNotifier()
         self._post_refresher: PostRefresher = post_refresher or NullPostRefresher()
         self._rules_provider: Callable[[], RulesSettings] = rules_provider or RulesSettings
@@ -135,37 +152,38 @@ class RegistrationService:
 
         # Побочные эффекты — строго после коммита и вне блокировки
         if result.changed_state:
-            self._post_refresher.schedule(event_id)
+            safe_schedule(self._post_refresher, event_id)
         if result.filled_event and self._rules_provider().notify_admins_on_full:
-            await self._notifier.send_service(
-                f"Встреча заполнена: занято {result.seats_taken} из {result.capacity} мест."
+            await safe_send_service(
+                self._notifier,
+                f"Встреча заполнена: занято {result.seats_taken} из {result.capacity} мест.",
             )
         return result
 
     async def cancel(self, event_id: int, user_id: int) -> CancelResult:
-        options = self._current_options()
         rules = self._rules_provider()
         async with (
             self._locks.lock(event_id),
             self._sessions() as session,
             session.begin(),
         ):
-            result = await self._cancel(session, event_id, user_id, options, rules)
+            result = await self._cancel(session, event_id, user_id, rules)
 
         if not result.changed_state:
             return result
-        self._post_refresher.schedule(event_id)
+        safe_schedule(self._post_refresher, event_id)
         for promotion in result.promoted:
             if promotion.user_id is not None:
                 text = (
                     self._render_promoted(promotion) if self._render_promoted else PROMOTED_DM_TEXT
                 )
-                await self._notifier.send_dm(promotion.user_id, text)
+                await send_dms(self._notifier, [promotion.user_id], text)
         # Выход из очереди мест не освобождает, поэтому админам о нём не сообщаем
         if rules.notify_admins_on_cancel and not result.was_waitlist:
-            await self._notifier.send_service(
+            await safe_send_service(
+                self._notifier,
                 f"Отмена записи: пользователь {user_id}, занято "
-                f"{result.seats_taken} из {result.capacity} мест."
+                f"{result.seats_taken} из {result.capacity} мест.",
             )
         return result
 
@@ -183,6 +201,8 @@ class RegistrationService:
             return RegisterResult(RegisterStatus.NOT_FOUND)
 
         taken = await events.seats_taken(session, event_id)
+        known_user = await session.get(User, user.id)
+        dm_available = known_user.dm_available if known_user is not None else False
 
         def result(
             status: RegisterStatus,
@@ -198,6 +218,10 @@ class RegistrationService:
                 position=position,
                 cancel_deadline_passed=cancel_deadline_passed,
                 filled_event=filled_event,
+                starts_at=event.starts_at,
+                cancel_deadline_at=event.cancel_deadline_at,
+                place=event.place,
+                dm_available=dm_available,
             )
 
         if event.status != EventStatus.OPEN.value or now >= event.registration_closes_at:
@@ -278,7 +302,6 @@ class RegistrationService:
         session: AsyncSession,
         event_id: int,
         user_id: int,
-        options: RegistrationOptions,
         rules: RulesSettings,
     ) -> CancelResult:
         now = self._clock.now()
@@ -289,7 +312,13 @@ class RegistrationService:
 
         registration = await registrations.get_live(session, event_id, user_id)
         if registration is None:
-            return CancelResult(CancelStatus.NOT_REGISTERED, taken, event.capacity)
+            return CancelResult(
+                CancelStatus.NOT_REGISTERED,
+                taken,
+                event.capacity,
+                starts_at=event.starts_at,
+                place=event.place,
+            )
 
         is_open = event.status == EventStatus.OPEN.value
         was_waitlist = registration.status == RegistrationStatus.WAITLIST.value
@@ -298,7 +327,14 @@ class RegistrationService:
             now < event.registration_closes_at if was_waitlist else now < event.cancel_deadline_at
         )
         if not is_open or not deadline_ok:
-            return CancelResult(CancelStatus.TOO_LATE, taken, event.capacity, was_waitlist)
+            return CancelResult(
+                CancelStatus.TOO_LATE,
+                taken,
+                event.capacity,
+                was_waitlist,
+                starts_at=event.starts_at,
+                place=event.place,
+            )
 
         registration.status = RegistrationStatus.CANCELLED.value
         registration.cancelled_at = now
@@ -313,10 +349,19 @@ class RegistrationService:
             payload={"was_waitlist": was_waitlist},
         )
         promoted: list[Promotion] = []
-        # Место освобождает только отмена активной записи, и только при включённой очереди
-        if not was_waitlist and options.waitlist_enabled:
+        # Место освобождает только отмена активной записи. Очередь продвигаем, даже если
+        # waitlist выключили позже: флаг управляет лишь постановкой НОВЫХ людей в очередь
+        if not was_waitlist:
             promoted = await promote_waitlist(
                 session, event, now, late_promotion_hours=rules.late_promotion_hours
             )
         taken = await events.seats_taken(session, event_id)
-        return CancelResult(CancelStatus.OK, taken, event.capacity, was_waitlist, tuple(promoted))
+        return CancelResult(
+            CancelStatus.OK,
+            taken,
+            event.capacity,
+            was_waitlist,
+            tuple(promoted),
+            starts_at=event.starts_at,
+            place=event.place,
+        )

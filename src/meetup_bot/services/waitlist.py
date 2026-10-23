@@ -18,6 +18,9 @@ class Promotion:
     registration_id: int
     user_id: int | None
     late_promoted: bool
+    # Данные встречи для подстановок в личное сообщение без обращения handler-а к БД
+    starts_at: datetime
+    place: str
 
 
 async def promote_waitlist(
@@ -57,7 +60,9 @@ async def promote_waitlist(
         registration.promoted_at = now
         registration.late_promoted = late
         free -= need
-        promoted.append(Promotion(registration.id, registration.user_id, late))
+        promoted.append(
+            Promotion(registration.id, registration.user_id, late, event.starts_at, event.place)
+        )
         await audit.add(
             session,
             action="registration.promote",

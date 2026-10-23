@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Registration, RegistrationStatus, User
+from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
 
 LIVE_STATUSES = (RegistrationStatus.ACTIVE.value, RegistrationStatus.WAITLIST.value)
 
@@ -64,3 +64,20 @@ async def list_active_with_users(
         .order_by(Registration.created_at, Registration.id)
     )
     return [(registration, user) for registration, user in rows.all()]
+
+
+async def no_show_user_ids(session: AsyncSession, event_id: int) -> list[int]:
+    """Пользователи с неявкой на встрече: активные и отменённые админом «как неявка»."""
+    rows = await session.scalars(
+        select(Registration.user_id)
+        .where(
+            Registration.event_id == event_id,
+            Registration.attendance == Attendance.NO_SHOW.value,
+            Registration.status.in_(
+                (RegistrationStatus.ACTIVE.value, RegistrationStatus.CANCELLED.value)
+            ),
+            Registration.user_id.is_not(None),
+        )
+        .order_by(Registration.id)
+    )
+    return list(dict.fromkeys(user_id for user_id in rows.all() if user_id is not None))

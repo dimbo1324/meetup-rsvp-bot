@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Attendance, Ban, Event, EventStatus, Registration
+from meetup_bot.db.models import (
+    Attendance,
+    Ban,
+    Event,
+    EventStatus,
+    Registration,
+    RegistrationStatus,
+)
 
 
 async def is_banned(session: AsyncSession, user_id: int) -> bool:
@@ -36,15 +43,29 @@ async def history(session: AsyncSession, user_id: int) -> list[Ban]:
 
 
 async def last_unban_at(session: AsyncSession, user_id: int) -> datetime | None:
-    return await session.scalar(select(func.max(Ban.unbanned_at)).where(Ban.user_id == user_id))
+    """Время последнего РУЧНОГО разбана.
+
+    Автоснятие бана при исправлении явки (`auto_removed`) счётчик не обнуляет: иначе
+    исправление одной отметки стирало бы остальные неявки пользователя.
+    """
+    return await session.scalar(
+        select(func.max(Ban.unbanned_at)).where(Ban.user_id == user_id, Ban.auto_removed.is_(False))
+    )
+
+
+def no_show_moment() -> ColumnElement[datetime]:
+    """Момент неявки записи: отмена админом «как неявка» раньше отметки явки встречи."""
+    return func.coalesce(Registration.cancelled_at, Event.attendance_marked_at)
 
 
 async def count_no_shows(session: AsyncSession, user_id: int) -> int:
     """Неявки, учитываемые правилом бана.
 
     Не считаются поздние продвижения из очереди (человек не мог планировать), отменённые
-    встречи и неявки, отмеченные до последнего разбана (после разбана счётчик с нуля).
+    встречи и неявки до последнего ручного разбана (после него счётчик с нуля). Неявкой
+    считается и запись status=cancelled с attendance=no_show (отмена админом после дедлайна).
     """
+    moment = no_show_moment()
     query = (
         select(func.count())
         .select_from(Registration)
@@ -52,13 +73,15 @@ async def count_no_shows(session: AsyncSession, user_id: int) -> int:
         .where(
             Registration.user_id == user_id,
             Registration.attendance == Attendance.NO_SHOW.value,
+            Registration.status.in_(
+                (RegistrationStatus.ACTIVE.value, RegistrationStatus.CANCELLED.value)
+            ),
             Registration.late_promoted.is_(False),
             Event.status != EventStatus.CANCELLED.value,
+            moment.is_not(None),
         )
     )
     unbanned = await last_unban_at(session, user_id)
     if unbanned is not None:
-        query = query.where(Event.attendance_marked_at > unbanned)
-    else:
-        query = query.where(Event.attendance_marked_at.is_not(None))
+        query = query.where(moment > unbanned)
     return int(await session.scalar(query) or 0)

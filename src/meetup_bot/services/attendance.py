@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -22,8 +23,10 @@ from meetup_bot.repositories import admins, audit, events, registrations
 from meetup_bot.services.bans import BanOutcome, BanService
 from meetup_bot.services.errors import DomainError, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
-from meetup_bot.services.ports import Notifier, PostRefresher
+from meetup_bot.services.participants import display_name
 from meetup_bot.services.rules import RulesSettings
+
+logger = logging.getLogger(__name__)
 
 # Окно отметки и исправления явки, считая от начала встречи
 ATTENDANCE_WINDOW = timedelta(days=7)
@@ -52,13 +55,8 @@ class MarkResult:
     marked_by: int
     no_shows: tuple[int, ...]  # id записей, отмеченных как неявка
     new_bans: tuple[int, ...]  # id пользователей, получивших автобан
-
-
-def display_name(user: User | None, manual_name: str | None) -> str:
-    if user is None:
-        return manual_name or "?"
-    full = f"{user.first_name} {user.last_name or ''}".strip()
-    return full or (f"@{user.username}" if user.username else str(user.id))
+    # Пользователи, для которых пересчёт бана упал: дожать через `reevaluate_bans`
+    failed_ban_user_ids: tuple[int, ...] = ()
 
 
 class AttendanceService:
@@ -67,16 +65,12 @@ class AttendanceService:
         sessions: async_sessionmaker[AsyncSession],
         clock: Clock,
         locks: EventLocks,
-        notifier: Notifier,
-        post_refresher: PostRefresher,
         ban_service: BanService,
         rules_provider: Callable[[], RulesSettings] = RulesSettings,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
         self._locks = locks
-        self._notifier = notifier
-        self._refresher = post_refresher
         self._bans = ban_service
         self._rules = rules_provider
 
@@ -137,19 +131,55 @@ class AttendanceService:
                 event_id=event_id,
                 payload={"no_show_registration_ids": sorted(no_show_registration_ids)},
             )
-            no_show_users = [
-                reg.user_id
-                for reg in active
-                if reg.id in no_show_registration_ids and reg.user_id is not None
-            ]
+            await session.flush()
+            # Включая отменённых админом «как неявка»: их неявка ещё не была учтена в бане
+            no_show_users = await registrations.no_show_user_ids(session, event_id)
 
         # Пересчёт банов вне блокировки этой встречи: бан берёт блокировки будущих встреч
         new_bans: list[int] = []
+        failed: list[int] = []
         for user_id in no_show_users:
-            outcome = await self._bans.evaluate_no_show_ban(actor_id, user_id, event_id)
+            # Отметка уже закоммичена: сбой одного пересчёта не должен ронять остальные
+            try:
+                outcome = await self._bans.recalc_for_attendance(actor_id, user_id, event_id)
+            except Exception:
+                logger.exception(
+                    "не удалось пересчитать бан (user_id=%s, event_id=%s)", user_id, event_id
+                )
+                failed.append(user_id)
+                continue
             if outcome.banned:
                 new_bans.append(user_id)
-        return MarkResult(actor_id, tuple(sorted(no_show_registration_ids)), tuple(new_bans))
+        return MarkResult(
+            actor_id,
+            tuple(sorted(no_show_registration_ids)),
+            tuple(new_bans),
+            tuple(failed),
+        )
+
+    async def reevaluate_bans(self, event_id: int) -> list[int]:
+        """Досчитывает баны по уже отмеченной встрече; возвращает выданные автобаны.
+
+        Без проверки прав: для системы и планировщика (дожать сбои из `mark`). Идемпотентно.
+        """
+        async with self._sessions() as session, session.begin():
+            event = await events.get(session, event_id)
+            if event is None or event.attendance_marked_at is None:
+                return []
+            marked_by = event.attendance_marked_by
+            user_ids = await registrations.no_show_user_ids(session, event_id)
+        new_bans: list[int] = []
+        for user_id in user_ids:
+            try:
+                outcome = await self._bans.recalc_for_attendance(marked_by, user_id, event_id)
+            except Exception:
+                logger.exception(
+                    "не удалось пересчитать бан (user_id=%s, event_id=%s)", user_id, event_id
+                )
+                continue
+            if outcome.banned:
+                new_bans.append(user_id)
+        return new_bans
 
     async def correct(
         self,
@@ -169,11 +199,15 @@ class AttendanceService:
                 raise InvalidOperation("not_marked", "явка ещё не отмечена")
             self._require_window(event, now)
             reg = await session.get(Registration, registration_id)
-            if (
-                reg is None
-                or reg.event_id != event_id
-                or reg.status != RegistrationStatus.ACTIVE.value
-            ):
+            # Отменённую админом «как неявка» запись можно исправить: так снимается ошибочный штраф
+            correctable = reg is not None and (
+                reg.status == RegistrationStatus.ACTIVE.value
+                or (
+                    reg.status == RegistrationStatus.CANCELLED.value
+                    and reg.attendance == Attendance.NO_SHOW.value
+                )
+            )
+            if reg is None or reg.event_id != event_id or not correctable:
                 raise NotFound(f"запись {registration_id} не найдена")
             previous = reg.attendance
             reg.attendance = new_attendance.value
@@ -193,7 +227,7 @@ class AttendanceService:
             user_id = reg.user_id
         if user_id is None:
             return BanOutcome(None)
-        return await self._bans.evaluate_no_show_ban(actor_id, user_id, event_id)
+        return await self._bans.recalc_for_attendance(actor_id, user_id, event_id)
 
     async def expire_unmarked(self, now: datetime) -> list[int]:
         """Закрывает отметку для встреч старше 7 суток: все пришли, никого не баним."""
