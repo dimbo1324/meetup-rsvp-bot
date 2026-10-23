@@ -8,30 +8,31 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from meetup_bot.clock import Clock
 from meetup_bot.scheduler.tasks import ScheduledTask
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HEARTBEAT = Path("data/heartbeat")
+# Зависшая задача (например, сеть) не должна останавливать остальные и сам цикл
+DEFAULT_TASK_TIMEOUT = 120.0
 
 
 class Scheduler:
     def __init__(
         self,
-        sessions: async_sessionmaker[AsyncSession],
         clock: Clock,
         tasks: Sequence[ScheduledTask],
         interval: float = 60.0,
         heartbeat_path: Path = DEFAULT_HEARTBEAT,
+        *,
+        task_timeout: float = DEFAULT_TASK_TIMEOUT,
     ) -> None:
-        self._sessions = sessions
         self._clock = clock
         self._tasks = tasks
         self._interval = interval
         self._heartbeat_path = heartbeat_path
+        self._task_timeout = task_timeout
 
     async def tick(self) -> dict[str, int]:
         """Один прогон задач по порядку; ошибка одной не мешает остальным.
@@ -42,7 +43,14 @@ class Scheduler:
         done: dict[str, int] = {}
         for task in self._tasks:
             try:
-                count = await task.run(now)
+                count = await asyncio.wait_for(task.run(now), timeout=self._task_timeout)
+            except TimeoutError:
+                logger.error(
+                    "задача планировщика %s прервана по таймауту %.0f с",
+                    task.name,
+                    self._task_timeout,
+                )
+                continue
             except Exception:
                 logger.exception("задача планировщика %s завершилась ошибкой", task.name)
                 continue

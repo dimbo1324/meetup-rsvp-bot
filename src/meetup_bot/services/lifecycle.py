@@ -22,18 +22,31 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import Event, EventStatus
-from meetup_bot.renderer.post import MONTHS, WEEKDAYS
 from meetup_bot.repositories import audit
+from meetup_bot.services.admin_support import (
+    Provided,
+    chunk_lines,
+    format_local,
+    resolve,
+    resolve_any,
+)
+from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.events import DEFAULT_CAPACITY, EventService
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, PostRefresher
 from meetup_bot.services.posts import load_post_data
 from meetup_bot.services.rules import RulesSettings
-from meetup_bot.services.timing import ScheduleSettings, next_event_start
+from meetup_bot.services.safe import safe_schedule, safe_send_service
+from meetup_bot.services.timing import (
+    InvalidEventTimes,
+    ScheduleSettings,
+    next_event_start,
+)
 
 logger = logging.getLogger(__name__)
 
-RulesProvider = Callable[[], Awaitable[RulesSettings]]
+# Провайдер может быть и синхронным, и асинхронным
+RulesProvider = Callable[[], RulesSettings | Awaitable[RulesSettings]]
 
 
 @dataclass(frozen=True)
@@ -47,7 +60,7 @@ class EventDefaults:
     photo_file_id: str | None = None
 
 
-DefaultsProvider = Callable[[], Awaitable[EventDefaults]]
+DefaultsProvider = Callable[[], EventDefaults | Awaitable[EventDefaults]]
 
 
 class AutoCreateStatus(enum.StrEnum):
@@ -56,6 +69,8 @@ class AutoCreateStatus(enum.StrEnum):
     DISABLED = "disabled"
     # Целевая дата уже прошла (бот долго лежал): создавать задним числом бессмысленно
     SKIPPED_PAST = "skipped_past"
+    # Настройки дают недопустимые моменты или поля встречи: создать нечего, ждём правки настроек
+    INVALID = "invalid"
 
 
 @dataclass(frozen=True)
@@ -63,12 +78,6 @@ class AutoCreateResult:
     status: AutoCreateStatus
     recurrence_key: str | None = None
     event_id: int | None = None
-
-
-def format_when(moment: datetime, timezone: str) -> str:
-    """«суббота, 1 ноября, 17:00» в локальном часовом поясе."""
-    local = moment.astimezone(ZoneInfo(timezone))
-    return f"{WEEKDAYS[local.weekday()]}, {local.day} {MONTHS[local.month - 1]}, {local:%H:%M}"
 
 
 def last_auto_create_moment(now: datetime, rules: RulesSettings, timezone: str) -> datetime:
@@ -94,7 +103,7 @@ class LifecycleService:
         post_refresher: PostRefresher,
         *,
         events: EventService | None = None,
-        schedule: ScheduleSettings | None = None,
+        schedule: Provided[ScheduleSettings] | None = None,
         defaults_provider: DefaultsProvider | None = None,
     ) -> None:
         self._sessions = sessions
@@ -102,9 +111,24 @@ class LifecycleService:
         self._locks = locks
         self._notifier = notifier
         self._refresher = post_refresher
-        self._schedule = schedule or ScheduleSettings()
-        self._events = events or EventService(sessions, clock, self._schedule)
+        self._schedule_source: Provided[ScheduleSettings] = schedule or ScheduleSettings()
+        # Тот же реестр блокировок, что и у остальных сервисов: иначе автосоздание и админские
+        # правки одной встречи не исключали бы друг друга
+        self._events = events or EventService(
+            sessions,
+            clock,
+            self._schedule_source,
+            locks=locks,
+            notifier=notifier,
+            post_refresher=post_refresher,
+        )
         self._defaults_provider = defaults_provider
+        # Ключ, по которому уже предупредили о невозможности автосоздания: не засоряем лог
+        self._warned_invalid_key: str | None = None
+
+    @property
+    def _schedule(self) -> ScheduleSettings:
+        return resolve(self._schedule_source)
 
     async def close_due(self, now: datetime) -> list[int]:
         """Закрывает запись у встреч, у которых наступил `registration_closes_at`."""
@@ -131,7 +155,7 @@ class LifecycleService:
                 )
                 starts_at = event.starts_at
             closed.append(event_id)
-            self._refresh(event_id)
+            safe_schedule(self._refresher, event_id)
             # Если встреча уже началась (долгий простой), итог в чат уже не нужен
             if now < starts_at:
                 await self._send_closed_summary(event_id)
@@ -164,7 +188,7 @@ class LifecycleService:
                         payload={"by": "scheduler"},
                     )
                 finished.append(event_id)
-                self._refresh(event_id)
+                safe_schedule(self._refresher, event_id)
         return finished
 
     async def create_weekly_event(self, rules: RulesSettings, now: datetime) -> AutoCreateResult:
@@ -173,15 +197,18 @@ class LifecycleService:
             return AutoCreateResult(AutoCreateStatus.DISABLED)
         # Цель считаем от последнего момента автосоздания, а не от «сейчас»: иначе сразу после
         # субботней встречи создалась бы встреча на неделю вперёд раньше положенного срока
-        last_moment = last_auto_create_moment(now, rules, self._schedule.timezone)
-        starts_at = next_event_start(last_moment, self._schedule)
+        schedule = self._schedule
+        last_moment = last_auto_create_moment(now, rules, schedule.timezone)
+        starts_at = next_event_start(last_moment, schedule)
         if starts_at <= now:
             return AutoCreateResult(AutoCreateStatus.SKIPPED_PAST)
-        key = f"weekly:{starts_at.astimezone(ZoneInfo(self._schedule.timezone)).date().isoformat()}"
+        key = f"weekly:{starts_at.astimezone(ZoneInfo(schedule.timezone)).date().isoformat()}"
         if await self._key_exists(key):
             return AutoCreateResult(AutoCreateStatus.ALREADY_EXISTS, key)
 
-        defaults = await self._defaults_provider() if self._defaults_provider else EventDefaults()
+        defaults = EventDefaults()
+        if self._defaults_provider is not None:
+            defaults = await resolve_any(self._defaults_provider)
         try:
             event_id = await self._events.create_event(
                 starts_at=starts_at,
@@ -196,9 +223,15 @@ class LifecycleService:
             # Гонка с другим создателем: уникальный индекс recurrence_key сработал, встреча есть
             logger.info("автосоздание %s: встреча уже существует (IntegrityError)", key)
             return AutoCreateResult(AutoCreateStatus.ALREADY_EXISTS, key)
+        except (InvalidEventTimes, InvalidOperation) as exc:
+            # Плохие настройки не починятся сами; предупреждаем один раз на ключ, а не каждый тик
+            if self._warned_invalid_key != key:
+                self._warned_invalid_key = key
+                logger.warning("автосоздание %s невозможно: %s", key, exc)
+            return AutoCreateResult(AutoCreateStatus.INVALID, key)
 
-        when = format_when(starts_at, self._schedule.timezone)
-        await self._notify(f"Создана встреча на {when}.")
+        when = format_local(starts_at, schedule.timezone)
+        await safe_send_service(self._notifier, f"Создана встреча на {when}.")
         return AutoCreateResult(AutoCreateStatus.CREATED, key, event_id)
 
     async def _due_ids(
@@ -217,28 +250,19 @@ class LifecycleService:
             found = await session.scalar(select(Event.id).where(Event.recurrence_key == key))
             return found is not None
 
-    def _refresh(self, event_id: int) -> None:
-        try:
-            self._refresher.schedule(event_id)
-        except Exception:
-            logger.exception("не удалось поставить пересборку постов встречи %s", event_id)
-
-    async def _notify(self, text: str) -> None:
-        try:
-            await self._notifier.send_service(text)
-        except Exception:
-            logger.exception("не удалось отправить сообщение в служебный чат")
-
     async def _send_closed_summary(self, event_id: int) -> None:
-        data = await load_post_data(self._sessions, event_id, timezone=self._schedule.timezone)
+        timezone = self._schedule.timezone
+        data = await load_post_data(self._sessions, event_id, timezone=timezone)
         if data is None:
             return
-        when = format_when(data.starts_at, self._schedule.timezone)
+        when = format_local(data.starts_at, timezone)
         lines = [
             f"Запись на встречу ({when}) закрыта.",
             f"Заполнено {data.seats_taken} из {data.capacity}.",
         ]
         for index, participant in enumerate(data.participants, start=1):
             suffix = " (+1)" if participant.guests else ""
-            lines.append(f"{index}. {html.escape(participant.name)}{suffix}")
-        await self._notify("\n".join(lines))
+            lines.append(f"{index}. {html.escape(participant.name, quote=False)}{suffix}")
+        # Длинный список не помещается в одно сообщение Telegram
+        for chunk in chunk_lines(lines):
+            await safe_send_service(self._notifier, chunk)

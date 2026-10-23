@@ -17,14 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus, User
 from meetup_bot.repositories import admins
-from meetup_bot.services.lifecycle import LifecycleService, RulesProvider, format_when
+from meetup_bot.services.admin_support import Provided, format_local, resolve, resolve_any
+from meetup_bot.services.attendance import ATTENDANCE_WINDOW
+from meetup_bot.services.lifecycle import LifecycleService, RulesProvider
 from meetup_bot.services.ports import Notifier
+from meetup_bot.services.safe import safe_send_dm, safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
 
 logger = logging.getLogger(__name__)
 
 ATTENDANCE_REMINDER_AFTER = timedelta(hours=14)
-ATTENDANCE_WINDOW = timedelta(days=7)
 _ACTIVE_STATUSES = (EventStatus.OPEN.value, EventStatus.CLOSED.value)
 
 
@@ -70,7 +72,8 @@ class AutoCreateTask:
         self._rules_provider = rules_provider
 
     async def run(self, now: datetime) -> int:
-        result = await self._lifecycle.create_weekly_event(await self._rules_provider(), now)
+        rules = await resolve_any(self._rules_provider)
+        result = await self._lifecycle.create_weekly_event(rules, now)
         logger.debug("автосоздание: %s", result.status.value)
         return 1 if result.event_id is not None else 0
 
@@ -83,15 +86,15 @@ class ReminderTask:
         sessions: async_sessionmaker[AsyncSession],
         notifier: Notifier,
         rules_provider: RulesProvider,
-        schedule: ScheduleSettings | None = None,
+        schedule: Provided[ScheduleSettings] | None = None,
     ) -> None:
         self._sessions = sessions
         self._notifier = notifier
         self._rules_provider = rules_provider
-        self._schedule = schedule or ScheduleSettings()
+        self._schedule_source: Provided[ScheduleSettings] = schedule or ScheduleSettings()
 
     async def run(self, now: datetime) -> int:
-        if not (await self._rules_provider()).reminder_enabled:
+        if not (await resolve_any(self._rules_provider)).reminder_enabled:
             return 0
         batches: list[tuple[Event, list[int]]] = []
         async with self._sessions() as session, session.begin():
@@ -130,17 +133,14 @@ class ReminderTask:
         return list(rows.all())
 
     async def _send(self, event: Event, user_ids: list[int]) -> None:
-        tz = self._schedule.timezone
+        tz = resolve(self._schedule_source).timezone
         text = (
-            f"Напоминаем: завтра встреча! {format_when(event.starts_at, tz)}"
-            f"{', ' + html.escape(event.place) if event.place else ''}. "
-            f"Не сможете прийти? Отмените запись до {format_when(event.cancel_deadline_at, tz)}."
+            f"Напоминаем: завтра встреча! {format_local(event.starts_at, tz)}"
+            f"{', ' + html.escape(event.place, quote=False) if event.place else ''}. "
+            f"Не сможете прийти? Отмените запись до {format_local(event.cancel_deadline_at, tz)}."
         )
         for user_id in user_ids:
-            try:
-                await self._notifier.send_dm(user_id, text)
-            except Exception:
-                logger.exception("напоминание пользователю %s не отправлено", user_id)
+            await safe_send_dm(self._notifier, user_id, text)
 
 
 class AttendancePromptTask:
@@ -157,6 +157,7 @@ class AttendancePromptTask:
                 select(Event)
                 .where(
                     Event.status == EventStatus.FINISHED.value,
+                    Event.attendance_marked_at.is_(None),
                     Event.attendance_prompt_at <= now,
                     Event.attendance_prompt_sent_at.is_(None),
                 )
@@ -187,14 +188,15 @@ class AttendanceReminderTask:
         self,
         sessions: async_sessionmaker[AsyncSession],
         notifier: Notifier,
-        schedule: ScheduleSettings | None = None,
+        schedule: Provided[ScheduleSettings] | None = None,
     ) -> None:
         self._sessions = sessions
         self._notifier = notifier
-        self._schedule = schedule or ScheduleSettings()
+        self._schedule_source: Provided[ScheduleSettings] = schedule or ScheduleSettings()
 
     async def run(self, now: datetime) -> int:
         texts: list[str] = []
+        timezone = resolve(self._schedule_source).timezone
         async with self._sessions() as session, session.begin():
             due = await session.scalars(
                 select(Event)
@@ -214,13 +216,10 @@ class AttendanceReminderTask:
                         "напоминание про явку встречи %s пропущено: окно истекло", event.id
                     )
                     continue
-                when = format_when(event.starts_at, self._schedule.timezone)
+                when = format_local(event.starts_at, timezone)
                 texts.append(f"Никто ещё не отметил явку на встрече ({when}).")
         for text in texts:
-            try:
-                await self._notifier.send_service(text)
-            except Exception:
-                logger.exception("напоминание про явку не отправлено")
+            await safe_send_service(self._notifier, text)
         return len(texts)
 
 
