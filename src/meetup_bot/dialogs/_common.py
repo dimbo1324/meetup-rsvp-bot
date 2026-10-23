@@ -9,10 +9,10 @@ from aiogram_dialog import DialogManager
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.container import Services
-from meetup_bot.handlers._common import check_admin
 from meetup_bot.services.attendance import AlreadyMarked
 from meetup_bot.services.errors import DomainError, InvalidOperation, NotFound, PermissionDenied
 from meetup_bot.services.settings_schema import SettingsValidationError
+from meetup_bot.telegram.common import check_admin
 
 logger = logging.getLogger(__name__)
 

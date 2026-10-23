@@ -20,10 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
 from meetup_bot.db.models import EventStatus
-from meetup_bot.handlers._common import check_admin, format_moment
 from meetup_bot.repositories import event_posts
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
+from meetup_bot.telegram.common import check_admin, format_moment
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.telegram.posts import build_post

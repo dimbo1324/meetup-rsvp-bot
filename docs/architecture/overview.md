@@ -4,7 +4,7 @@
 порядок работ — `docs/ROADMAP.md`. Если этот документ расходится с кодом, прав код: исправьте
 документ в той же задаче.
 
-_Обновлено: 2026-10-23 (бизнес-логика M3–M6, M9 и Telegram-слой M2 готовы без тестов)._
+_Обновлено: 2026-10-23 (бизнес-логика, Telegram-слой M2, меню админа и отметка явки готовы без тестов)._
 
 ## Что есть
 
@@ -24,13 +24,14 @@ _Обновлено: 2026-10-23 (бизнес-логика M3–M6, M9 и Telegr
 | Настройки и тексты | Готово: схема раздела 7, валидация, аудит, синхронный снимок (`*_now`), тексты `text.*` | `services/settings.py`, `settings_schema.py`, `texts/defaults.py` |
 | Планировщик | Готово: тик раз в минуту, 8 задач, бэкап, пульс; запускается из `app.run` | `services/lifecycle.py`, `scheduler/` |
 | Порты Telegram | Определены в `services/ports.py`, обёртки `services/safe.py`; реализации: `TelegramNotifier`, `PostUpdater` | `src/meetup_bot/telegram/` |
-| Обработчики | Готово: кнопки записи/отмены, inline, `/start`, `/help`, deep links, ошибки, `/dev_shift` (dev). Меню админа (`/menu`) — заглушка | `src/meetup_bot/handlers/`, `middlewares/` |
+| Обработчики | Готово: кнопки записи/отмены, inline, `/start`, `/help`, deep links, ошибки, `/dev_shift` (dev). `/menu` открывает меню админа (диалоги) | `src/meetup_bot/handlers/`, `middlewares/` |
 | Запуск | Готово: `python -m meetup_bot` / `dev.py run` (миграции → бот → планировщик → long polling) | `src/meetup_bot/app.py`, `__main__.py` |
 | Корень сборки | Готово: `build_services(...)` связывает сервисы; вызывается из `app.run` | `src/meetup_bot/container.py` |
 | Сервис записи | Готово: `register`, `cancel`, блокировка по `event_id`, результаты-значения, аудит, продвижение очереди | `src/meetup_bot/services/registration.py` |
 | Рендер поста | Готово: текст, клавиатура (`r:<event_id>:j\|j1\|c`), хеш, лимиты 1024/4096 | `src/meetup_bot/renderer/post.py`, `services/posts.py` |
 | Telegram-слой, inline, post_updater | Нет (M2) | — |
-| Админка (aiogram-dialog) | Нет (интерфейсная часть M3) | — |
+| Админка (aiogram-dialog) | Готово: главное меню, встречи, мастер, участники, баны, админы, настройки, выбор пользователя | `src/meetup_bot/dialogs/` |
+| Отметка явки | Готово: список ✅/🚫 в личке админа, «Готово», режим исправления, погашение у остальных | `telegram/attendance_ui.py`, `handlers/attendance.py` |
 | Контейнер | Dockerfile и compose есть; healthcheck ждёт файл-пульс (появится в M4) | `Dockerfile`, `compose.yaml` |
 | CI | `ci.yml`: `dev.py quality-gate` на PR и push в `main`. `deploy.yml` нет (M7) | `.github/workflows/` |
 | Инструменты разработки | `dev.py`, pre-commit, ruff, mypy, pytest | корень |

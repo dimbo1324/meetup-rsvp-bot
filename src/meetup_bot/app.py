@@ -16,6 +16,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+from aiogram_dialog import setup_dialogs
 
 from meetup_bot import __version__
 from meetup_bot.clock import Clock, ShiftableClock, SystemClock
@@ -26,6 +27,7 @@ from meetup_bot.handlers import ALLOWED_UPDATES, build_router
 from meetup_bot.repositories import event_posts
 from meetup_bot.services.ports import PostRefresher
 from meetup_bot.services.settings import SettingsService
+from meetup_bot.telegram.attendance_ui import AttendanceUI
 from meetup_bot.telegram.notifier import TelegramNotifier
 from meetup_bot.telegram.post_updater import PostUpdater
 
@@ -131,6 +133,8 @@ async def run(config: Settings) -> None:
             post_refresher_factory=make_updater,
         )
         post_refresher = services.post_refresher
+        attendance_ui = AttendanceUI(bot, sessions, clock, services)
+        notifier.attach_attendance_ui(attendance_ui)
         await services.admins.sync_owners(config.owner_ids)
 
         me = await bot.get_me()
@@ -143,8 +147,10 @@ async def run(config: Settings) -> None:
             app_config=config,
             clock=clock,
             notifier=notifier,
+            attendance_ui=attendance_ui,
         )
         dispatcher.include_router(build_router())
+        setup_dialogs(dispatcher)
         try:
             await bot.set_my_commands(
                 list(PRIVATE_COMMANDS), scope=BotCommandScopeAllPrivateChats()

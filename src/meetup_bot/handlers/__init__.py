@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aiogram import Router
 
-from meetup_bot.handlers import errors, inline, signup, start
+from meetup_bot.handlers import attendance, errors, inline, signup, start
 from meetup_bot.middlewares.user import UserMiddleware
 
 # Совпадает с разделом 8.7 спецификации; передаётся в `start_polling(allowed_updates=...)`
@@ -29,5 +29,14 @@ def build_router() -> Router:
         root.chosen_inline_result,
     ):
         observer.outer_middleware(middleware)
-    root.include_routers(errors.router, signup.router, inline.router, start.router)
+    from meetup_bot.dialogs import build_dialog_router
+
+    root.include_routers(
+        errors.router,
+        signup.router,
+        attendance.router,
+        inline.router,
+        build_dialog_router(),
+        start.router,
+    )
     return root

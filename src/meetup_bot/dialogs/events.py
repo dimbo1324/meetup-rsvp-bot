@@ -26,11 +26,11 @@ from meetup_bot.dialogs._common import (
     is_admin,
 )
 from meetup_bot.dialogs.states import CreateEventSG, EventsSG, ParticipantsSG
-from meetup_bot.handlers._common import fit_alert, format_moment
 from meetup_bot.renderer.post import MONTHS
 from meetup_bot.repositories import events as events_repo
 from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.attendance_ui import SheetStatus
+from meetup_bot.telegram.common import fit_alert, format_moment
 from meetup_bot.telegram.posts import build_post
 
 DATE_FORMAT = "%d.%m.%Y %H:%M"
@@ -92,9 +92,10 @@ def parse_local(text: str, tz: ZoneInfo) -> datetime | None:
     """«ДД.ММ.ГГГГ ЧЧ:ММ» в часовом поясе клуба -> UTC; при ошибке формата None."""
     try:
         naive = datetime.strptime(text.strip(), DATE_FORMAT)  # noqa: DTZ007
-    except ValueError:
+        return naive.replace(tzinfo=tz).astimezone(UTC)
+    except ValueError, OverflowError:
+        # OverflowError — год у границы диапазона (01.01.0001 со сдвигом пояса)
         return None
-    return naive.replace(tzinfo=tz).astimezone(UTC)
 
 
 def _set_notice(manager: DialogManager, text: str) -> None:

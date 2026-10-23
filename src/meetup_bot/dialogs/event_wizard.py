@@ -1,8 +1,8 @@
 """Мастер «➕ Новая встреча» (раздел 12.2): дата → время → место → текст → фото → лимит → итог.
 
-Введённые значения лежат в `dialog_data` (JSON-совместимо, переживает перезапуск бота), в БД
-до последнего шага ничего не пишется. Предпросмотр собирается тем же рендерером, что и
-боевой пост, поэтому админ видит ровно то, что получат участники.
+Введённые значения лежат в `dialog_data` (хранилище диалогов в памяти: после перезапуска бота
+окно сбрасывается), в БД до последнего шага ничего не пишется. Предпросмотр собирается тем же
+рендерером, что и боевой пост, поэтому админ видит ровно то, что получат участники.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ from meetup_bot.dialogs._common import (
     middleware_value,
 )
 from meetup_bot.dialogs.states import CreateEventSG
-from meetup_bot.handlers._common import format_moment
 from meetup_bot.renderer.post import PostData, render_post
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.event_validation import (
@@ -51,6 +50,7 @@ from meetup_bot.services.event_validation import (
     validate_url,
 )
 from meetup_bot.services.timing import compute_times, next_event_start, validate_times
+from meetup_bot.telegram.common import format_moment
 
 TOTAL_STEPS = 6
 _TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")

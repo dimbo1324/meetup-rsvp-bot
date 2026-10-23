@@ -7,15 +7,15 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from aiogram_dialog import Dialog, DialogManager, StartMode, Window
 from aiogram_dialog.widgets.kbd import Button, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.dialogs._common import NO_ACCESS, actor_id, get_sessions, is_admin
 from meetup_bot.dialogs.states import AdminsSG, BansSG, EventsSG, MainSG, SettingsSG
-from meetup_bot.handlers._common import check_admin
 from meetup_bot.repositories import admins
+from meetup_bot.telegram.common import check_admin
 
 router = Router(name="dialogs_main_menu")
 router.message.filter(F.chat.type == "private")
@@ -40,7 +40,8 @@ async def cmd_cancel(message: Message, dialog_manager: DialogManager) -> None:
         await message.answer(NO_ACCESS)
         return
     await dialog_manager.reset_stack()
-    await message.answer("Диалог закрыт. Меню — команда /menu.")
+    # Если был открыт выбор пользователя, reply-клавиатуру при удалении окна не снять
+    await message.answer("Диалог закрыт. Меню — команда /menu.", reply_markup=ReplyKeyboardRemove())
 
 
 async def _menu_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:

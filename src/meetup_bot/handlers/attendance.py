@@ -12,11 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.container import Services
 from meetup_bot.db.models import Attendance
 from meetup_bot.dialogs._common import NO_ACCESS, describe_error
-from meetup_bot.handlers._common import check_admin, fit_alert
 from meetup_bot.services.attendance import AlreadyMarked
 from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.attendance_callbacks import TARGET_DONE, AttendanceCallback
 from meetup_bot.telegram.attendance_ui import MARK_ATTENDED, MARK_NO_SHOW, AttendanceUI
+from meetup_bot.telegram.common import check_admin, fit_alert
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,8 @@ def _has_done(markup: InlineKeyboardMarkup) -> bool:
 async def _answer(callback: CallbackQuery, text: str | None = None) -> None:
     try:
         await callback.answer(text=fit_alert(text) if text else None, show_alert=bool(text))
-    except TelegramAPIError:
+    except TelegramAPIError, ValueError:
+        # ValueError — симулированный callback (ответ на текстовое сообщение): ответить нельзя
         logger.warning("не удалось ответить на callback явки", exc_info=True)
 
 

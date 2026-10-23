@@ -20,10 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
 from meetup_bot.db.models import Attendance, EventStatus
-from meetup_bot.handlers._common import format_moment
 from meetup_bot.repositories import admins, events
 from meetup_bot.services.attendance import ATTENDANCE_WINDOW, SheetRow
 from meetup_bot.telegram.attendance_callbacks import TARGET_DONE, AttendanceCallback
+from meetup_bot.telegram.common import format_moment
 
 logger = logging.getLogger(__name__)
 

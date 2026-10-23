@@ -7,14 +7,24 @@ from datetime import datetime, timedelta
 
 from aiogram import Router
 from aiogram.types import ErrorEvent
+from aiogram_dialog.api.exceptions import (
+    InvalidStackIdError,
+    OutdatedIntent,
+    UnknownIntent,
+    UnknownState,
+)
 
 from meetup_bot.clock import Clock
-from meetup_bot.handlers._common import GENERIC_ERROR_TEXT
 from meetup_bot.services.ports import Notifier
+from meetup_bot.telegram.common import GENERIC_ERROR_TEXT
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="errors")
+
+STALE_DIALOG_TEXT = "Это меню устарело. Откройте его заново командой /menu."
+# Состояние диалогов в памяти: после перезапуска старые кнопки дают эти ошибки — это не сбой
+STALE_DIALOG_ERRORS = (UnknownIntent, OutdatedIntent, UnknownState, InvalidStackIdError)
 
 REPORT_INTERVAL = timedelta(minutes=1)
 # Когда в служебный чат в последний раз писали про ошибку этого типа
@@ -25,6 +35,15 @@ _last_report: dict[str, datetime] = {}
 async def on_error(event: ErrorEvent, notifier: Notifier, clock: Clock) -> bool:
     exception = event.exception
     kind = type(exception).__name__
+    if isinstance(exception, STALE_DIALOG_ERRORS):
+        logger.info("устаревшая кнопка диалога: %s", kind)
+        stale = event.update.callback_query
+        if stale is not None:
+            try:
+                await stale.answer(text=STALE_DIALOG_TEXT, show_alert=True)
+            except Exception:
+                logger.debug("не удалось ответить на устаревшую кнопку", exc_info=True)
+        return True
     # Трейсбек идёт только в лог: в нём могут быть данные пользователей, а токен в него не попадает
     logger.error("необработанная ошибка в обработчике: %s", kind, exc_info=exception)
 

@@ -23,9 +23,9 @@ from meetup_bot.dialogs._common import (
     is_admin,
 )
 from meetup_bot.dialogs.states import BansSG, PickerSG
-from meetup_bot.handlers._common import fit_alert, format_moment
 from meetup_bot.repositories import users_known
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.telegram.common import fit_alert, format_moment
 
 MAX_COMMENT = 200
 _HISTORY_LIMIT = 15

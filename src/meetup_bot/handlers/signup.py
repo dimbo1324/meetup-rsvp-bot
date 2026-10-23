@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
-from meetup_bot.handlers._common import ALERT_LIMIT, GENERIC_ERROR_TEXT, date_parts, fit_alert
 from meetup_bot.repositories import event_posts
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
@@ -28,6 +27,7 @@ from meetup_bot.telegram.callbacks import (
     ACTION_JOIN_PLUS_ONE,
     SignupCallback,
 )
+from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, date_parts, fit_alert
 from meetup_bot.telegram.post_updater import PostUpdater
 
 logger = logging.getLogger(__name__)

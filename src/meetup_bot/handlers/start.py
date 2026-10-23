@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock, ShiftableClock
 from meetup_bot.config import Settings
 from meetup_bot.container import Services
-from meetup_bot.handlers._common import check_admin, format_moment
 from meetup_bot.repositories import users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.telegram.common import check_admin, format_moment
 
 logger = logging.getLogger(__name__)
 

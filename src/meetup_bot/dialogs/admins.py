@@ -19,10 +19,10 @@ from meetup_bot.dialogs._common import (
     get_sessions,
 )
 from meetup_bot.dialogs.states import AdminsSG, PickerSG
-from meetup_bot.handlers._common import fit_alert
 from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.admins import AdminEntry
+from meetup_bot.telegram.common import fit_alert
 
 _ROLES = {AdminRole.OWNER.value: "владелец", AdminRole.ADMIN.value: "админ"}
 

@@ -1,7 +1,8 @@
 """Участники встречи в меню админа: список, карточка, добавление, удаление, бан.
 
 Диалог запускается с `{"event_id": int}`. Выбранные запись и отложенное действие лежат в
-`dialog_data`, а не в замыканиях: callback может прийти уже после перезапуска бота.
+`dialog_data`, а не в замыканиях; состояние диалогов хранится в памяти и после перезапуска
+бота сбрасывается.
 """
 
 from __future__ import annotations
@@ -27,11 +28,11 @@ from meetup_bot.dialogs._common import (
     middleware_value,
 )
 from meetup_bot.dialogs.states import ParticipantsSG, PickerSG
-from meetup_bot.handlers._common import format_moment
 from meetup_bot.repositories import events as events_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.participants import ParticipantRow
+from meetup_bot.telegram.common import format_moment
 
 MAX_MANUAL_NAME = 100
 MAX_BAN_COMMENT = 200
