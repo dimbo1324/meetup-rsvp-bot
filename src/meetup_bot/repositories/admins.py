@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Admin, AdminRole
+from meetup_bot.db.models import Admin, AdminRole, User
 from meetup_bot.services.errors import PermissionDenied
 
 
@@ -35,3 +37,30 @@ async def require_admin(session: AsyncSession, user_id: int) -> None:
 async def require_owner(session: AsyncSession, user_id: int) -> None:
     if not await is_owner(session, user_id):
         raise PermissionDenied(f"пользователь {user_id} не владелец")
+
+
+async def get(session: AsyncSession, user_id: int) -> Admin | None:
+    return await session.get(Admin, user_id)
+
+
+async def list_with_users(session: AsyncSession) -> list[tuple[Admin, User]]:
+    rows = await session.execute(
+        select(Admin, User)
+        .join(User, Admin.user_id == User.id)
+        .order_by(Admin.added_at, Admin.user_id)
+    )
+    return [(admin, user) for admin, user in rows.all()]
+
+
+async def insert(
+    session: AsyncSession, *, user_id: int, role: AdminRole, added_by: int | None, now: datetime
+) -> Admin:
+    admin = Admin(user_id=user_id, role=role.value, added_by=added_by, added_at=now)
+    session.add(admin)
+    await session.flush()
+    return admin
+
+
+async def delete(session: AsyncSession, admin: Admin) -> None:
+    await session.delete(admin)
+    await session.flush()
