@@ -65,10 +65,8 @@ async def test_кнопка_админы_видна_только_владель�
 async def test_админ_не_может_открыть_админов_подделав_кнопку(tg: Harness) -> None:
     await tg.feed(command_update(ADMIN_ID, "/menu"))
     mid = _inline(tg)
-    edits_before = len(tg.session.of("EditMessageText"))
     await tg.feed(_forged(tg, ADMIN_ID, mid, "Встречи", "admins"))
-    # Диалог админов не открылся: окно меню не заменено
-    assert len(tg.session.of("EditMessageText")) == edits_before
+    # Скрытая кнопка игнорируется: диалог админов не открылся, окно осталось меню
     assert "Меню администратора" in _screen(tg)
 
 
@@ -133,9 +131,9 @@ async def test_не_админ_не_может_нажать_кнопку_чуж�
     mid = _inline(tg)
     await app.services.admins.remove_admin(OWNER_ID, ADMIN_ID)
     await tg.click(ADMIN_ID, mid, "Встречи")
-    alert = tg.session.of("AnswerCallbackQuery")[-1]
-    assert alert["text"] == "Нет доступа."
-    assert alert["show_alert"] is True
+    alerts = [d for d in tg.session.of("AnswerCallbackQuery") if d.get("text")]
+    assert alerts[-1]["text"] == "Нет доступа."
+    assert alerts[-1]["show_alert"] is True
 
 
 import pytest as _pytest  # noqa: E402

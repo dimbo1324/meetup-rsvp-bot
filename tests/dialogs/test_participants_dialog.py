@@ -6,7 +6,7 @@ import pytest
 from aiogram.types import Message, SharedUser, Update, UsersShared
 from sqlalchemy import select
 
-from meetup_bot.db.models import Attendance, Registration, RegistrationStatus
+from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
@@ -307,6 +307,10 @@ async def test_удаление_переводит_человека_из_оче�
     await app.services.settings.set("waitlist_enabled", True, OWNER_ID)
     event_id = await _make_event(app, capacity=2)
     await _register(app, event_id, 1, 2, 3)
+    async with app.sessions() as session, session.begin():
+        waiting = await session.get(User, person(3).id)
+        assert waiting is not None
+        waiting.dm_available = True  # личные сообщения уходят только тем, кто нажимал /start
     await _open(tg)
     await _press(tg, "1. Участник1")
     await _press(tg, "Удалить из встречи")
@@ -383,7 +387,10 @@ async def test_отмена_без_штрафа_после_дедлайна_не
     await _press(tg, "Отменить без штрафа")
     assert "Отменить запись без штрафа?" in _screen(tg)
     await _press(tg, "Да")
-    assert (await _registrations(app, event_id))[0].status == RegistrationStatus.CANCELLED.value
+    # Без штрафа запись снимается как удалённая, а не как неявка
+    registration = (await _registrations(app, event_id))[0]
+    assert registration.status == RegistrationStatus.REMOVED.value
+    assert registration.attendance != Attendance.NO_SHOW.value
     assert await _banned_ids(app) == set()
 
 

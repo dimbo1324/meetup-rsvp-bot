@@ -110,13 +110,13 @@ async def test_назад_из_редактирования_возвращает
 # ---- переключатели -------------------------------------------------------------------------
 
 
-async def test_переключение_флага_виднo_в_сервисе_настроек(app: App, tg: Harness) -> None:
+async def test_переключение_флага_видно_в_сервисе_настроек(app: App, tg: Harness) -> None:
     await _open(tg, "Правила", "Имена в посте")
     assert app.services.settings.get_now("show_names_in_post") is True
     await _press(tg, "Выключить")
     assert app.services.settings.get_now("show_names_in_post") is False
     assert "✅ Сохранено." in _screen(tg)
-    assert "Сейчас: выключено" in _screen(tg)
+    assert "Сейчас: <b>выключено</b>" in _screen(tg)
     await _press(tg, "Включить")
     assert app.services.settings.get_now("show_names_in_post") is True
 
@@ -142,7 +142,7 @@ async def test_выбор_дня_недели_кнопкой(app: App, tg: Harne
     assert "✅ сб" in _labels(tg)
     await _press_exact(tg, "вс")
     assert app.services.settings.get_now("event_weekday") == 6
-    assert "Сейчас: воскресенье" in _screen(tg)
+    assert "Сейчас: <b>воскресенье</b>" in _screen(tg)
 
 
 # ---- числа ---------------------------------------------------------------------------------
@@ -153,7 +153,7 @@ async def test_ввод_числа_сохраняется(app: App, tg: Harness)
     await _say(tg, "15")
     assert app.services.settings.get_now("capacity") == 15
     assert "✅ Сохранено." in _screen(tg)
-    assert "Сейчас: 15 мест" in _screen(tg)
+    assert "Сейчас: <b>15 мест</b>" in _screen(tg)
 
 
 async def test_не_число_отклоняется_и_значение_не_меняется(app: App, tg: Harness) -> None:
@@ -174,7 +174,7 @@ async def test_нулевой_порог_автобана_допустим(app: 
     await _open(tg, "Правила", "Автобан по неявкам")
     await _say(tg, "0")
     assert app.services.settings.get_now("ban_after_no_shows") == 0
-    assert "Сейчас: выключен" in _screen(tg)
+    assert "Сейчас: <b>выключен</b>" in _screen(tg)
 
 
 # ---- время ---------------------------------------------------------------------------------
@@ -312,7 +312,7 @@ async def test_текст_вместо_фото_в_тексте_сообщени
 async def test_окно_часового_пояса_отмечает_текущий(tg: Harness) -> None:
     await _open(tg, "Часовой пояс")
     assert "✅ America/Montevideo" in _labels(tg)
-    assert "Сейчас: America/Montevideo (по умолчанию)" in _screen(tg)
+    assert "Сейчас: <b>America/Montevideo</b> (по умолчанию)" in _screen(tg)
 
 
 async def test_выбор_пояса_из_списка_меняет_пояс_сервисов(app: App, tg: Harness) -> None:

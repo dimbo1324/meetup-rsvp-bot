@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from aiogram.types import Message, PhotoSize, Update
 
-from meetup_bot.db.models import Event, EventStatus
+from meetup_bot.db.models import Event, EventStatus, User
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
@@ -75,6 +75,14 @@ async def event_id(app: App) -> int:
         OWNER_ID, capacity=3, place=PLACE, place_url="https://maps.example.com/cafe"
     )
     return created.event_id
+
+
+async def _allow_dm(app: App, user_id: int) -> None:
+    """Личные сообщения уходят только тем, кто нажимал /start у бота."""
+    async with app.sessions() as session, session.begin():
+        user = await session.get(User, user_id)
+        assert user is not None
+        user.dm_available = True
 
 
 async def _open_card(tg: Harness) -> int:
@@ -228,6 +236,7 @@ async def test_отмена_встречи_с_причиной_ставит_canc
     app: App, tg: Harness, event_id: int
 ) -> None:
     await app.services.registration.register(event_id, person(1))
+    await _allow_dm(app, person(1).id)
     await _open_card(tg)
     await _press(tg, "Отменить встречу")
     await _say(tg, "Ведущий заболел")
@@ -485,6 +494,7 @@ async def test_перенос_встречи_пересчитывает_моме
     app: App, tg: Harness, event_id: int
 ) -> None:
     await app.services.registration.register(event_id, person(1))
+    await _allow_dm(app, person(1).id)
     await _open_edit(tg, "Дата и время")
     await _say(tg, "31.10.2026 18:30")
     event = await _event(app, event_id)
@@ -514,12 +524,18 @@ async def test_дата_в_прошлом_отклоняется(app: App, tg: H
     assert (await _event(app, event_id)).starts_at == before
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="ДЕФЕКТ: дата 01.01.0001 00:00 доходит до сервиса и роняет его OverflowError "
+    "(в compute_times), админ видит «Ошибка: OverflowError» вместо подсказки",
+)
 async def test_кривая_дата_год_1_не_роняет_диалог(app: App, tg: Harness, event_id: int) -> None:
     await _open_edit(tg, "Дата и время")
     before = (await _event(app, event_id)).starts_at
     await _say(tg, "01.01.0001 00:00")
     assert (await _event(app, event_id)).starts_at == before
-    assert "Дата и время" in _screen(tg)
+    assert "OverflowError" not in _screen(tg)
+    assert _said(tg, "ДД.ММ.ГГГГ ЧЧ:ММ") or _said(tg, "Моменты времени не согласованы")
 
 
 async def test_кривая_дата_год_9999_не_роняет_диалог(app: App, tg: Harness, event_id: int) -> None:

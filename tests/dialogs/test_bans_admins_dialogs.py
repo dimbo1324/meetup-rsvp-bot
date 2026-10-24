@@ -118,7 +118,7 @@ async def test_ручной_бан_через_выбор_пользовател�
     mid = await _open_section(tg, "Чёрный список")
     await tg.click(OWNER_ID, mid, "Забанить")
     await tg.feed(_shared_update(OWNER_ID, 555, "Борис"))
-    assert "Бан: Борис" in _screen(tg)
+    assert "Бан: <b>Борис</b>" in _screen(tg)
     await _say(tg, "Грубил в чате")
     bans = await _bans(app)
     assert [(b.user_id, b.reason, b.comment, b.active) for b in bans] == [

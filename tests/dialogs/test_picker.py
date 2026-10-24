@@ -117,7 +117,7 @@ async def test_пикер_показывает_заголовок_и_reply_кн�
 async def test_выбор_пользователя_кнопкой_telegram_возвращает_результат(tg: Harness) -> None:
     await _open_picker(tg)
     await tg.feed(_shared(OWNER_ID, 555, first_name="Борис", username="boris"))
-    assert "Бан: Борис (@boris)" in _screen(tg)
+    assert "Бан: <b>Борис (@boris)</b>" in _screen(tg)
 
 
 async def test_после_выбора_reply_клавиатура_снимается(tg: Harness) -> None:
@@ -149,14 +149,14 @@ async def test_без_имени_и_username_подставляется_загл
 async def test_пересланное_сообщение_определяет_пользователя(tg: Harness) -> None:
     await _open_picker(tg)
     await tg.feed(_forward(OWNER_ID, 777, "Вера"))
-    assert "Бан: Вера" in _screen(tg)
+    assert "Бан: <b>Вера (@u777)</b>" in _screen(tg)
 
 
 async def test_пересланное_от_бота_отклоняется(tg: Harness) -> None:
     await _open_picker(tg)
     await tg.feed(_forward(OWNER_ID, 888, "Бот", is_bot=True))
     assert _said(tg, "Ботов выбирать нельзя.")
-    assert "Кого забанить?" in _screen(tg)
+    assert _screen(tg) == "Ботов выбирать нельзя."
 
 
 async def test_скрытый_профиль_отклоняется_с_объяснением(tg: Harness) -> None:
@@ -171,7 +171,7 @@ async def test_скрытый_профиль_отклоняется_с_объя�
         )
     )
     assert _said(tg, "Профиль этого человека скрыт настройками приватности")
-    assert "Кого забанить?" in _screen(tg)
+    assert _screen(tg).startswith("Профиль этого человека скрыт")
 
 
 async def test_посторонний_текст_даёт_подсказку(tg: Harness) -> None:
@@ -203,7 +203,7 @@ async def test_список_известных_показывает_людей_�
     assert "Участник1 (@user1)" in labels
     assert "Участник2 (@user2)" in labels
     await tg.click(OWNER_ID, _inline(tg), "Участник2")
-    assert "Бан: Участник2 (@user2)" in _screen(tg)
+    assert "Бан: <b>Участник2 (@user2)</b>" in _screen(tg)
 
 
 async def test_список_известных_разбит_на_страницы(app: App, tg: Harness) -> None:
