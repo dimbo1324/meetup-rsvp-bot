@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import UTC, datetime
 from typing import Any
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
@@ -14,6 +15,7 @@ from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from aiogram_dialog import setup_dialogs
 
 from meetup_bot.config import Settings
+from meetup_bot.dialogs import MODULES as DIALOG_MODULES
 from meetup_bot.handlers import build_router
 from meetup_bot.telegram.attendance_ui import AttendanceUI
 from meetup_bot.telegram.notifier import TelegramNotifier
@@ -170,6 +172,30 @@ def callback_update(
     )
 
 
+_HANDLER_MODULES = (
+    "meetup_bot.handlers.attendance",
+    "meetup_bot.handlers.errors",
+    "meetup_bot.handlers.inline",
+    "meetup_bot.handlers.signup",
+    "meetup_bot.handlers.start",
+)
+
+
+def detach_module_routers() -> None:
+    """Отвязывает роутеры хендлеров и диалогов от прежнего родителя.
+
+    Роутеры в приложении — модульные синглтоны, а aiogram разрешает подключить роутер
+    к родителю только один раз. В бою корень строится один раз, тестам нужен свежий
+    диспетчер на каждый тест.
+    """
+    for name in (*_HANDLER_MODULES, *DIALOG_MODULES):
+        module = importlib.import_module(name)
+        found: list[Router] = [v for v in vars(module).values() if isinstance(v, Router)]
+        found.extend(getattr(module, "DIALOGS", []))
+        for router in found:
+            router._parent_router = None
+
+
 class Harness:
     """Диспетчер с настоящими роутерами и диалогами поверх фейковой сессии бота."""
 
@@ -205,6 +231,7 @@ class Harness:
             notifier=self.notifier,
             attendance_ui=self.attendance_ui,
         )
+        detach_module_routers()
         self.dispatcher.include_router(build_router())
         setup_dialogs(self.dispatcher)
 
