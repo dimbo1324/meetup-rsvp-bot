@@ -47,6 +47,11 @@ def _loop_factory() -> Callable[[], Any] | None:
 
 
 def main() -> int:
+    # Консоль Windows по умолчанию в cp1252: без этого русские логи превращаются в \u-коды
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     try:
         config: Settings = load_settings()
