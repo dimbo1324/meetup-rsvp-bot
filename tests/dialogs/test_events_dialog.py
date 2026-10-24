@@ -524,11 +524,6 @@ async def test_дата_в_прошлом_отклоняется(app: App, tg: H
     assert (await _event(app, event_id)).starts_at == before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ДЕФЕКТ: дата 01.01.0001 00:00 доходит до сервиса и роняет его OverflowError "
-    "(в compute_times), админ видит «Ошибка: OverflowError» вместо подсказки",
-)
 async def test_кривая_дата_год_1_не_роняет_диалог(app: App, tg: Harness, event_id: int) -> None:
     await _open_edit(tg, "Дата и время")
     before = (await _event(app, event_id)).starts_at

@@ -88,10 +88,17 @@ def _local_input(moment: datetime, tz: ZoneInfo) -> str:
     return moment.astimezone(tz).strftime(DATE_FORMAT)
 
 
+MIN_YEAR = 2000
+MAX_YEAR = 2100
+
+
 def parse_local(text: str, tz: ZoneInfo) -> datetime | None:
     """«ДД.ММ.ГГГГ ЧЧ:ММ» в часовом поясе клуба -> UTC; при ошибке формата None."""
     try:
         naive = datetime.strptime(text.strip(), DATE_FORMAT)  # noqa: DTZ007
+        if not MIN_YEAR <= naive.year <= MAX_YEAR:
+            # Вычитание часов в compute_times у границы диапазона дало бы OverflowError
+            return None
         return naive.replace(tzinfo=tz).astimezone(UTC)
     except ValueError, OverflowError:
         # OverflowError — год у границы диапазона (01.01.0001 со сдвигом пояса)
