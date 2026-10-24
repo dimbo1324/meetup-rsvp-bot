@@ -23,16 +23,15 @@ from meetup_bot.db.models import (
 from meetup_bot.repositories import admins, audit
 from meetup_bot.repositories import bans as bans_repo
 from meetup_bot.repositories import users as users_repo
-from meetup_bot.services.admin_support import send_dms
+from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services import access
+from meetup_bot.services.admin_support import RenderText, default_render_text, notify_promotions
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, PostRefresher
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule, safe_send_dm
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
-
-BAN_DM_TEXT = "Вы заблокированы и не можете записываться на встречи."
-PROMOTED_DM_TEXT = "Освободилось место — вы записаны на встречу!"
 
 # Повторы на случай, когда между поиском будущих встреч и блокировкой пользователь записался
 _MAX_LOCK_ATTEMPTS = 5
@@ -66,7 +65,7 @@ class BanService:
         notifier: Notifier,
         post_refresher: PostRefresher,
         rules_provider: Callable[[], RulesSettings] = RulesSettings,
-        render_promoted: Callable[[Promotion], str] | None = None,
+        render_text: RenderText | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -74,7 +73,7 @@ class BanService:
         self._notifier = notifier
         self._refresher = post_refresher
         self._rules = rules_provider
-        self._render_promoted = render_promoted
+        self._render: RenderText = render_text or default_render_text
 
     async def ban(
         self,
@@ -83,26 +82,30 @@ class BanService:
         reason: BanReason = BanReason.MANUAL,
         comment: str | None = None,
         event_id: int | None = None,
+        user: UserInfo | None = None,
     ) -> Ban:
         """Идемпотентно: если пользователь уже забанен, возвращается действующий бан.
 
-        Забанить можно того, кто ещё не писал боту: бан привязан к Telegram ID.
+        Забанить можно того, кто ещё не писал боту: бан привязан к Telegram ID. Если админ
+        выбрал человека из Telegram, `user` сохраняет его имя для чёрного списка.
         """
+        if user is not None and user.id != user_id:
+            raise InvalidOperation("invalid_user", "данные пользователя не совпадают с ID")
         if user_id <= 0:
             raise InvalidOperation("invalid_user", "некорректный Telegram ID")
         async with self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             # Владельца, админов и себя банить нельзя: иначе можно отрезать доступ к управлению
             if reason is BanReason.MANUAL and await admins.is_admin(session, user_id):
                 raise InvalidOperation("cannot_ban_admin", "нельзя забанить админа или владельца")
-        created = await self._ban_user(actor_id, user_id, reason, comment, event_id)
+        created = await self._ban_user(actor_id, user_id, reason, comment, event_id, user)
         return created.ban
 
     async def unban(self, actor_id: int, user_id: int) -> Ban | None:
         """Снимает действующий бан; None, если бана не было."""
         now = self._clock.now()
         async with self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             ban = await bans_repo.get_active(session, user_id)
             if ban is None:
                 return None
@@ -112,12 +115,12 @@ class BanService:
 
     async def list_banned(self, actor_id: int) -> list[Ban]:
         async with self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             return await bans_repo.list_active(session)
 
     async def history(self, actor_id: int, user_id: int) -> list[Ban]:
         async with self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             return await bans_repo.history(session, user_id)
 
     async def recalc_for_attendance(
@@ -134,8 +137,10 @@ class BanService:
     ) -> BanOutcome:
         """Пересчитывает автобан по правилу 5.8.
 
-        Снимается только бан, выданный за неявку именно на этой встрече; ручные не трогаем.
-        Автоснятие помечается `auto_removed`, чтобы не обнулять счётчик неявок как ручной разбан.
+        Автобан снимается, как только неявок стало меньше порога, — по какой бы встрече он
+        ни был выдан: при пороге 2 исправление любой из двух неявок убирает основание бана.
+        Ручные баны не трогаем. Автоснятие помечается `auto_removed`, чтобы не обнулять
+        счётчик неявок как ручной разбан.
         """
         threshold = self._rules().ban_after_no_shows
         async with self._sessions() as session, session.begin():
@@ -146,7 +151,6 @@ class BanService:
                 and count < threshold
                 and active is not None
                 and active.reason == BanReason.NO_SHOW.value
-                and active.event_id == event_id
             ):
                 now = self._clock.now()
                 self._deactivate(active, actor_id, now, auto=True)
@@ -166,6 +170,7 @@ class BanService:
         reason: BanReason,
         comment: str | None,
         event_id: int | None,
+        user: UserInfo | None = None,
     ) -> _Created:
         """Создаёт бан и снимает записи с будущих встреч под их блокировками.
 
@@ -190,9 +195,11 @@ class BanService:
                     fresh = await self._future_event_ids(session, user_id) if remove else set()
                     if not fresh <= candidates:
                         continue
-                    # Заглушка для того, кто ещё не писал боту (внешний ключ на users)
-                    if await session.get(User, user_id) is None:
-                        await users_repo.upsert(session, users_repo.UserInfo(user_id, ""), now)
+                    # Имя выбранного админом человека или заглушка для внешнего ключа на users
+                    if user is not None:
+                        await users_repo.upsert(session, user, now)
+                    elif await session.get(User, user_id) is None:
+                        await users_repo.upsert(session, UserInfo(user_id, ""), now)
                     ban = Ban(
                         user_id=user_id,
                         active=True,
@@ -228,14 +235,9 @@ class BanService:
         """После коммита: сбой Telegram не должен терять уже выданный бан."""
         for touched_id in sorted(touched):
             safe_schedule(self._refresher, touched_id)
-        for promotion in promoted:
-            if promotion.user_id is not None:
-                text = (
-                    self._render_promoted(promotion) if self._render_promoted else PROMOTED_DM_TEXT
-                )
-                await send_dms(self._notifier, [promotion.user_id], text)
+        await notify_promotions(self._notifier, self._render, promoted)
         if self._rules().notify_user_on_ban:
-            await safe_send_dm(self._notifier, user_id, BAN_DM_TEXT)
+            await safe_send_dm(self._notifier, user_id, self._render("ban_notice", {}))
 
     async def _future_event_ids(self, session: AsyncSession, user_id: int) -> set[int]:
         rows = await session.scalars(

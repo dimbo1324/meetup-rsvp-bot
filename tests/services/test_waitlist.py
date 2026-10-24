@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Ban, BanReason, EventStatus, Registration
 from meetup_bot.repositories import events
+from meetup_bot.repositories import users as users_repo
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.registration import CancelStatus, RegisterStatus
 from meetup_bot.services.waitlist import promote_waitlist
@@ -189,6 +190,7 @@ async def test_отмена_активной_записи_продвигает_�
     await enable(app, "waitlist_enabled")
     event_id = await make_event(app, 1)
     await fill_and_queue(app, event_id, 1, 2)
+    await enable_dm(app, 1001)
     result = await app.services.registration.cancel(event_id, 1000)
     assert result.status is CancelStatus.OK
     assert [p.user_id for p in result.promoted] == [1001]
@@ -360,21 +362,40 @@ async def test_плюс_один_занимает_два_места(app: App) ->
 
 async def test_гость_выключен_по_умолчанию_в_приложении(app: App) -> None:  # кейс 13
     event_id = await make_event(app, 3)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidOperation) as error:
         await app.services.registration.register(event_id, person(0), guests=1)
+    assert error.value.code == "plus_one_disabled"
 
 
 async def test_гостей_может_быть_только_ноль_или_один(app: App) -> None:
     await enable(app, "plus_one_enabled")
     event_id = await make_event(app, 5)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidOperation) as error:
         await app.services.registration.register(event_id, person(0), guests=2)
+    assert error.value.code == "invalid_guests"
 
 
 async def test_включение_плюс_один_подхватывается_без_перезапуска(app: App) -> None:
     event_id = await make_event(app, 5)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidOperation) as error:
         await app.services.registration.register(event_id, person(0), guests=1)
+    assert error.value.code == "plus_one_disabled"
     await enable(app, "plus_one_enabled")
     result = await app.services.registration.register(event_id, person(0), guests=1)
     assert result.status is RegisterStatus.OK
+
+
+async def enable_dm(app: App, *user_ids: int) -> None:
+    async with app.sessions() as session, session.begin():
+        for user_id in user_ids:
+            await users_repo.set_dm_available(session, user_id, True, app.clock.now())
+
+
+async def test_продвинутому_без_старта_у_бота_лс_не_шлём(app: App) -> None:
+    """Раздел 8.4: продвижение из очереди получают только люди с dm_available."""
+    await enable(app, "waitlist_enabled")
+    event_id = await make_event(app, 1)
+    await fill_and_queue(app, event_id, 1, 1)
+    result = await app.services.registration.cancel(event_id, 1000)
+    assert [p.user_id for p in result.promoted] == [1001]
+    assert app.notifier.dms_to(1001) == []

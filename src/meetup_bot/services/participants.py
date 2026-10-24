@@ -17,34 +17,26 @@ from meetup_bot.db.models import (
     Registration,
     RegistrationSource,
     RegistrationStatus,
-    User,
 )
-from meetup_bot.repositories import admins, audit, events, events_admin, registrations, users
+from meetup_bot.repositories import audit, events, events_admin, registrations, users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
     RenderText,
     default_render_text,
-    format_local,
-    send_dms,
+    notify_promotions,
+    resolve,
 )
 from meetup_bot.services.bans import BanService
 from meetup_bot.services.errors import InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
+from meetup_bot.services.names import display_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule
-from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 logger = logging.getLogger(__name__)
-
-
-def display_name(user: User | None, manual_name: str | None) -> str:
-    """Имя для списков и CSV; вручную добавленный человек помечается «(вручную)»."""
-    if user is None:
-        return f"{manual_name or 'Участник'} (вручную)"
-    name = " ".join(part for part in (user.first_name, user.last_name) if part)
-    return name or (f"@{user.username}" if user.username else "Участник")
 
 
 @dataclass(frozen=True)
@@ -99,7 +91,6 @@ class ParticipantService:
         notifier: Notifier | None = None,
         post_refresher: PostRefresher | None = None,
         rules: RulesSettings | Callable[[], RulesSettings] | None = None,
-        schedule: ScheduleSettings | Callable[[], ScheduleSettings] | None = None,
         render_text: RenderText | None = None,
         *,
         ban_service: BanService | None = None,
@@ -110,7 +101,6 @@ class ParticipantService:
         self._notifier: Notifier = notifier or NullNotifier()
         self._refresher: PostRefresher = post_refresher or NullPostRefresher()
         self._rules = rules
-        self._schedule = schedule
         self._render: RenderText = render_text or default_render_text
         self._bans = ban_service
 
@@ -267,9 +257,6 @@ class ParticipantService:
                     "promoted": [p.registration_id for p in promotions],
                 },
             )
-            promoted_ids = [p.user_id for p in promotions if p.user_id is not None]
-            recipients = await events_admin.filter_dm_available(session, promoted_ids)
-            starts_at = event.starts_at
             result = RemoveResult(
                 registration_id=registration_id,
                 user_id=registration.user_id,
@@ -277,29 +264,17 @@ class ParticipantService:
                 ban_recalc_required=as_no_show and registration.user_id is not None,
             )
         safe_schedule(self._refresher, event_id)
-        if recipients:
-            text = self._render(
-                "promoted",
-                {"starts_at": format_local(starts_at, self._schedule_settings().timezone)},
-            )
-            await send_dms(self._notifier, recipients, text)
+        await notify_promotions(self._notifier, self._render, promotions)
         return result
 
     def _rules_settings(self) -> RulesSettings:
-        if self._rules is None:
-            return RulesSettings()
-        return self._rules() if callable(self._rules) else self._rules
-
-    def _schedule_settings(self) -> ScheduleSettings:
-        if self._schedule is None:
-            return ScheduleSettings()
-        return self._schedule() if callable(self._schedule) else self._schedule
+        return RulesSettings() if self._rules is None else resolve(self._rules)
 
     @staticmethod
     async def _load_event(
         session: AsyncSession, actor_id: int, event_id: int, *, editable_only: bool = True
     ) -> Event:
-        await admins.require_admin(session, actor_id)
+        await access.require_admin(session, actor_id)
         event = await events.get(session, event_id)
         if event is None:
             raise NotFound(f"встреча {event_id} не найдена")

@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.renderer.post import Participant, PostData
 from meetup_bot.repositories import events, registrations
-
-DEFAULT_TIMEZONE = "America/Montevideo"
+from meetup_bot.services.names import public_name
+from meetup_bot.services.timing import DEFAULT_TIMEZONE
 
 
 async def load_post_data(
@@ -24,14 +24,10 @@ async def load_post_data(
             return None
         rows = await registrations.list_active_with_users(session, event_id)
         taken = await events.seats_taken(session, event_id)
-        participants = []
-        for registration, user in rows:
-            if user is None:
-                name = registration.manual_name or "Участник"
-            else:
-                name = " ".join(part for part in (user.first_name, user.last_name) if part)
-                name = name or (f"@{user.username}" if user.username else "Участник")
-            participants.append(Participant(name=name, guests=registration.guests))
+        participants = [
+            Participant(name=public_name(user, reg.manual_name), guests=reg.guests)
+            for reg, user in rows
+        ]
         return PostData(
             event_id=event.id,
             status=event.status,

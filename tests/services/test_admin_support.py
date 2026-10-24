@@ -10,53 +10,61 @@ from meetup_bot.services.admin_support import (
     MESSAGE_CHUNK,
     chunk_lines,
     default_render_text,
-    escape_params,
-    format_local,
+    notify_promotions,
     resolve,
     resolve_any,
     send_dms,
 )
 from meetup_bot.services.safe import safe_schedule, safe_send_dm, safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
+from meetup_bot.services.waitlist import Promotion
+from meetup_bot.texts.render import format_moment, text_variables, tidy
 from tests.helpers import RecordingNotifier, RecordingRefresher
 
-WHEN = "суббота, 1 ноября, 17:00"
+# Суббота 1 ноября 17:00 в Монтевидео
+START = datetime(2026, 11, 1, 20, 0, tzinfo=UTC)
 
 
-# ---- шаблоны по умолчанию -------------------------------------------------------------
+# ---- тексты по умолчанию (дата передаётся моментом, форматирует рендер) ----------------
 
 
-def test_перенос_подставляет_новое_время() -> None:
-    assert default_render_text("event_moved", {"starts_at": WHEN}) == (
-        f"Встреча перенесена: новое время — {WHEN}."
+def test_перенос_подставляет_новое_время_и_место() -> None:
+    assert default_render_text("event_moved", {"starts_at": START, "place": "Кафе"}) == (
+        "Встреча перенесена: теперь воскресенье, 1 ноября, 17:00, Кафе."
+    )
+
+
+def test_перенос_без_места_не_оставляет_запятую() -> None:
+    assert default_render_text("event_moved", {"starts_at": START}) == (
+        "Встреча перенесена: теперь воскресенье, 1 ноября, 17:00."
     )
 
 
 def test_отмена_без_причины_не_добавляет_хвост() -> None:
-    assert default_render_text("event_cancelled", {"starts_at": WHEN, "reason": ""}) == (
-        f"Встреча {WHEN} отменена."
+    assert default_render_text("event_cancelled", {"starts_at": START, "reason": ""}) == (
+        "Встреча 1 ноября отменена."
     )
 
 
 def test_отмена_без_ключа_причины_тоже_работает() -> None:
-    assert (
-        default_render_text("event_cancelled", {"starts_at": WHEN}) == f"Встреча {WHEN} отменена."
+    assert default_render_text("event_cancelled", {"starts_at": START}) == (
+        "Встреча 1 ноября отменена."
     )
 
 
 def test_отмена_с_причиной() -> None:
-    text = default_render_text("event_cancelled", {"starts_at": WHEN, "reason": "дождь"})
-    assert text == f"Встреча {WHEN} отменена. Причина: дождь"
+    text = default_render_text("event_cancelled", {"starts_at": START, "reason": "дождь"})
+    assert text == "Встреча 1 ноября отменена. Причина: дождь"
 
 
 def test_отмена_экранирует_html_в_причине() -> None:
-    text = default_render_text("event_cancelled", {"starts_at": WHEN, "reason": "<b>&"})
+    text = default_render_text("event_cancelled", {"starts_at": START, "reason": "<b>&"})
     assert text.endswith("Причина: &lt;b&gt;&amp;")
 
 
 def test_продвижение_из_очереди() -> None:
-    assert default_render_text("promoted", {"starts_at": WHEN}) == (
-        f"Освободилось место — вы записаны на встречу {WHEN}."
+    assert default_render_text("promoted", {"starts_at": START}) == (
+        "Освободилось место — вы записаны на воскресенье, 1 ноября, 17:00!"
     )
 
 
@@ -65,42 +73,61 @@ def test_неизвестный_шаблон_это_KeyError() -> None:
         default_render_text("нет_такого", {})
 
 
-def test_escape_params_экранирует_только_пользовательские_поля() -> None:
-    result = escape_params({"reason": "<i>", "place": "a&b", "name": "<x>", "starts_at": "<raw>"})
-    assert result == {
-        "reason": "&lt;i&gt;",
-        "place": "a&amp;b",
-        "name": "&lt;x&gt;",
-        "starts_at": "<raw>",
+def test_подстановки_из_сырых_параметров() -> None:
+    values = text_variables(
+        {"starts_at": START, "deadline_at": START, "place": "a&b", "position": 3}, "UTC"
+    )
+    assert values == {
+        "weekday": "воскресенье",
+        "date": "1 ноября",
+        "time": "20:00",
+        "deadline": "1 ноября, 20:00",
+        "place": "a&b",
+        "position": "3",
     }
 
 
-def test_escape_params_не_меняет_исходный_словарь() -> None:
-    source = {"reason": "<i>"}
-    escape_params(source)
-    assert source == {"reason": "<i>"}
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("Встреча 17:00, .", "Встреча 17:00."),
+        ("a, , b", "a, b"),
+        ("слово  ,  ещё", "слово, ещё"),
+        ("хвост   ", "хвост"),
+        ("строка 1 \nстрока 2", "строка 1\nстрока 2"),
+    ],
+)
+def test_tidy_убирает_следы_пустых_подстановок(raw: str, clean: str) -> None:
+    assert tidy(raw) == clean
 
 
-def test_escape_params_кавычки_остаются() -> None:
-    assert escape_params({"name": "a\"b'c"}) == {"name": "a\"b'c"}
+async def test_продвинутым_пишем_только_если_разрешили_личку() -> None:
+    notifier = RecordingNotifier()
+    promotions = [
+        Promotion(1, 10, False, START, "Кафе", dm_available=True),
+        Promotion(2, 11, False, START, "Кафе", dm_available=False),
+        Promotion(3, None, False, START, "Кафе", dm_available=True),
+    ]
+    await notify_promotions(notifier, default_render_text, promotions)
+    assert [uid for uid, _ in notifier.dms] == [10]
 
 
-# ---- format_local ---------------------------------------------------------------------
+# ---- format_moment ---------------------------------------------------------------------
 
 
-def test_format_local_переводит_в_локальную_зону() -> None:
+def test_format_moment_переводит_в_локальную_зону() -> None:
     moment = datetime(2026, 10, 31, 20, 0, tzinfo=UTC)
-    assert format_local(moment, "America/Montevideo") == "суббота, 31 октября, 17:00"
+    assert format_moment(moment, "America/Montevideo") == "суббота, 31 октября, 17:00"
 
 
-def test_format_local_граница_суток_уходит_на_предыдущий_день() -> None:
+def test_format_moment_граница_суток_уходит_на_предыдущий_день() -> None:
     moment = datetime(2026, 11, 1, 1, 30, tzinfo=UTC)
-    assert format_local(moment, "America/Montevideo") == "суббота, 31 октября, 22:30"
+    assert format_moment(moment, "America/Montevideo") == "суббота, 31 октября, 22:30"
 
 
-def test_format_local_в_UTC_без_сдвига() -> None:
+def test_format_moment_в_UTC_без_сдвига() -> None:
     assert (
-        format_local(datetime(2026, 1, 5, 9, 5, tzinfo=UTC), "UTC")
+        format_moment(datetime(2026, 1, 5, 9, 5, tzinfo=UTC), "UTC")
         == "понедельник, 5 января, 09:05"
     )
 

@@ -9,10 +9,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import ChosenInlineResult, InlineQuery, TelegramObject
 from aiogram.types import User as TgUser
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.clock import Clock
-from meetup_bot.repositories import users
 from meetup_bot.repositories.users import UserInfo
 
 logger = logging.getLogger(__name__)
@@ -45,11 +42,8 @@ class UserMiddleware(BaseMiddleware):
         if isinstance(event, InlineQuery | ChosenInlineResult):
             data["user_info"] = info
             return await handler(event, data)
-        sessions: async_sessionmaker[AsyncSession] = data["sessions"]
-        clock: Clock = data["clock"]
         try:
-            async with sessions() as session, session.begin():
-                await users.upsert(session, info, clock.now())
+            await data["services"].users.touch(info)
         except Exception:
             logger.exception("не удалось обновить данные пользователя %s", info.id)
         data["user_info"] = info

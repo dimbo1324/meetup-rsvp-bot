@@ -32,7 +32,7 @@ from meetup_bot.repositories import events as events_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.participants import ParticipantRow
-from meetup_bot.telegram.common import format_moment
+from meetup_bot.texts.render import format_moment
 
 MAX_MANUAL_NAME = 100
 MAX_BAN_COMMENT = 200

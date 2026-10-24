@@ -283,7 +283,7 @@ async def test_отмена_шлёт_служебное_уведомление_�
     await app.services.registration.register(event_id, person(1))
     await app.services.registration.cancel(event_id, 1001)
     assert len(app.notifier.service) == 1
-    assert "1001" in app.notifier.service[0]
+    assert "Участник1" in app.notifier.service[0]
 
 
 async def test_уведомление_об_отмене_отключается_настройкой(app: App) -> None:

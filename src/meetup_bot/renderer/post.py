@@ -16,33 +16,11 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from meetup_bot.db.models import EventStatus
+from meetup_bot.texts.render import MONTHS, WEEKDAYS
 
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
 
-WEEKDAYS = (
-    "понедельник",
-    "вторник",
-    "среда",
-    "четверг",
-    "пятница",
-    "суббота",
-    "воскресенье",
-)
-MONTHS = (
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-)
 
 _TAG_RE = re.compile(r"<[^>]*>")
 _TOKEN_RE = re.compile(r"(<[^>]*>)")

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meetup_bot.db.models import User
-from meetup_bot.repositories.users import UserInfo
 
 
 def _known_query(exclude_ids: Collection[int]) -> Select[Any]:
@@ -43,27 +41,3 @@ async def get_many(session: AsyncSession, user_ids: Collection[int]) -> dict[int
         return {}
     rows = await session.scalars(select(User).where(User.id.in_(list(user_ids))))
     return {user.id: user for user in rows.all()}
-
-
-async def remember(session: AsyncSession, info: UserInfo, now: datetime) -> None:
-    """Сохраняет данные выбранного человека, только если его ещё нет или имя пустое.
-
-    Существующую запись не перезаписываем: актуальные данные приходят от самого пользователя.
-    """
-    user = await session.get(User, info.id)
-    if user is None:
-        session.add(
-            User(
-                id=info.id,
-                first_name=info.first_name,
-                last_name=info.last_name,
-                username=info.username,
-                dm_available=False,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-    elif not user.first_name:
-        user.first_name = info.first_name
-        user.last_name = info.last_name
-        user.username = info.username

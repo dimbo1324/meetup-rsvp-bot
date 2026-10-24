@@ -1,10 +1,10 @@
 """Задачи планировщика (раздел 11): напоминания, запрос явки, автосоздание, закрытие."""
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from sqlalchemy import select
 
+from meetup_bot.container import make_text_renderer
 from meetup_bot.db.models import AuditLog, Event, EventStatus, Registration
 from meetup_bot.repositories import users
 from meetup_bot.repositories.users import UserInfo
@@ -58,11 +58,10 @@ async def get_event(app: App, event_id: int) -> Event:
         return event
 
 
-def reminder_task(app: App, schedule: Any = None) -> ReminderTask:
+def reminder_task(app: App) -> ReminderTask:
     settings = app.services.settings
-    return ReminderTask(
-        app.sessions, app.notifier, settings.rules_now, schedule or settings.schedule_now
-    )
+    render = make_text_renderer(settings)
+    return ReminderTask(app.sessions, app.notifier, settings.rules_now, render)
 
 
 async def finish_and_wait_prompt(app: App, event_id: int) -> datetime:
@@ -102,7 +101,7 @@ async def test_текст_напоминания_содержит_время_м�
     await reminder_task(app).run(go_to(app, REMINDER_AT))
     assert app.notifier.dms_to(person(1).id) == [
         "Напоминаем: завтра встреча! суббота, 24 октября, 17:00, Кафе. "
-        "Не сможете прийти? Отмените запись до пятница, 23 октября, 20:00."
+        "Не сможете прийти? Отмените запись до 23 октября, 20:00."
     ]
     assert event_id
 
@@ -126,8 +125,8 @@ async def test_напоминание_экранирует_html_в_месте(ap
 async def test_напоминание_использует_часовой_пояс_из_настроек(app: App) -> None:
     event_id = await create_event(app)
     await join(app, event_id, 1)
-    task = reminder_task(app, ScheduleSettings(timezone="UTC"))
-    await task.run(go_to(app, REMINDER_AT))
+    await app.services.settings.set("timezone", "UTC", OWNER_ID)
+    await reminder_task(app).run(go_to(app, REMINDER_AT))
     assert "суббота, 24 октября, 20:00" in app.notifier.dms_to(person(1).id)[0]
     assert event_id
 
@@ -226,7 +225,7 @@ async def test_отметка_напоминания_коммитится_до_�
     await join(app, event_id, 2)
     notifier = MarkCheckingNotifier(app, event_id)
     settings = app.services.settings
-    task = ReminderTask(app.sessions, notifier, settings.rules_now, settings.schedule_now)
+    task = ReminderTask(app.sessions, notifier, settings.rules_now, make_text_renderer(settings))
     await task.run(go_to(app, REMINDER_AT))
     assert notifier.marked_before_send == [True, True]
 
@@ -244,7 +243,7 @@ async def test_сбой_отправки_одному_не_мешает_оста
     await join(app, event_id, 2)
     notifier = FlakyNotifier()
     settings = app.services.settings
-    task = ReminderTask(app.sessions, notifier, settings.rules_now, settings.schedule_now)
+    task = ReminderTask(app.sessions, notifier, settings.rules_now, make_text_renderer(settings))
     now = go_to(app, REMINDER_AT)
     await task.run(now)
     await task.run(now)
@@ -295,7 +294,7 @@ async def test_напоминание_принимает_асинхронный_
     async def rules() -> RulesSettings:
         return RulesSettings(reminder_enabled=False)
 
-    task = ReminderTask(app.sessions, app.notifier, rules, app.services.settings.schedule_now)
+    task = ReminderTask(app.sessions, app.notifier, rules)
     assert await task.run(go_to(app, REMINDER_AT)) == 0
     assert event_id
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Event, EventStatus, RegistrationStatus
+from meetup_bot.db.models import Event, EventStatus, RegistrationStatus, User
 from meetup_bot.repositories import audit, bans, events, registrations
 
 __all__ = ["Promotion", "promote_waitlist"]
@@ -21,6 +21,8 @@ class Promotion:
     # Данные встречи для подстановок в личное сообщение без обращения handler-а к БД
     starts_at: datetime
     place: str
+    # Можно ли писать человеку в личку (нажимал ли он «Старт» у бота)
+    dm_available: bool = False
 
 
 async def promote_waitlist(
@@ -60,8 +62,16 @@ async def promote_waitlist(
         registration.promoted_at = now
         registration.late_promoted = late
         free -= need
+        user = await session.get(User, registration.user_id) if registration.user_id else None
         promoted.append(
-            Promotion(registration.id, registration.user_id, late, event.starts_at, event.place)
+            Promotion(
+                registration.id,
+                registration.user_id,
+                late,
+                event.starts_at,
+                event.place,
+                dm_available=user is not None and user.dm_available,
+            )
         )
         await audit.add(
             session,

@@ -11,9 +11,7 @@ SQLite значит самоблокироваться. Поэтому весь 
 from __future__ import annotations
 
 import asyncio
-import html
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import time
 from typing import Any
@@ -22,8 +20,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.repositories import admins, audit
+from meetup_bot.repositories import audit
 from meetup_bot.repositories import settings as settings_repo
+from meetup_bot.services import access
 from meetup_bot.services.errors import DomainError
 from meetup_bot.services.rules import RegistrationOptions, RulesSettings
 from meetup_bot.services.settings_schema import (
@@ -38,6 +37,7 @@ from meetup_bot.services.settings_schema import (
 )
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.texts.defaults import ALLOWED_PLACEHOLDERS, DEFAULT_TEXTS, TEXT_PREFIX
+from meetup_bot.texts.render import fill, text_variables
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +75,6 @@ def _to_time(value: str) -> time:
     if parsed is None:  # значение из БД испорчено вручную: падаем явно, а не молча
         raise DomainError(f"некорректное время в настройках: {value!r}")
     return time(*parsed)
-
-
-class _BlankMissing(defaultdict[str, str]):
-    """Для format_map: отсутствующая подстановка даёт пустую строку, а не KeyError."""
-
-    def __init__(self, values: dict[str, str]) -> None:
-        super().__init__(str, values)
 
 
 class SettingsService:
@@ -196,17 +189,28 @@ class SettingsService:
         if unknown:
             logger.warning("текст %s: лишние подстановки проигнорированы: %s", key, sorted(unknown))
         values = {
-            name: (html.escape(str(value), quote=False) if escape_html else str(value))
+            name: str(value)
             for name, value in variables.items()
             if name in ALLOWED_PLACEHOLDERS and value is not None
         }
+        return self._render(key, values, escape_html=escape_html)
+
+    def render_message(self, key: str, params: dict[str, Any]) -> str:
+        """Текст-уведомление из сырых параметров сервиса (моменты, место, имя, причина)."""
+        if not key.startswith(TEXT_PREFIX):
+            key = TEXT_PREFIX + key
+        return self._render(key, text_variables(params, self.timezone_now()), escape_html=True)
+
+    def _render(self, key: str, values: dict[str, str], *, escape_html: bool) -> str:
+        if key not in DEFAULT_TEXTS:
+            raise SettingsValidationError(key, f"«{key}» не является текстом бота.")
         template = str(self.get_now(key))
         try:
             check_template(key, template)
-            return template.format_map(_BlankMissing(values))
+            return fill(template, values, escape_html=escape_html)
         except SettingsValidationError, ValueError, IndexError, KeyError:
             logger.exception("шаблон %s испорчен, используется текст по умолчанию", key)
-            return DEFAULT_TEXTS[key].format_map(_BlankMissing(values))
+            return fill(DEFAULT_TEXTS[key], values, escape_html=escape_html)
 
     # ---- асинхронный интерфейс (обёртки над теми же данными) ------------------------
 
@@ -232,7 +236,7 @@ class SettingsService:
             now = self._clock.now()
             async with self._sessions() as session, session.begin():
                 # Права проверяем первыми: не-админ не должен узнавать детали схемы
-                await admins.require_admin(session, actor_id)
+                await access.require_admin(session, actor_id)
                 spec = get_spec(key)
                 normalized, warnings = validate(spec, value)
                 old = self.get_now(key)
@@ -255,7 +259,7 @@ class SettingsService:
         async with self._write_lock:
             now = self._clock.now()
             async with self._sessions() as session, session.begin():
-                await admins.require_admin(session, actor_id)
+                await access.require_admin(session, actor_id)
                 spec = get_spec(key)
                 old = self.get_now(key)
                 if await settings_repo.delete_key(session, key):

@@ -17,12 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import Event, EventStatus
-from meetup_bot.repositories import admins, audit, events, events_admin
+from meetup_bot.repositories import audit, events, events_admin
+from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
     Provided,
     RenderText,
     default_render_text,
-    format_local,
+    notify_promotions,
     resolve,
     send_dms,
 )
@@ -47,7 +48,7 @@ from meetup_bot.services.timing import (
     next_event_start,
     validate_times,
 )
-from meetup_bot.services.waitlist import promote_waitlist
+from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class EventService:
         async with self._sessions() as session, session.begin():
             if actor_id is not None:
                 # Права проверяются раньше валидации: постороннему не раскрываем детали
-                await admins.require_admin(session, actor_id)
+                await access.require_admin(session, actor_id)
                 created_by = actor_id
             capacity = validate_capacity(capacity)
             warnings = validate_description(description_html)
@@ -259,7 +260,7 @@ class EventService:
         now = self._clock.now()
         recent_since = now - timedelta(days=RECENT_DAYS) if include_recent else None
         async with self._sessions() as session:
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             found = await events_admin.list_events(session, recent_since=recent_since)
             taken = await events.seats_taken_map(session, [event.id for event in found])
             return [
@@ -347,9 +348,10 @@ class EventService:
             recipients = await events_admin.dm_recipients(session, event_id, events_admin.LIVE)
             reopen = event.status == EventStatus.CLOSED.value and times.registration_closes_at > now
             stays_closed = event.status == EventStatus.CLOSED.value and not reopen
-            promoted_ids: list[int] = []
+            promotions: list[Promotion] = []
             if reopen:
-                promoted_ids = await self._reopen(session, event, now)
+                promotions = await self._reopen(session, event, now)
+            place = event.place
             await audit.add(
                 session,
                 action="event.reschedule",
@@ -363,14 +365,11 @@ class EventService:
                 },
             )
         safe_schedule(self._refresher, event_id)
-        tz = schedule.timezone
-        text = self._render(
-            "event_moved",
-            {"starts_at": format_local(times.starts_at, tz), "place": event.place},
-        )
+        text = self._render("event_moved", {"starts_at": times.starts_at, "place": place})
         # Продвинутые из очереди получают только «место освободилось» с уже новым временем
+        promoted_ids = {p.user_id for p in promotions}
         await send_dms(self._notifier, [u for u in recipients if u not in promoted_ids], text)
-        await self._notify_promoted(promoted_ids, times.starts_at, tz)
+        await notify_promotions(self._notifier, self._render, promotions)
         return RescheduleResult(
             registration_reopened=reopen, registration_stays_closed=stays_closed
         )
@@ -387,7 +386,7 @@ class EventService:
             old_capacity = event.capacity
             event.capacity = new_capacity
             event.updated_at = now
-            promotions = []
+            promotions: list[Promotion] = []
             if new_capacity > old_capacity:
                 await session.flush()
                 promotions = await promote_waitlist(
@@ -405,18 +404,15 @@ class EventService:
                     "promoted": [p.registration_id for p in promotions],
                 },
             )
-            promoted_ids = [p.user_id for p in promotions if p.user_id is not None]
-            recipients = await events_admin.filter_dm_available(session, promoted_ids)
-            starts_at = event.starts_at
         safe_schedule(self._refresher, event_id)
-        await self._notify_promoted(recipients, starts_at, self._schedule_settings().timezone)
+        await notify_promotions(self._notifier, self._render, promotions)
 
     async def set_registration_open(self, actor_id: int, event_id: int, open: bool) -> None:
         """Открывает или закрывает запись; при открытии освободившиеся места раздаёт очередь."""
         now = self._clock.now()
-        promoted_ids: list[int] = []
+        promotions: list[Promotion] = []
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             event = await events.get(session, event_id)
             if event is None:
                 raise NotFound(f"встреча {event_id} не найдена")
@@ -428,7 +424,7 @@ class EventService:
             if open:
                 if now >= event.starts_at:
                     raise InvalidOperation("already_started")
-                promoted_ids = await self._reopen(session, event, now)
+                promotions = await self._reopen(session, event, now)
                 action = "event.open"
             else:
                 event.status = EventStatus.CLOSED.value
@@ -436,9 +432,8 @@ class EventService:
                 action = "event.close"
             event.updated_at = now
             await audit.add(session, action=action, now=now, actor_id=actor_id, event_id=event_id)
-            starts_at = event.starts_at
         safe_schedule(self._refresher, event_id)
-        await self._notify_promoted(promoted_ids, starts_at, self._schedule_settings().timezone)
+        await notify_promotions(self._notifier, self._render, promotions)
 
     async def cancel_event(self, actor_id: int, event_id: int, reason: str | None = None) -> None:
         """Отменяет встречу. Неявки по ней не считаются: бан-логика исключает cancelled."""
@@ -464,10 +459,7 @@ class EventService:
             starts_at = event.starts_at
         safe_schedule(self._refresher, event_id)
         # Значения передаются сырыми: экранирует рендер текстов (parse_mode=HTML у ЛС)
-        params = {
-            "starts_at": format_local(starts_at, self._schedule_settings().timezone),
-            "reason": reason or "",
-        }
+        params = {"starts_at": starts_at, "reason": reason or ""}
         await send_dms(self._notifier, recipients, self._render("event_cancelled", params))
 
     async def edit_moments(
@@ -527,27 +519,17 @@ class EventService:
             )
         safe_schedule(self._refresher, event_id)
 
-    async def _reopen(self, session: AsyncSession, event: Event, now: datetime) -> list[int]:
-        """Открывает запись и раздаёт освободившиеся места очереди (под блокировкой встречи).
-
-        Возвращает id продвинутых, которым можно писать в ЛС.
-        """
+    async def _reopen(self, session: AsyncSession, event: Event, now: datetime) -> list[Promotion]:
+        """Открывает запись и раздаёт освободившиеся места очереди (под блокировкой встречи)."""
         event.status = EventStatus.OPEN.value
         event.closed_at = None
         # Иначе запись осталась бы закрытой по времени, а планировщик закрыл бы её снова
         if event.registration_closes_at <= now:
             event.registration_closes_at = event.starts_at
         await session.flush()
-        promotions = await promote_waitlist(
+        return await promote_waitlist(
             session, event, now, late_promotion_hours=self._rules_settings().late_promotion_hours
         )
-        ids = [p.user_id for p in promotions if p.user_id is not None]
-        return await events_admin.filter_dm_available(session, ids)
-
-    async def _notify_promoted(self, user_ids: list[int], starts_at: datetime, tz: str) -> None:
-        if user_ids:
-            text = self._render("promoted", {"starts_at": format_local(starts_at, tz)})
-            await send_dms(self._notifier, user_ids, text)
 
     @staticmethod
     def _apply_times(event: Event, times: EventTimes) -> None:
@@ -563,7 +545,7 @@ class EventService:
 
     @staticmethod
     async def _load_editable(session: AsyncSession, actor_id: int, event_id: int) -> Event:
-        await admins.require_admin(session, actor_id)
+        await access.require_admin(session, actor_id)
         event = await events.get(session, event_id)
         if event is None:
             raise NotFound(f"встреча {event_id} не найдена")

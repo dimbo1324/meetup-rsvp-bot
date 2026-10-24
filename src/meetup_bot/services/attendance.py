@@ -19,11 +19,12 @@ from meetup_bot.db.models import (
     RegistrationStatus,
     User,
 )
-from meetup_bot.repositories import admins, audit, events, registrations
+from meetup_bot.repositories import audit, events, registrations
+from meetup_bot.services import access
 from meetup_bot.services.bans import BanOutcome, BanService
 from meetup_bot.services.errors import DomainError, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
-from meetup_bot.services.participants import display_name
+from meetup_bot.services.names import display_name
 from meetup_bot.services.rules import RulesSettings
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class AttendanceService:
 
     async def get_sheet(self, actor_id: int, event_id: int) -> list[SheetRow]:
         async with self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             event = await self._require_event(session, event_id)
             self._require_started(event, self._clock.now())
             rows = await registrations.list_active_with_users(session, event_id)
@@ -96,7 +97,7 @@ class AttendanceService:
     ) -> MarkResult:
         """«Готово»: записывает отметки всем активным разом, остальные считаются пришедшими."""
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             now = self._clock.now()
             event = await self._require_event(session, event_id)
             self._require_started(event, now)
@@ -136,10 +137,25 @@ class AttendanceService:
             no_show_users = await registrations.no_show_user_ids(session, event_id)
 
         # Пересчёт банов вне блокировки этой встречи: бан берёт блокировки будущих встреч
+        new_bans, failed = await self._evaluate_bans(actor_id, event_id, no_show_users)
+        return MarkResult(
+            actor_id,
+            tuple(sorted(no_show_registration_ids)),
+            tuple(new_bans),
+            tuple(failed),
+        )
+
+    async def _evaluate_bans(
+        self, actor_id: int | None, event_id: int, user_ids: list[int]
+    ) -> tuple[list[int], list[int]]:
+        """Пересчитывает баны неявившихся; при полном успехе помечает встречу обработанной.
+
+        Отметка явки к этому моменту уже закоммичена, поэтому сбой одного пересчёта не роняет
+        остальные, а встреча остаётся «необработанной» и её дожмёт `retry_pending_bans`.
+        """
         new_bans: list[int] = []
         failed: list[int] = []
-        for user_id in no_show_users:
-            # Отметка уже закоммичена: сбой одного пересчёта не должен ронять остальные
+        for user_id in user_ids:
             try:
                 outcome = await self._bans.recalc_for_attendance(actor_id, user_id, event_id)
             except Exception:
@@ -150,12 +166,42 @@ class AttendanceService:
                 continue
             if outcome.banned:
                 new_bans.append(user_id)
-        return MarkResult(
-            actor_id,
-            tuple(sorted(no_show_registration_ids)),
-            tuple(new_bans),
-            tuple(failed),
-        )
+        if not failed:
+            async with self._sessions() as session, session.begin():
+                event = await events.get(session, event_id)
+                if event is not None:
+                    event.bans_evaluated_at = self._clock.now()
+        return new_bans, failed
+
+    async def retry_pending_bans(self) -> list[int]:
+        """Дожимает пересчёт банов по встречам, где он ранее упал; возвращает обработанные.
+
+        Без проверки прав: вызывается планировщиком. Идемпотентно.
+        """
+        async with self._sessions() as session:
+            pending = list(
+                (
+                    await session.scalars(
+                        select(Event.id).where(
+                            Event.attendance_marked_at.is_not(None),
+                            Event.bans_evaluated_at.is_(None),
+                            Event.status != EventStatus.CANCELLED.value,
+                        )
+                    )
+                ).all()
+            )
+        done: list[int] = []
+        for event_id in pending:
+            async with self._sessions() as session:
+                event = await events.get(session, event_id)
+                if event is None:
+                    continue
+                marked_by = event.attendance_marked_by
+                user_ids = await registrations.no_show_user_ids(session, event_id)
+            _, failed = await self._evaluate_bans(marked_by, event_id, user_ids)
+            if not failed:
+                done.append(event_id)
+        return done
 
     async def reevaluate_bans(self, event_id: int) -> list[int]:
         """Досчитывает баны по уже отмеченной встрече; возвращает выданные автобаны.
@@ -192,7 +238,7 @@ class AttendanceService:
         if new_attendance is Attendance.UNKNOWN:
             raise InvalidOperation("invalid_attendance", "можно выбрать только пришёл или неявка")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             now = self._clock.now()
             event = await self._require_event(session, event_id)
             if event.attendance_marked_at is None:
@@ -254,6 +300,8 @@ class AttendanceService:
                     reg.attendance = Attendance.ATTENDED.value
                 event.attendance_marked_at = now
                 event.attendance_marked_by = None
+                # Без отметки админа никого не баним (5.8.5): пересчитывать нечего
+                event.bans_evaluated_at = now
                 await audit.add(
                     session, action="attendance.expire", now=now, event_id=event_id, payload={}
                 )

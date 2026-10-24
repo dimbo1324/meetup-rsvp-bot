@@ -23,7 +23,7 @@ from meetup_bot.db.models import Attendance, EventStatus
 from meetup_bot.repositories import admins, events
 from meetup_bot.services.attendance import ATTENDANCE_WINDOW, SheetRow
 from meetup_bot.telegram.attendance_callbacks import TARGET_DONE, AttendanceCallback
-from meetup_bot.telegram.common import format_moment
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 

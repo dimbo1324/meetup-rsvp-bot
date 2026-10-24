@@ -7,13 +7,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from meetup_bot.telegram.common import (
-    ALERT_LIMIT,
-    check_admin,
-    date_parts,
-    fit_alert,
-    format_moment,
-)
+from meetup_bot.telegram.common import ALERT_LIMIT, check_admin, fit_alert
+from meetup_bot.texts.render import date_parts, format_moment
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 
 MONTEVIDEO = ZoneInfo("America/Montevideo")

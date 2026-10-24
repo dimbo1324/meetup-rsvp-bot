@@ -22,13 +22,14 @@ from meetup_bot.scheduler.tasks import (
     AttendancePromptTask,
     AttendanceReminderTask,
     AutoCreateTask,
+    BanRecheckTask,
     CloseRegistrationTask,
     FinishEventsTask,
     ReminderTask,
     ScheduledTask,
 )
 from meetup_bot.scheduler.tick import Scheduler
-from meetup_bot.services.admin_support import format_local
+from meetup_bot.services.admin_support import RenderText
 from meetup_bot.services.admins import AdminService
 from meetup_bot.services.attendance import AttendanceService
 from meetup_bot.services.bans import BanService
@@ -40,7 +41,7 @@ from meetup_bot.services.participants import ParticipantService
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.registration import RegistrationService
 from meetup_bot.services.settings import SettingsService
-from meetup_bot.services.waitlist import Promotion
+from meetup_bot.services.users import UserService
 
 
 @dataclass(frozen=True)
@@ -58,46 +59,14 @@ class Services:
     scheduler: Scheduler
     post_refresher: PostRefresher
     notifier: Notifier
+    users: UserService
 
 
-def make_text_renderer(settings: SettingsService) -> Any:
-    """Адаптер «ключ сервиса → настраиваемый текст `text.*`».
-
-    Сервисы передают сырые значения и дату одной строкой «суббота, 1 ноября, 17:00»;
-    экранирование для HTML выполняет `render_text_now`, поэтому здесь его нет.
-    """
+def make_text_renderer(settings: SettingsService) -> RenderText:
+    """Адаптер «ключ уведомления → настраиваемый текст `text.*`» (часовой пояс из настроек)."""
 
     def render(key: str, params: dict[str, Any]) -> str:
-        weekday, date, time_ = _split_when(str(params.get("starts_at", "")))
-        reason = str(params.get("reason") or "")
-        return settings.render_text_now(
-            f"text.{key}",
-            weekday=weekday,
-            date=date,
-            time=time_,
-            place=str(params.get("place") or ""),
-            reason=f"Причина: {reason}" if reason else "",
-            name=str(params.get("name") or ""),
-        )
-
-    return render
-
-
-def _split_when(value: str) -> tuple[str, str, str]:
-    parts = value.split(", ")
-    if len(parts) == 3:
-        return parts[0], parts[1], parts[2]
-    return "", value, ""
-
-
-def make_promoted_renderer(settings: SettingsService) -> Any:
-    def render(promotion: Promotion) -> str:
-        weekday, date, time_ = _split_when(
-            format_local(promotion.starts_at, settings.timezone_now().key)
-        )
-        return settings.render_text_now(
-            "text.promoted", weekday=weekday, date=date, time=time_, place=promotion.place
-        )
+        return settings.render_message(f"text.{key}", params)
 
     return render
 
@@ -125,7 +94,6 @@ async def build_services(
         post_refresher = post_refresher_factory(settings)
     post_refresher = post_refresher or NullPostRefresher()
     render = make_text_renderer(settings)
-    render_promoted = make_promoted_renderer(settings)
 
     def defaults() -> EventDefaults:
         d = settings.defaults_now()
@@ -155,7 +123,8 @@ async def build_services(
         post_refresher=post_refresher,
         rules_provider=settings.rules_now,
         options_provider=settings.options_now,
-        render_promoted=render_promoted,
+        render_text=render,
+        schedule=settings.schedule_now,
     )
     bans = BanService(
         sessions,
@@ -164,7 +133,7 @@ async def build_services(
         notifier,
         post_refresher,
         rules_provider=settings.rules_now,
-        render_promoted=render_promoted,
+        render_text=render,
     )
     attendance = AttendanceService(sessions, clock, locks, bans, rules_provider=settings.rules_now)
     participants = ParticipantService(
@@ -174,7 +143,6 @@ async def build_services(
         notifier,
         post_refresher,
         settings.rules_now,
-        settings.schedule_now,
         render,
         ban_service=bans,
     )
@@ -192,12 +160,13 @@ async def build_services(
     # Порядок важен: сначала создаём и напоминаем, потом закрываем и завершаем, затем явка
     tasks: list[ScheduledTask] = [
         AutoCreateTask(lifecycle, settings.rules_now),
-        ReminderTask(sessions, notifier, settings.rules_now, settings.schedule_now),
+        ReminderTask(sessions, notifier, settings.rules_now, render),
         CloseRegistrationTask(lifecycle),
         FinishEventsTask(lifecycle),
         AttendancePromptTask(sessions, notifier),
         AttendanceReminderTask(sessions, notifier, settings.schedule_now),
         AttendanceExpireTask(attendance),
+        BanRecheckTask(attendance),
         BackupTask(
             db_path,
             backups_dir,
@@ -221,4 +190,5 @@ async def build_services(
         scheduler=scheduler,
         post_refresher=post_refresher,
         notifier=notifier,
+        users=UserService(sessions, clock),
     )

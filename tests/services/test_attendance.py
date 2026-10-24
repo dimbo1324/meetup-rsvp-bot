@@ -240,7 +240,7 @@ async def test_исправление_явки_не_снимает_ручной_
     assert ban.reason == "manual"
 
 
-async def test_автобан_за_другую_встречу_при_исправлении_не_снимается(app: App) -> None:  # кейс 9
+async def test_автобан_за_другую_встречу_снимается_ниже_порога(app: App) -> None:  # кейс 9
     await set_rule(app, "ban_after_no_shows", 2)
     await set_rule(app, "remove_banned_from_future_events", False)
     # Встречи подряд в соседние дни, чтобы окно исправления первой ещё не закрылось
@@ -257,10 +257,10 @@ async def test_автобан_за_другую_встречу_при_испра
     assert ban is not None
     assert ban.event_id == second
 
-    # Бан выдан за вторую встречу, поэтому исправление первой его не снимает
+    # Бан выдан за вторую встречу, но после исправления первой неявок меньше порога (4.6)
     outcome = await app.services.attendance.correct(ADMIN_ID, first, first_reg, Attendance.ATTENDED)
-    assert not outcome.unbanned
-    assert await active_ban(app, person(1).id) is not None
+    assert outcome.unbanned
+    assert await active_ban(app, person(1).id) is None
 
 
 async def test_исправление_на_неявку_выдаёт_бан(app: App) -> None:

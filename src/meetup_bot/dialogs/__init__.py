@@ -10,6 +10,8 @@ import importlib
 
 from aiogram import Router
 
+from meetup_bot.dialogs import intent_ids
+
 # Порядок важен: сначала главное меню (команды /menu, /cancel), затем остальные
 MODULES = (
     "meetup_bot.dialogs.main_menu",
@@ -24,6 +26,7 @@ MODULES = (
 
 
 def build_dialog_router() -> Router:
+    intent_ids.install()
     root = Router(name="dialogs")
     for name in MODULES:
         module = importlib.import_module(name)

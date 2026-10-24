@@ -113,6 +113,8 @@ class Event(Base):
     attendance_reminder_sent_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     attendance_marked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     attendance_marked_by: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    # Баны по отмеченной явке пересчитаны полностью; NULL у отмеченной встречи — нужен повтор
+    bans_evaluated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     closed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     cancelled_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     cancel_reason: Mapped[str | None] = mapped_column(Text, default=None)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import html
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import Any
 
 from aiogram.types import CallbackQuery, Message
@@ -25,7 +24,8 @@ from meetup_bot.dialogs._common import (
 from meetup_bot.dialogs.states import BansSG, PickerSG
 from meetup_bot.repositories import users_known
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.telegram.common import fit_alert, format_moment
+from meetup_bot.telegram.common import fit_alert
+from meetup_bot.texts.render import format_moment
 
 MAX_COMMENT = 200
 _HISTORY_LIMIT = 15
@@ -189,10 +189,13 @@ async def on_picked(start_data: Any, result: Any, manager: DialogManager) -> Non
         result.get("last_name"),
         result.get("username"),
     )
-    # Ранее неизвестному человеку сохраняем имя, иначе в списке банов будет только ID
-    async with get_sessions(manager)() as session, session.begin():
-        await users_known.remember(session, info, datetime.now(UTC))
+    # Имя сохранит сервис бана: иначе в чёрном списке у незнакомого человека был бы только ID
     manager.dialog_data["ban_user_id"] = info.id
+    manager.dialog_data["ban_user"] = {
+        "first_name": info.first_name,
+        "last_name": info.last_name,
+        "username": info.username,
+    }
     manager.dialog_data["ban_label"] = _name(
         User(first_name=info.first_name, last_name=info.last_name, username=info.username),
         info.id,
@@ -210,15 +213,23 @@ async def _do_ban(
     if not await is_admin(manager):
         await notify(NO_ACCESS)
         return
+    picked = manager.dialog_data.get("ban_user") or {}
+    user = UserInfo(
+        int(user_id),
+        str(picked.get("first_name") or ""),
+        picked.get("last_name"),
+        picked.get("username"),
+    )
     try:
         await get_services(manager).bans.ban(
-            actor_id(manager), int(user_id), reason=BanReason.MANUAL, comment=comment
+            actor_id(manager), int(user_id), reason=BanReason.MANUAL, comment=comment, user=user
         )
     except Exception as exc:
         await notify(describe_error(exc))
         await manager.switch_to(BansSG.list)
         return
     manager.dialog_data.pop("ban_user_id", None)
+    manager.dialog_data.pop("ban_user", None)
     manager.dialog_data["user_id"] = int(user_id)
     await notify("Пользователь забанен.")
     await manager.switch_to(BansSG.item)

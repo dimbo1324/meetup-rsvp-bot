@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meetup_bot.db.models import Admin, AdminRole, User
-from meetup_bot.services.errors import PermissionDenied
 
 
 async def get_role(session: AsyncSession, user_id: int) -> str | None:
@@ -26,17 +25,6 @@ async def is_owner(session: AsyncSession, user_id: int) -> bool:
 
 async def list_admin_ids(session: AsyncSession) -> list[int]:
     return list((await session.scalars(select(Admin.user_id).order_by(Admin.added_at))).all())
-
-
-async def require_admin(session: AsyncSession, user_id: int) -> None:
-    """Бросает PermissionDenied, если не админ. Вызывать в каждой админской операции."""
-    if not await is_admin(session, user_id):
-        raise PermissionDenied(f"пользователь {user_id} не админ")
-
-
-async def require_owner(session: AsyncSession, user_id: int) -> None:
-    if not await is_owner(session, user_id):
-        raise PermissionDenied(f"пользователь {user_id} не владелец")
 
 
 async def get(session: AsyncSession, user_id: int) -> Admin | None:

@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock, ShiftableClock
 from meetup_bot.config import Settings
 from meetup_bot.container import Services
-from meetup_bot.repositories import users
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.telegram.common import check_admin, format_moment
+from meetup_bot.telegram.common import check_admin
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +64,7 @@ async def cmd_start(
     bot_username: str,
     app_config: Settings,
 ) -> None:
-    async with sessions() as session, session.begin():
-        await users.set_dm_available(session, user_info.id, True, clock.now())
+    await services.users.set_dm_available(user_info.id, True)
     is_admin = await check_admin(sessions, user_info.id)
 
     param = (command.args or "").strip()
@@ -123,17 +122,13 @@ async def cmd_dev_shift(
 
 @router.my_chat_member()
 async def on_my_chat_member(
-    event: ChatMemberUpdated,
-    sessions: async_sessionmaker[AsyncSession],
-    clock: Clock,
-    app_config: Settings,
+    event: ChatMemberUpdated, services: Services, app_config: Settings
 ) -> None:
     status = event.new_chat_member.status
     if event.chat.type == "private":
         # Пользователь заблокировал бота: личные сообщения ему больше не доходят
         if status in ("kicked", "left"):
-            async with sessions() as session, session.begin():
-                await users.set_dm_available(session, event.chat.id, False, clock.now())
+            await services.users.set_dm_available(event.chat.id, False)
         return
     if status in ("member", "administrator"):
         logger.info("бот добавлен в чат: chat_id=%s", event.chat.id)

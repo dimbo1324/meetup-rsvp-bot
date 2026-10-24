@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import select
 
 from meetup_bot.db.models import AuditLog, Ban, Registration, User
-from meetup_bot.services.bans import BAN_DM_TEXT
+from meetup_bot.repositories import users as users_repo
 from meetup_bot.services.errors import InvalidOperation, PermissionDenied
+from meetup_bot.texts.defaults import DEFAULT_TEXTS
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 FIRST_START = datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
@@ -292,6 +293,8 @@ async def test_освободившееся_место_достаётся_сле
     event_id = await make_event(app, capacity=1)
     await join(app, event_id, 1)
     waiting = await join(app, event_id, 2)
+    async with app.sessions() as session, session.begin():
+        await users_repo.set_dm_available(session, person(2).id, True, app.clock.now())
     await app.services.bans.ban(ADMIN_ID, TARGET)
     assert await reg_status(app, waiting) == "active"
     assert len(app.notifier.dms_to(person(2).id)) == 1
@@ -320,14 +323,14 @@ async def test_по_умолчанию_забаненному_сообщение
 async def test_notify_user_on_ban_отправляет_сообщение(app: App) -> None:
     await set_rule(app, "notify_user_on_ban", True)
     await app.services.bans.ban(ADMIN_ID, TARGET)
-    assert app.notifier.dms_to(TARGET) == [BAN_DM_TEXT]
+    assert app.notifier.dms_to(TARGET) == [DEFAULT_TEXTS["text.ban_notice"]]
 
 
 async def test_повторный_бан_не_шлёт_второе_сообщение(app: App) -> None:
     await set_rule(app, "notify_user_on_ban", True)
     await app.services.bans.ban(ADMIN_ID, TARGET)
     await app.services.bans.ban(ADMIN_ID, TARGET)
-    assert app.notifier.dms_to(TARGET) == [BAN_DM_TEXT]
+    assert app.notifier.dms_to(TARGET) == [DEFAULT_TEXTS["text.ban_notice"]]
 
 
 async def test_недоставленное_сообщение_не_отменяет_бан(app: App) -> None:

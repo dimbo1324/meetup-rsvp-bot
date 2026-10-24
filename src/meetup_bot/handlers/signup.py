@@ -12,9 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
-from meetup_bot.repositories import event_posts
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.services.errors import DomainError
+from meetup_bot.services.errors import DomainError, InvalidOperation
 from meetup_bot.services.registration import (
     CancelResult,
     CancelStatus,
@@ -27,8 +26,9 @@ from meetup_bot.telegram.callbacks import (
     ACTION_JOIN_PLUS_ONE,
     SignupCallback,
 )
-from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, date_parts, fit_alert
+from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, fit_alert
 from meetup_bot.telegram.post_updater import PostUpdater
+from meetup_bot.texts.render import date_parts
 
 logger = logging.getLogger(__name__)
 
@@ -91,15 +91,14 @@ async def on_signup_callback(
             logger.warning("неизвестное действие кнопки: %r", action)
             known_event = False
         if known_event:
-            await _register_inline_post(callback, event_id, sessions, clock)
-        if known_event:
+            await _register_inline_post(callback, event_id, services)
             # Даже если состояние не изменилось: пост мог устареть (5.11), а хеш отсечёт лишнюю
             # правку. Сервис уже ставит пересборку при изменениях; повтор безопасен (debounce).
             post_updater.schedule(event_id)
-    except ValueError:
-        # Запись с гостем при выключенной настройке plus_one_enabled (сервис отвергает так)
-        logger.warning("отказ сервиса записи для встречи %s", event_id, exc_info=True)
-        text = NO_GUESTS_TEXT if action == ACTION_JOIN_PLUS_ONE else GENERIC_ERROR_TEXT
+    except InvalidOperation as error:
+        # Кнопка «+1» осталась под старым постом, а настройку уже выключили
+        text = NO_GUESTS_TEXT if error.code == "plus_one_disabled" else GENERIC_ERROR_TEXT
+        logger.info("отказ сервиса записи для встречи %s: %s", event_id, error.code)
     except DomainError:
         logger.warning("отказ при обработке кнопки, встреча %s", event_id, exc_info=True)
         text = GENERIC_ERROR_TEXT
@@ -117,25 +116,13 @@ async def _answer(callback: CallbackQuery, text: str, url: str | None) -> None:
         logger.warning("не удалось ответить на callback", exc_info=True)
 
 
-async def _register_inline_post(
-    callback: CallbackQuery,
-    event_id: int,
-    sessions: async_sessionmaker[AsyncSession],
-    clock: Clock,
-) -> None:
+async def _register_inline_post(callback: CallbackQuery, event_id: int, services: Services) -> None:
     """Подстраховка на случай, если `chosen_inline_result` не пришёл (8.1)."""
     inline_message_id = callback.inline_message_id
     if inline_message_id is None:
         return
     try:
-        async with sessions() as session, session.begin():
-            await event_posts.register(
-                session,
-                event_id=event_id,
-                inline_message_id=inline_message_id,
-                posted_by=None,
-                now=clock.now(),
-            )
+        await services.users.register_post(event_id, inline_message_id, None)
     except Exception:
         # Ответ пользователю важнее: пост зарегистрируется при следующем нажатии
         logger.exception("не удалось зарегистрировать пост встречи %s", event_id)

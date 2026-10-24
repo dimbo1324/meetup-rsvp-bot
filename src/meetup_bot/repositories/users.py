@@ -33,7 +33,8 @@ async def upsert(session: AsyncSession, info: UserInfo, now: datetime) -> User:
             updated_at=now,
         )
         session.add(user)
-    else:
+    elif info.first_name:
+        # Пустое имя приходит от заглушек (бан по ID, выбор без имени): известное не затираем
         user.first_name = info.first_name
         user.last_name = info.last_name
         user.username = info.username

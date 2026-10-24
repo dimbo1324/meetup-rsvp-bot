@@ -17,16 +17,15 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.clock import Clock
 from meetup_bot.container import Services
 from meetup_bot.db.models import EventStatus
-from meetup_bot.repositories import event_posts
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
-from meetup_bot.telegram.common import check_admin, format_moment
+from meetup_bot.telegram.common import check_admin
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.telegram.posts import build_post
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +96,8 @@ async def on_inline_query(
 async def on_chosen_inline_result(
     chosen: ChosenInlineResult,
     user_info: UserInfo,
-    sessions: async_sessionmaker[AsyncSession],
+    services: Services,
     post_updater: PostUpdater,
-    clock: Clock,
 ) -> None:
     """Запоминает отправленный пост, чтобы потом его редактировать (по inline_message_id)."""
     inline_message_id = chosen.inline_message_id
@@ -113,14 +111,7 @@ async def on_chosen_inline_result(
         logger.warning("chosen_inline_result с неизвестным id результата")
         return
     try:
-        async with sessions() as session, session.begin():
-            await event_posts.register(
-                session,
-                event_id=event_id,
-                inline_message_id=inline_message_id,
-                posted_by=user_info.id,
-                now=clock.now(),
-            )
+        await services.users.register_post(event_id, inline_message_id, user_info.id)
     except Exception:
         logger.exception("не удалось зарегистрировать пост встречи %s", event_id)
         return

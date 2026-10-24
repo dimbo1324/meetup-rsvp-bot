@@ -26,7 +26,6 @@ from meetup_bot.repositories import audit
 from meetup_bot.services.admin_support import (
     Provided,
     chunk_lines,
-    format_local,
     resolve,
     resolve_any,
 )
@@ -42,6 +41,7 @@ from meetup_bot.services.timing import (
     ScheduleSettings,
     next_event_start,
 )
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,7 @@ class LifecycleService:
                 logger.warning("автосоздание %s невозможно: %s", key, exc)
             return AutoCreateResult(AutoCreateStatus.INVALID, key)
 
-        when = format_local(starts_at, schedule.timezone)
+        when = format_moment(starts_at, schedule.timezone)
         await safe_send_service(self._notifier, f"Создана встреча на {when}.")
         return AutoCreateResult(AutoCreateStatus.CREATED, key, event_id)
 
@@ -255,7 +255,7 @@ class LifecycleService:
         data = await load_post_data(self._sessions, event_id, timezone=timezone)
         if data is None:
             return
-        when = format_local(data.starts_at, timezone)
+        when = format_moment(data.starts_at, timezone)
         lines = [
             f"Запись на встречу ({when}) закрыта.",
             f"Заполнено {data.seats_taken} из {data.capacity}.",

@@ -26,12 +26,12 @@ from meetup_bot.dialogs._common import (
     is_admin,
 )
 from meetup_bot.dialogs.states import CreateEventSG, EventsSG, ParticipantsSG
-from meetup_bot.renderer.post import MONTHS
 from meetup_bot.repositories import events as events_repo
 from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.attendance_ui import SheetStatus
-from meetup_bot.telegram.common import fit_alert, format_moment
+from meetup_bot.telegram.common import fit_alert
 from meetup_bot.telegram.posts import build_post
+from meetup_bot.texts.render import MONTHS, format_moment
 
 DATE_FORMAT = "%d.%m.%Y %H:%M"
 DATE_HINT = "Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ, например 15.11.2026 18:30."

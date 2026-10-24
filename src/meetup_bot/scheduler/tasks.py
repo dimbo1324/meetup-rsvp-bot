@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -17,12 +16,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus, User
 from meetup_bot.repositories import admins
-from meetup_bot.services.admin_support import Provided, format_local, resolve, resolve_any
+from meetup_bot.services.admin_support import (
+    Provided,
+    RenderText,
+    default_render_text,
+    resolve,
+    resolve_any,
+    send_dms,
+)
 from meetup_bot.services.attendance import ATTENDANCE_WINDOW
 from meetup_bot.services.lifecycle import LifecycleService, RulesProvider
 from meetup_bot.services.ports import Notifier
-from meetup_bot.services.safe import safe_send_dm, safe_send_service
+from meetup_bot.services.safe import safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,12 @@ class ScheduledTask(Protocol):
 class AttendanceExpirer(Protocol):
     async def expire_unmarked(self, now: datetime) -> list[int]:
         """Закрывает окно отметки явки; возвращает id затронутых встреч."""
+        ...
+
+
+class BanRechecker(Protocol):
+    async def retry_pending_bans(self) -> list[int]:
+        """Дожимает упавший пересчёт банов; возвращает id обработанных встреч."""
         ...
 
 
@@ -86,12 +99,12 @@ class ReminderTask:
         sessions: async_sessionmaker[AsyncSession],
         notifier: Notifier,
         rules_provider: RulesProvider,
-        schedule: Provided[ScheduleSettings] | None = None,
+        render_text: RenderText | None = None,
     ) -> None:
         self._sessions = sessions
         self._notifier = notifier
         self._rules_provider = rules_provider
-        self._schedule_source: Provided[ScheduleSettings] = schedule or ScheduleSettings()
+        self._render: RenderText = render_text or default_render_text
 
     async def run(self, now: datetime) -> int:
         if not (await resolve_any(self._rules_provider)).reminder_enabled:
@@ -133,14 +146,15 @@ class ReminderTask:
         return list(rows.all())
 
     async def _send(self, event: Event, user_ids: list[int]) -> None:
-        tz = resolve(self._schedule_source).timezone
-        text = (
-            f"Напоминаем: завтра встреча! {format_local(event.starts_at, tz)}"
-            f"{', ' + html.escape(event.place, quote=False) if event.place else ''}. "
-            f"Не сможете прийти? Отмените запись до {format_local(event.cancel_deadline_at, tz)}."
+        text = self._render(
+            "reminder",
+            {
+                "starts_at": event.starts_at,
+                "deadline_at": event.cancel_deadline_at,
+                "place": event.place,
+            },
         )
-        for user_id in user_ids:
-            await safe_send_dm(self._notifier, user_id, text)
+        await send_dms(self._notifier, user_ids, text)
 
 
 class AttendancePromptTask:
@@ -216,7 +230,7 @@ class AttendanceReminderTask:
                         "напоминание про явку встречи %s пропущено: окно истекло", event.id
                     )
                     continue
-                when = format_local(event.starts_at, timezone)
+                when = format_moment(event.starts_at, timezone)
                 texts.append(f"Никто ещё не отметил явку на встрече ({when}).")
         for text in texts:
             await safe_send_service(self._notifier, text)
@@ -231,3 +245,15 @@ class AttendanceExpireTask:
 
     async def run(self, now: datetime) -> int:
         return len(await self._service.expire_unmarked(now))
+
+
+class BanRecheckTask:
+    """Повторяет пересчёт банов, упавший после отметки явки (сбой БД, перезапуск бота)."""
+
+    name = "ban_recheck"
+
+    def __init__(self, attendance_service: BanRechecker) -> None:
+        self._service = attendance_service
+
+    async def run(self, now: datetime) -> int:
+        return len(await self._service.retry_pending_bans())

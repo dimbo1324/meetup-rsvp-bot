@@ -121,8 +121,9 @@ _TEXT_DESCRIPTIONS: dict[str, str] = {
     "text.reminder": "Напоминание в личку",
     "text.promoted": "Продвижение из листа ожидания",
     "text.event_cancelled": "Встреча отменена",
-    "text.event_moved": "Встреча перенесена",
+    "text.event_moved": "Сообщение о переносе встречи",
     "text.attendance_marked_by": "Подпись «явку отметил(а) …»",
+    "text.ban_notice": "Сообщение человеку о бане (если включено notify_user_on_ban)",
 }
 
 _SPECS: tuple[SettingSpec, ...] = (

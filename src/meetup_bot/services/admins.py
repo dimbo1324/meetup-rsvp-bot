@@ -12,6 +12,7 @@ from meetup_bot.clock import Clock
 from meetup_bot.db.models import AdminRole, User
 from meetup_bot.repositories import admins, audit, users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services import access
 from meetup_bot.services.errors import InvalidOperation, NotFound
 
 
@@ -70,7 +71,7 @@ class AdminService:
     async def add_admin(self, actor_id: int, user: UserInfo) -> None:
         now = self._clock.now()
         async with self._sessions() as session, session.begin():
-            await admins.require_owner(session, actor_id)
+            await access.require_owner(session, actor_id)
             if await admins.get(session, user.id) is not None:
                 raise InvalidOperation("already_admin")
             await users.upsert(session, user, now)
@@ -84,7 +85,7 @@ class AdminService:
     async def remove_admin(self, actor_id: int, user_id: int) -> None:
         now = self._clock.now()
         async with self._sessions() as session, session.begin():
-            await admins.require_owner(session, actor_id)
+            await access.require_owner(session, actor_id)
             admin = await admins.get(session, user_id)
             if admin is None:
                 raise NotFound(f"админ {user_id} не найден")
@@ -97,7 +98,7 @@ class AdminService:
 
     async def list_admins(self, actor_id: int) -> list[AdminEntry]:
         async with self._sessions() as session:
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             return [
                 AdminEntry(
                     user_id=admin.user_id,

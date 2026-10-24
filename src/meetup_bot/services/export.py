@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import RegistrationStatus
-from meetup_bot.repositories import admins, audit, events, events_admin
+from meetup_bot.repositories import audit, events, events_admin
+from meetup_bot.services import access
 from meetup_bot.services.errors import NotFound
-from meetup_bot.services.participants import display_name
+from meetup_bot.services.names import display_name
 
 HEADER = [
     "event_date",
@@ -46,7 +47,7 @@ class ExportService:
         tz = ZoneInfo(timezone)
         now = self._clock.now()
         async with self._sessions() as session:
-            await admins.require_admin(session, actor_id)
+            await access.require_admin(session, actor_id)
             event = await events.get(session, event_id)
             if event is None:
                 raise NotFound(f"встреча {event_id} не найдена")

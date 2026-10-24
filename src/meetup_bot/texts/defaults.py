@@ -21,6 +21,7 @@ MESSAGE_TEXT_KEYS: frozenset[str] = frozenset(
         "text.event_cancelled",
         "text.event_moved",
         "text.attendance_marked_by",
+        "text.ban_notice",
     }
 )
 
@@ -59,4 +60,7 @@ DEFAULT_TEXTS: dict[str, str] = {
     "text.event_cancelled": "Встреча {date} отменена. {reason}",
     "text.event_moved": "Встреча перенесена: теперь {weekday}, {date}, {time}, {place}.",
     "text.attendance_marked_by": "Явку отметил(а) {name}",
+    "text.ban_notice": (
+        "Вы больше не можете записываться на встречи. Если это ошибка, напишите администратору."
+    ),
 }

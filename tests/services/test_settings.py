@@ -444,12 +444,12 @@ def test_render_кавычки_не_экранируются(settings: SettingsS
 
 def test_render_отсутствующая_подстановка_даёт_пустую_строку(settings: SettingsService) -> None:
     text = settings.render_text_now("text.event_cancelled", date="25.10")
-    assert text == "Встреча 25.10 отменена. "
+    assert text == "Встреча 25.10 отменена."
 
 
 def test_render_значение_none_считается_отсутствующим(settings: SettingsService) -> None:
     text = settings.render_text_now("text.event_cancelled", date="25.10", reason=None)
-    assert text == "Встреча 25.10 отменена. "
+    assert text == "Встреча 25.10 отменена."
 
 
 def test_render_лишние_подстановки_игнорируются_и_логируются(

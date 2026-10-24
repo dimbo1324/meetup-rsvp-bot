@@ -388,7 +388,8 @@ async def test_контейнер_собирает_задачи_в_нужном_
     done = await app.services.scheduler.tick()
     assert list(done) == [
         "auto_create", "reminder", "close_registration", "finish_events",
-        "attendance_prompt", "attendance_reminder", "attendance_expire", "backup",
+        "attendance_prompt", "attendance_reminder", "attendance_expire", "ban_recheck",
+        "backup",
     ]  # fmt: skip
 
 

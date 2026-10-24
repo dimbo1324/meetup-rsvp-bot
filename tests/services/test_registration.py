@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import FakeClock
 from meetup_bot.db.models import AuditLog, Ban, BanReason, Event, EventStatus, User
 from meetup_bot.repositories import events
+from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.events import EventService
 from meetup_bot.services.registration import (
     CancelStatus,
@@ -195,9 +196,9 @@ async def test_аудит_пишется(
 
 
 async def test_гость_выключен_по_умолчанию(service: RegistrationService, event_id: int) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidOperation, match="гостем"):
         await service.register(event_id, person(1), guests=1)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidOperation, match="0 или 1"):
         await service.register(event_id, person(1), guests=2)
 
 

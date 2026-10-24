@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import enum
+import html
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,12 +25,22 @@ from meetup_bot.db.models import (
 )
 from meetup_bot.repositories import audit, bans, events, registrations, users
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.services.admin_support import send_dms
+from meetup_bot.services.admin_support import (
+    Provided,
+    RenderText,
+    default_render_text,
+    notify_promotions,
+    resolve,
+)
+from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.locks import EventLocks
+from meetup_bot.services.names import public_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.rules import RegistrationOptions, RulesSettings
 from meetup_bot.services.safe import safe_schedule, safe_send_service
+from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
+from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +106,12 @@ class CancelResult:
     promoted: tuple[Promotion, ...] = ()
     starts_at: datetime | None = None
     place: str = ""
+    # Имя отменившего — для служебного сообщения админам
+    user_name: str = ""
 
     @property
     def changed_state(self) -> bool:
         return self.status is CancelStatus.OK
-
-
-PROMOTED_DM_TEXT = "Освободилось место — вы записаны на встречу!"
 
 
 class RegistrationService:
@@ -116,7 +126,8 @@ class RegistrationService:
         post_refresher: PostRefresher | None = None,
         rules_provider: Callable[[], RulesSettings] | None = None,
         options_provider: Callable[[], RegistrationOptions] | None = None,
-        render_promoted: Callable[[Promotion], str] | None = None,
+        render_text: RenderText | None = None,
+        schedule: Provided[ScheduleSettings] | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -130,17 +141,21 @@ class RegistrationService:
         self._post_refresher: PostRefresher = post_refresher or NullPostRefresher()
         self._rules_provider: Callable[[], RulesSettings] = rules_provider or RulesSettings
         self._options_provider = options_provider
-        self._render_promoted = render_promoted
+        self._render: RenderText = render_text or default_render_text
+        self._schedule = schedule
 
     def _current_options(self) -> RegistrationOptions:
         return self._options_provider() if self._options_provider else self._options
 
+    def _timezone(self) -> str:
+        return (ScheduleSettings() if self._schedule is None else resolve(self._schedule)).timezone
+
     async def register(self, event_id: int, user: UserInfo, guests: int = 0) -> RegisterResult:
         options = self._current_options()
         if guests not in (0, 1):
-            raise ValueError("guests должен быть 0 или 1")
+            raise InvalidOperation("invalid_guests", "гостей может быть 0 или 1")
         if guests and not options.plus_one_enabled:
-            raise ValueError("запись с гостем выключена настройкой plus_one_enabled")
+            raise InvalidOperation("plus_one_disabled", "запись с гостем выключена")
 
         # Блокировка + BEGIN IMMEDIATE (в движке) + уникальный частичный индекс: три линии защиты
         async with (
@@ -153,10 +168,12 @@ class RegistrationService:
         # Побочные эффекты — строго после коммита и вне блокировки
         if result.changed_state:
             safe_schedule(self._post_refresher, event_id)
-        if result.filled_event and self._rules_provider().notify_admins_on_full:
+        notify_full = self._rules_provider().notify_admins_on_full
+        if result.filled_event and result.starts_at and notify_full:
+            when = format_moment(result.starts_at, self._timezone())
             await safe_send_service(
                 self._notifier,
-                f"Встреча заполнена: занято {result.seats_taken} из {result.capacity} мест.",
+                f"Встреча {when} заполнена: занято {result.seats_taken} из {result.capacity}.",
             )
         return result
 
@@ -172,18 +189,15 @@ class RegistrationService:
         if not result.changed_state:
             return result
         safe_schedule(self._post_refresher, event_id)
-        for promotion in result.promoted:
-            if promotion.user_id is not None:
-                text = (
-                    self._render_promoted(promotion) if self._render_promoted else PROMOTED_DM_TEXT
-                )
-                await send_dms(self._notifier, [promotion.user_id], text)
+        await notify_promotions(self._notifier, self._render, result.promoted)
         # Выход из очереди мест не освобождает, поэтому админам о нём не сообщаем
-        if rules.notify_admins_on_cancel and not result.was_waitlist:
+        if rules.notify_admins_on_cancel and not result.was_waitlist and result.starts_at:
+            when = format_moment(result.starts_at, self._timezone())
+            name = html.escape(result.user_name, quote=False)
             await safe_send_service(
                 self._notifier,
-                f"Отмена записи: пользователь {user_id}, занято "
-                f"{result.seats_taken} из {result.capacity} мест.",
+                f"{name} отменил(а) запись на встречу {when}. "
+                f"Занято {result.seats_taken} из {result.capacity}.",
             )
         return result
 
@@ -339,6 +353,7 @@ class RegistrationService:
         registration.status = RegistrationStatus.CANCELLED.value
         registration.cancelled_at = now
         await session.flush()
+        user_name = public_name(await session.get(User, user_id), None)
         await audit.add(
             session,
             action="registration.cancel",
@@ -364,4 +379,5 @@ class RegistrationService:
             tuple(promoted),
             starts_at=event.starts_at,
             place=event.place,
+            user_name=user_name,
         )

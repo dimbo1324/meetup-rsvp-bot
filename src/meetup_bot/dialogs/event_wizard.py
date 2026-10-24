@@ -50,7 +50,7 @@ from meetup_bot.services.event_validation import (
     validate_url,
 )
 from meetup_bot.services.timing import compute_times, next_event_start, validate_times
-from meetup_bot.telegram.common import format_moment
+from meetup_bot.texts.render import format_moment
 
 TOTAL_STEPS = 6
 _TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")
