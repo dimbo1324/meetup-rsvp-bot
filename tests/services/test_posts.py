@@ -37,13 +37,18 @@ async def test_несуществующая_встреча(sessions: async_sessi
 
 
 def test_миграции_совпадают_с_моделями(tmp_path: Path) -> None:
-    env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'm.db'}"}
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'm.db'}",
+    }
     run = lambda *args: subprocess.run(  # noqa: E731
         [sys.executable, "-m", "alembic", *args],
         cwd=ROOT,
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert run("upgrade", "head").returncode == 0

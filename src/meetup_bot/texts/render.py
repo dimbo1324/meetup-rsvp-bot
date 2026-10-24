@@ -55,6 +55,27 @@ class _BlankMissing(defaultdict[str, str]):
         super().__init__(str, values)
 
 
+def telegram_length(text: str) -> int:
+    """Длина так, как её считает Telegram: в единицах UTF-16 (эмодзи вне BMP — это 2)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def clip(text: str, limit: int, ellipsis: str = "…") -> str:
+    """Обрезает текст до `limit` единиц UTF-16, не разрывая символ; в конце многоточие."""
+    if telegram_length(text) <= limit:
+        return text
+    budget = limit - telegram_length(ellipsis)
+    out: list[str] = []
+    used = 0
+    for char in text:
+        size = telegram_length(char)
+        if used + size > budget:
+            break
+        out.append(char)
+        used += size
+    return "".join(out).rstrip() + ellipsis
+
+
 def date_parts(moment: datetime, tz: ZoneInfo) -> tuple[str, str, str]:
     """(«суббота», «1 ноября», «17:00») в заданном часовом поясе."""
     local = moment.astimezone(tz)

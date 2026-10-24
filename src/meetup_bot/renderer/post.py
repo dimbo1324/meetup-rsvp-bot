@@ -16,7 +16,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from meetup_bot.db.models import EventStatus
-from meetup_bot.texts.render import MONTHS, WEEKDAYS
+from meetup_bot.texts.render import MONTHS, WEEKDAYS, clip, telegram_length
 
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
@@ -73,8 +73,8 @@ def signup_callback(event_id: int, action: str) -> str:
 
 
 def visible_length(markup: str) -> int:
-    """Длина текста так, как её считает Telegram: без тегов и с раскрытыми сущностями."""
-    return len(html.unescape(_TAG_RE.sub("", markup)))
+    """Длина текста так, как её считает Telegram: без тегов, с раскрытыми сущностями, в UTF-16."""
+    return telegram_length(html.unescape(_TAG_RE.sub("", markup)))
 
 
 def truncate_html(markup: str, limit: int) -> str:
@@ -96,12 +96,13 @@ def truncate_html(markup: str, limit: int) -> str:
             out.append(token)
             continue
         text = html.unescape(token)
-        if len(text) > budget:
-            out.append(html.escape(text[:budget], quote=False))
+        size = telegram_length(text)
+        if size > budget:
+            out.append(html.escape(clip(text, budget, ellipsis=""), quote=False))
             budget = 0
             break
         out.append(token)
-        budget -= len(text)
+        budget -= size
     out.append("…")
     out.extend(f"</{tag}>" for tag in reversed(open_tags))
     return "".join(out)

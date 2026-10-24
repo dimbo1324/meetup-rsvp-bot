@@ -21,6 +21,7 @@ from meetup_bot.texts.defaults import (
     MESSAGE_TEXT_KEYS,
     TEXT_PREFIX,
 )
+from meetup_bot.texts.render import telegram_length
 
 POPUP_MAX_LEN = 200
 # Текст-сообщение: шаблон до 3500 символов, а с худшими подстановками — в лимит Telegram 4096
@@ -395,16 +396,17 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
         # Худший случай: длинное имя, длинное место и т. п.
         rendered = value.format(**WORST_CASE_VARS)
         if key in MESSAGE_TEXT_KEYS:
-            if len(value) > spec.max_len or len(rendered) > TELEGRAM_MESSAGE_LIMIT:
+            too_long = telegram_length(rendered) > TELEGRAM_MESSAGE_LIMIT
+            if telegram_length(value) > spec.max_len or too_long:
                 raise SettingsValidationError(
                     key,
                     f"Текст слишком длинный: шаблон до {spec.max_len} символов, а с самыми "
                     f"длинными подстановками — до {TELEGRAM_MESSAGE_LIMIT} (лимит Telegram).",
                 )
-        elif len(rendered) > spec.max_len:
+        elif telegram_length(rendered) > spec.max_len:
             raise SettingsValidationError(
                 key,
-                f"Текст слишком длинный: до {len(rendered)} из {spec.max_len} символов "
+                f"Текст слишком длинный: до {telegram_length(rendered)} из {spec.max_len} символов "
                 "с самыми длинными подстановками (лимит всплывающего окна Telegram).",
             )
         return value, warnings

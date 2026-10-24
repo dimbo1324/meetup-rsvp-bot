@@ -12,14 +12,19 @@ def test_alembic_ini_только_ascii() -> None:
 
 
 def test_alembic_применяется_к_чистой_базе(tmp_path: Path) -> None:
-    env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'check.db'}"}
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'check.db'}",
+    }
     env.pop("PYTHONUTF8", None)
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=ROOT,
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     assert result.returncode == 0, result.stderr

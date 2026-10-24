@@ -26,7 +26,7 @@ from meetup_bot.telegram.callbacks import (
     ACTION_JOIN_PLUS_ONE,
     SignupCallback,
 )
-from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, fit_alert
+from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, fit_alert, telegram_length
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.texts.render import date_parts
 
@@ -79,8 +79,9 @@ async def on_signup_callback(
             ):
                 hint = services.settings.render_text_now("text.enable_dm_hint", escape_html=False)
                 # Подсказку добавляем только если она целиком влезает во всплывающее окно
-                if len(text) + 1 + len(hint) <= ALERT_LIMIT:
-                    text = f"{text}\n{hint}"
+                combined = f"{text}\n{hint}"
+                if telegram_length(combined) <= ALERT_LIMIT:
+                    text = combined
                     url = f"https://t.me/{bot_username}?start=remind"
             known_event = register_result.status is not RegisterStatus.NOT_FOUND
         elif action == ACTION_CANCEL:
