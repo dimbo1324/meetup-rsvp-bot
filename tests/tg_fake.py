@@ -81,6 +81,10 @@ class FakeSession(BaseSession):
         """Данные всех вызовов метода Bot API с таким именем (в порядке вызова)."""
         return [data for call, data in self.calls if call == name]
 
+    def calls_with(self, key: str) -> list[dict[str, Any]]:
+        """Данные всех вызовов Bot API, в которых есть поле `key` (например, `caption`)."""
+        return [data for _, data in self.calls if key in data]
+
     def buttons(self, message_id: int) -> list[tuple[str, str]]:
         """Кнопки последней inline-клавиатуры сообщения: (текст, callback_data)."""
         markup = self.last_markup.get(message_id)

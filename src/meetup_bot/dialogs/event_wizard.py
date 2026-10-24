@@ -40,7 +40,13 @@ from meetup_bot.dialogs._common import (
     middleware_value,
 )
 from meetup_bot.dialogs.states import CreateEventSG
-from meetup_bot.renderer.post import PostData, render_post
+from meetup_bot.renderer.post import (
+    CAPTION_LIMIT,
+    TEXT_LIMIT,
+    PostData,
+    render_post,
+    visible_length,
+)
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.event_validation import (
     MAX_CAPACITY,
@@ -431,12 +437,14 @@ async def _preview_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, 
     )
     rendered = render_post(post)
     buttons = " | ".join(b.text for row in rendered.keyboard for b in row)
-    text = (
-        "<b>👁 Предпросмотр. Всё верно?</b>\n"
-        f"{_notice(dialog_manager)}\n"
-        f"{rendered.text}\n\n"
-        f"<i>Кнопки под постом: {html.escape(buttons)}</i>"
-    )
+    header = f"<b>👁 Предпросмотр. Всё верно?</b>\n{_notice(dialog_manager)}\n"
+    footer = f"\n\n<i>Кнопки под постом: {html.escape(buttons)}</i>"
+    text = header + rendered.text + footer
+    # С фото окно уходит подписью (лимит 1024): пост уже занимает его целиком, подсказки
+    # добавляем только если помещаются
+    limit = CAPTION_LIMIT if photo else TEXT_LIMIT
+    if visible_length(text) > limit:
+        text = rendered.text
     media = MediaAttachment(ContentType.PHOTO, file_id=MediaId(photo)) if photo else None
     return {"text": text, "photo": media, "has_photo": media is not None}
 

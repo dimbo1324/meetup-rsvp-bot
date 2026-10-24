@@ -14,8 +14,6 @@ from typing import Any
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 from aiogram_dialog import setup_dialogs
 
 from meetup_bot import __version__
@@ -24,21 +22,17 @@ from meetup_bot.config import Settings
 from meetup_bot.container import build_services
 from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.handlers import ALLOWED_UPDATES, build_router
+from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories import event_posts
 from meetup_bot.services.ports import PostRefresher
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.telegram.attendance_ui import AttendanceUI
+from meetup_bot.telegram.commands import sync_commands
 from meetup_bot.telegram.notifier import TelegramNotifier
 from meetup_bot.telegram.post_updater import PostUpdater
 
 logger = logging.getLogger(__name__)
 
-PRIVATE_COMMANDS = (
-    BotCommand(command="start", description="Начать"),
-    BotCommand(command="help", description="Как пользоваться"),
-    BotCommand(command="menu", description="Меню админа"),
-    BotCommand(command="cancel", description="Выйти из текущего диалога"),
-)
 
 # Токен бота входит в URL запросов Bot API (…/bot<id>:<токен>/метод) и попадает в трейсбеки
 _TOKEN_RE = re.compile(r"bot\d+:[\w-]+")
@@ -103,7 +97,7 @@ def _watch_scheduler(task: asyncio.Task[None], notifier: TelegramNotifier) -> No
 
 
 async def run(config: Settings) -> None:
-    _init_sentry(config.sentry_dsn)
+    _init_sentry(config.sentry_dsn.get_secret_value())
     db_path = _sqlite_path(config.database_url)
     engine = create_engine(config.database_url)
     sessions = create_session_factory(engine)
@@ -112,7 +106,7 @@ async def run(config: Settings) -> None:
     clock: Clock = ShiftableClock(SystemClock()) if config.env == "dev" else SystemClock()
 
     bot = Bot(
-        token=config.bot_token,
+        token=config.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
     scheduler_task: asyncio.Task[None] | None = None
@@ -151,12 +145,9 @@ async def run(config: Settings) -> None:
         )
         dispatcher.include_router(build_router())
         setup_dialogs(dispatcher)
-        try:
-            await bot.set_my_commands(
-                list(PRIVATE_COMMANDS), scope=BotCommandScopeAllPrivateChats()
-            )
-        except TelegramAPIError:
-            logger.exception("не удалось установить список команд")
+        async with sessions() as session:
+            admin_ids = await admins_repo.list_admin_ids(session)
+        await sync_commands(bot, admin_ids)
 
         # Очередь пересборки живёт в памяти: после перезапуска догоняем устаревшие посты
         async with sessions() as session:

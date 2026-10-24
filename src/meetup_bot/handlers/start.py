@@ -15,6 +15,7 @@ from meetup_bot.clock import Clock, ShiftableClock
 from meetup_bot.config import Settings
 from meetup_bot.container import Services
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.telegram.commands import set_admin_commands
 from meetup_bot.telegram.common import check_admin
 from meetup_bot.texts.render import format_moment
 
@@ -48,8 +49,7 @@ HELP_USER = (
 HELP_ADMIN = (
     HELP_USER + "\n\nДля администраторов:\n"
     "• Наберите @{bot} в любом чате, чтобы разослать пост открытой встречи.\n"
-    "• /menu — меню администратора, /cancel — выйти из текущего диалога.\n"
-    "Меню появится в одной из следующих версий."
+    "• /menu — меню администратора, /cancel — выйти из текущего диалога."
 )
 
 
@@ -66,6 +66,9 @@ async def cmd_start(
 ) -> None:
     await services.users.set_dm_available(user_info.id, True)
     is_admin = await check_admin(sessions, user_info.id)
+    if is_admin and message.bot is not None:
+        # Если при запуске бота чата с админом ещё не было, меню команд включаем сейчас
+        await set_admin_commands(message.bot, user_info.id, is_admin=True)
 
     param = (command.args or "").strip()
     if param == "remind":

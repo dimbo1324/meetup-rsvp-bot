@@ -7,6 +7,7 @@ import pytest
 from meetup_bot.services.settings_schema import (
     DESCRIPTION_MAX_LEN,
     DESCRIPTION_WARN_LEN,
+    MESSAGE_MAX_LEN,
     NAME_MAX_LEN,
     POPUP_MAX_LEN,
     SAMPLE_VARS,
@@ -96,11 +97,11 @@ def test_у_каждого_текста_схемы_умолчание_из_ра�
     assert {key: spec.default for key, spec in text_specs.items()} == DEFAULT_TEXTS
 
 
-def test_всплывающие_тексты_ограничены_200_а_сообщения_нет() -> None:
+def test_всплывающие_тексты_ограничены_200_а_сообщения_лимитом_telegram() -> None:
     for key, spec in SCHEMA.items():
         if spec.kind is not Kind.TEXT:
             continue
-        expected = None if key in MESSAGE_TEXT_KEYS else POPUP_MAX_LEN
+        expected = MESSAGE_MAX_LEN if key in MESSAGE_TEXT_KEYS else POPUP_MAX_LEN
         assert spec.max_len == expected, key
 
 

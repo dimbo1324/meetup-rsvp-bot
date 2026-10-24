@@ -23,6 +23,9 @@ from meetup_bot.texts.defaults import (
 )
 
 POPUP_MAX_LEN = 200
+# Текст-сообщение: шаблон до 3500 символов, а с худшими подстановками — в лимит Telegram 4096
+MESSAGE_MAX_LEN = 3500
+TELEGRAM_MESSAGE_LIMIT = 4096
 PLACE_MAX_LEN = 200
 # Подпись поста с фото ≤ 1024; описание не должно съедать всё место автоблока (5.10)
 DESCRIPTION_WARN_LEN = 700
@@ -168,7 +171,7 @@ _SPECS: tuple[SettingSpec, ...] = (
             text,
             _TEXT_DESCRIPTIONS[key],
             # Лимит 200 — только у всплывающих окон; у сообщений его нет
-            max_len=None if key in MESSAGE_TEXT_KEYS else POPUP_MAX_LEN,
+            max_len=MESSAGE_MAX_LEN if key in MESSAGE_TEXT_KEYS else POPUP_MAX_LEN,
         )
         for key, text in DEFAULT_TEXTS.items()
     ),
@@ -387,15 +390,23 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
         if not value.strip():
             raise SettingsValidationError(key, "Текст не может быть пустым.")
         check_template(key, value)
-        if spec.max_len is not None:
-            # Худший случай: длинное имя, длинное место и т. п.
-            rendered = value.format(**WORST_CASE_VARS)
-            if len(rendered) > spec.max_len:
+        if spec.max_len is None:
+            return value, warnings
+        # Худший случай: длинное имя, длинное место и т. п.
+        rendered = value.format(**WORST_CASE_VARS)
+        if key in MESSAGE_TEXT_KEYS:
+            if len(value) > spec.max_len or len(rendered) > TELEGRAM_MESSAGE_LIMIT:
                 raise SettingsValidationError(
                     key,
-                    f"Текст слишком длинный: до {len(rendered)} из {spec.max_len} символов "
-                    "с самыми длинными подстановками (лимит всплывающего окна Telegram).",
+                    f"Текст слишком длинный: шаблон до {spec.max_len} символов, а с самыми "
+                    f"длинными подстановками — до {TELEGRAM_MESSAGE_LIMIT} (лимит Telegram).",
                 )
+        elif len(rendered) > spec.max_len:
+            raise SettingsValidationError(
+                key,
+                f"Текст слишком длинный: до {len(rendered)} из {spec.max_len} символов "
+                "с самыми длинными подстановками (лимит всплывающего окна Telegram).",
+            )
         return value, warnings
 
     # Kind.STR

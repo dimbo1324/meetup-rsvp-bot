@@ -279,6 +279,14 @@ def _placeholders(template: str) -> list[str]:
     return names
 
 
+# Окно показывает шаблон и предпросмотр; целиком длинный текст не влез бы в 4096 символов
+PREVIEW_CLIP = 1200
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= PREVIEW_CLIP else text[: PREVIEW_CLIP - 1] + "…"
+
+
 async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     key = _current_key(dialog_manager)
     settings = get_services(dialog_manager).settings
@@ -300,7 +308,7 @@ async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
         f"<b>{html.escape(SCHEMA[key].description)}</b>",
         "",
         f"Текст сейчас{mark}:",
-        f"<blockquote>{html.escape(template)}</blockquote>",
+        f"<blockquote>{html.escape(_clip(template))}</blockquote>",
         "",
         f"Подстановки в стандартном тексте: {html.escape(used)}",
         f"Все допустимые: {html.escape(allowed)}",
@@ -308,7 +316,7 @@ async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
         f"Длина: {limit}.",
         "",
         "Предпросмотр с примерными значениями:",
-        f"<blockquote>{html.escape(preview)}</blockquote>",
+        f"<blockquote>{html.escape(_clip(preview))}</blockquote>",
         "",
         "Отправьте новый текст сообщением.",
     ]

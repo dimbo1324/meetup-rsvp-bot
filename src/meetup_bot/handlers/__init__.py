@@ -31,12 +31,14 @@ def build_router() -> Router:
         observer.outer_middleware(middleware)
     from meetup_bot.dialogs import build_dialog_router
 
+    # Команды /start, /help — раньше диалогов: иначе открытое окно с полем ввода приняло бы
+    # их за ответ админа
     root.include_routers(
         errors.router,
         signup.router,
         attendance.router,
         inline.router,
-        build_dialog_router(),
         start.router,
+        build_dialog_router(),
     )
     return root

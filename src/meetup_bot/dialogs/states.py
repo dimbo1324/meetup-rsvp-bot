@@ -36,6 +36,7 @@ class EventsSG(StatesGroup):
     edit_place_url = State()
     edit_starts = State()
     edit_capacity = State()
+    capacity_confirm = State()
     edit_moments = State()
 
 

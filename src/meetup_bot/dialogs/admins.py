@@ -22,6 +22,7 @@ from meetup_bot.dialogs.states import AdminsSG, PickerSG
 from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.admins import AdminEntry
+from meetup_bot.telegram.commands import set_admin_commands
 from meetup_bot.telegram.common import fit_alert
 
 _ROLES = {AdminRole.OWNER.value: "владелец", AdminRole.ADMIN.value: "админ"}
@@ -105,6 +106,7 @@ async def on_picked(start_data: Any, result: Any, manager: DialogManager) -> Non
         text = describe_error(exc)
     else:
         text = "Админ добавлен."
+        await set_admin_commands(manager.middleware_data["bot"], info.id, is_admin=True)
     event = manager.event
     if isinstance(event, CallbackQuery) and event.message is not None:
         await event.answer(fit_alert(text), show_alert=True)
@@ -142,6 +144,7 @@ async def on_remove_confirm(
         await callback.answer(fit_alert(describe_error(exc)), show_alert=True)
     else:
         await callback.answer("Админ удалён.")
+        await set_admin_commands(manager.middleware_data["bot"], int(user_id), is_admin=False)
     manager.dialog_data.pop("user_id", None)
     await manager.switch_to(AdminsSG.list)
 

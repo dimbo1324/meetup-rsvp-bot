@@ -488,12 +488,46 @@ async def _on_capacity(message: Message, widget: Any, manager: DialogManager, va
     event_id = _event_id(manager)
     if await _deny_message(message, manager) or event_id is None:
         return
+    async with get_sessions(manager)() as session:
+        event = await events_repo.get(session, event_id)
+        taken = await events_repo.seats_taken(session, event_id)
+    if event is not None and taken <= value < event.capacity:
+        # Уменьшение лимита — разрушительное действие (12.2): сначала подтверждение
+        manager.dialog_data["pending_capacity"] = value
+        await manager.switch_to(EventsSG.capacity_confirm)
+        return
+    await _apply_capacity(message.answer, manager, event_id, value)
+
+
+async def _apply_capacity(
+    notify: Callable[[str], Awaitable[Any]], manager: DialogManager, event_id: int, value: int
+) -> None:
     try:
         await get_services(manager).events.set_capacity(actor_id(manager), event_id, value)
     except DomainError as exc:
-        await message.answer(_esc(describe_error(exc)))
+        await notify(_esc(describe_error(exc)))
         return
     await _finish_edit(manager, f"Лимит мест: {value}.")
+
+
+async def _on_capacity_confirm(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
+    event_id = _event_id(manager)
+    value = manager.dialog_data.pop("pending_capacity", None)
+    if await _deny(callback, manager) or event_id is None or value is None:
+        return
+
+    async def notify(text: str) -> None:
+        await callback.answer(fit_alert(text), show_alert=True)
+
+    await _apply_capacity(notify, manager, event_id, int(value))
+
+
+async def _capacity_confirm_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
+    event = await _load_event(dialog_manager)
+    return {
+        "capacity": event.capacity if event is not None else 0,
+        "pending": dialog_manager.dialog_data.get("pending_capacity", 0),
+    }
 
 
 async def _on_capacity_error(
@@ -727,6 +761,18 @@ DIALOGS = [
             _back_to_edit("back"),
             state=EventsSG.edit_capacity,
             getter=_edit_getter,
+        ),
+        Window(
+            Format(
+                "<b>Уменьшить лимит мест с {capacity} до {pending}?</b>\n\n"
+                "Новые записи остановятся раньше; уже записанные останутся."
+            ),
+            Row(
+                Button(Const("✅ Подтвердить"), id="capacity_yes", on_click=_on_capacity_confirm),
+                SwitchTo(Const("Отмена"), id="capacity_no", state=EventsSG.edit_capacity),
+            ),
+            state=EventsSG.capacity_confirm,
+            getter=_capacity_confirm_getter,
         ),
         Window(
             Format("<b>Моменты</b> ({tz})\n\n{moments}"),

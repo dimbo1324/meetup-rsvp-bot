@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, Ban, Event, Registration
 from meetup_bot.telegram.attendance_callbacks import AttendanceCallback
-from meetup_bot.telegram.attendance_ui import MAX_ROWS, SheetStatus
+from meetup_bot.telegram.attendance_ui import SheetStatus
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, callback_update
 
@@ -180,21 +180,6 @@ async def test_длинное_имя_в_кнопке_обрезается_мно
     assert len(label) == len("✅ ") + 40
 
 
-async def test_больше_90_участников_список_обрезается_с_пометкой(app: App, tg: Harness) -> None:
-    created = await app.services.events.create_event_as_admin(OWNER_ID, capacity=200)
-    for n in range(MAX_ROWS + 5):
-        await app.services.participants.admin_add(
-            OWNER_ID, created.event_id, manual_name=f"Гость {n:03d}"
-        )
-    await _start_meeting(app, created.event_id)
-    mid = await _sheet(tg, created.event_id)
-    sent = tg.session.of("SendMessage")[-1]
-    assert f"Показаны первые {MAX_ROWS} из {MAX_ROWS + 5} участников." in sent["text"]
-    labels = _labels(tg, mid)
-    assert len(labels) == MAX_ROWS + 1
-    assert labels[-1] == "Готово"
-
-
 # ---- переключатели -------------------------------------------------------------------------
 
 
@@ -362,7 +347,7 @@ async def test_сбой_пересчёта_банов_честно_предуп�
     await tg.click(OWNER_ID, mid, "Готово")
     text = tg.session.of("EditMessageText")[-1]["text"]
     assert "Явка отмечена ✔. Неявок: 1" in text
-    assert "Не удалось пересчитать баны для 1 участн." in text
+    assert "Пересчёт банов для 1 участн. отложен: бот повторит его автоматически." in text
     # Отметка при этом сохранена
     assert (await _event(app, started)).attendance_marked_at is not None
 

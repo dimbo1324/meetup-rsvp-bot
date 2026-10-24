@@ -572,6 +572,9 @@ async def test_лимит_ниже_занятых_мест_ошибка_и_ок�
     assert (await _event(app, event_id)).capacity == 3
     assert "Лимит мест" in _screen(tg)
     await _say(tg, "2")
+    # Уменьшение лимита — разрушительное действие (12.2): нужно подтверждение
+    assert (await _event(app, event_id)).capacity == 3
+    await _press(tg, "Подтвердить")
     assert (await _event(app, event_id)).capacity == 2
 
 
