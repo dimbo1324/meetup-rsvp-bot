@@ -228,8 +228,10 @@ Telegram-бот для записи на субботние встречи ру�
 - `src/meetup_bot/` — код бота. Слои и правила зависимостей — `docs/spec/09-architecture.md`:
   `handlers/`, `dialogs/` → `services/` → `repositories/` → `db/`; `renderer/`, `telegram/`,
   `scheduler/`, `middlewares/`, `texts/`. Реализована бизнес-логика (сервисы, планировщик,
-  корень сборки `container.py`); Telegram-слой — нет. Реальное состояние — `docs/architecture/overview.md`.
-- `tests/` — pytest; основная масса тестов на сервисы с настоящей SQLite в памяти.
+  корень сборки `container.py`), Telegram-слой и меню админа. Реальное состояние —
+  `docs/architecture/overview.md`.
+- `tests/` — pytest на файловой SQLite и фейковом Telegram (`tests/helpers.py`, `tests/tg_fake.py`);
+  тесты описывают требования: при расхождении меняется код, а не тест.
 - `alembic/`, `alembic.ini` — миграции БД (единственный способ менять схему).
 - `docs/spec/` — продуктовая спецификация, разбитая по разделам (индекс — `docs/spec/README.md`).
 - `docs/ROADMAP.md` — вехи и статус; `docs/open-questions.md` — решения владельца и открытые
