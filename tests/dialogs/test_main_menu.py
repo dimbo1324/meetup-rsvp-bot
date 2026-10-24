@@ -134,27 +134,3 @@ async def test_не_админ_не_может_нажать_кнопку_чуж�
     alerts = [d for d in tg.session.of("AnswerCallbackQuery") if d.get("text")]
     assert alerts[-1]["text"] == "Нет доступа."
     assert alerts[-1]["show_alert"] is True
-
-
-import pytest as _pytest  # noqa: E402
-
-
-@_pytest.fixture(autouse=True)
-def _свежие_роутеры() -> None:
-    """Роутеры модулей создаются при импорте один раз, а Harness собирает корень заново.
-
-    Без отсоединения второй тест падает с «Router is already attached».
-    """
-    import importlib
-
-    from meetup_bot.dialogs import MODULES
-    from meetup_bot.handlers import attendance, errors, inline, signup, start
-
-    routers = [errors.router, signup.router, attendance.router, inline.router, start.router]
-    for name in MODULES:
-        module = importlib.import_module(name)
-        if getattr(module, "router", None) is not None:
-            routers.append(module.router)
-        routers.extend(getattr(module, "DIALOGS", []))
-    for router in routers:
-        router._parent_router = None

@@ -514,27 +514,3 @@ async def test_повторная_отправка_тому_же_админу_з
     ui._remember(1, OWNER_ID, 10)
     ui._remember(1, OWNER_ID, 11)
     assert ui._sent[1] == [(OWNER_ID, 11)]
-
-
-import pytest as _pytest  # noqa: E402
-
-
-@_pytest.fixture(autouse=True)
-def _свежие_роутеры() -> None:
-    """Роутеры модулей создаются при импорте один раз, а Harness собирает корень заново.
-
-    Без отсоединения второй тест падает с «Router is already attached».
-    """
-    import importlib
-
-    from meetup_bot.dialogs import MODULES
-    from meetup_bot.handlers import attendance, errors, inline, signup, start
-
-    routers = [errors.router, signup.router, attendance.router, inline.router, start.router]
-    for name in MODULES:
-        module = importlib.import_module(name)
-        if getattr(module, "router", None) is not None:
-            routers.append(module.router)
-        routers.extend(getattr(module, "DIALOGS", []))
-    for router in routers:
-        router._parent_router = None

@@ -376,27 +376,3 @@ async def test_админ_потерявший_права_не_открывае�
     await app.services.admins.remove_admin(OWNER_ID, ADMIN_ID)
     await _press(tg, "Правила", user=ADMIN_ID)
     assert "Выберите настройку, чтобы изменить." not in _screen(tg)
-
-
-import pytest as _pytest  # noqa: E402
-
-
-@_pytest.fixture(autouse=True)
-def _свежие_роутеры() -> None:
-    """Роутеры модулей создаются при импорте один раз, а Harness собирает корень заново.
-
-    Без отсоединения второй тест падает с «Router is already attached».
-    """
-    import importlib
-
-    from meetup_bot.dialogs import MODULES
-    from meetup_bot.handlers import attendance, errors, inline, signup, start
-
-    routers = [errors.router, signup.router, attendance.router, inline.router, start.router]
-    for name in MODULES:
-        module = importlib.import_module(name)
-        if getattr(module, "router", None) is not None:
-            routers.append(module.router)
-        routers.extend(getattr(module, "DIALOGS", []))
-    for router in routers:
-        router._parent_router = None

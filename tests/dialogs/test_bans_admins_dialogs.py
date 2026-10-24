@@ -378,27 +378,3 @@ async def test_потерявший_роль_владельца_не_добав�
     await app.services.admins.sync_owners([])
     await tg.click(OWNER_ID, mid, "Добавить админа")
     assert _alerts(tg)[-1] == "Нет доступа."
-
-
-import pytest as _pytest  # noqa: E402
-
-
-@_pytest.fixture(autouse=True)
-def _свежие_роутеры() -> None:
-    """Роутеры модулей создаются при импорте один раз, а Harness собирает корень заново.
-
-    Без отсоединения второй тест падает с «Router is already attached».
-    """
-    import importlib
-
-    from meetup_bot.dialogs import MODULES
-    from meetup_bot.handlers import attendance, errors, inline, signup, start
-
-    routers = [errors.router, signup.router, attendance.router, inline.router, start.router]
-    for name in MODULES:
-        module = importlib.import_module(name)
-        if getattr(module, "router", None) is not None:
-            routers.append(module.router)
-        routers.extend(getattr(module, "DIALOGS", []))
-    for router in routers:
-        router._parent_router = None
