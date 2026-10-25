@@ -24,11 +24,12 @@ from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.timing import ScheduleSettings
 from tests.helpers import ADMIN_ID, OWNER_ID, App, RecordingNotifier, person
 
-# Пятница 2026-10-23 12:00 UTC; встреча по умолчанию: суббота 24.10 17:00 по Монтевидео
-STARTS_AT = datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
-REMINDER_AT = datetime(2026, 10, 23, 20, 0, tzinfo=UTC)
-CLOSES_AT = datetime(2026, 10, 24, 17, 0, tzinfo=UTC)
-PROMPT_AT = datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
+# Четверг 2026-10-22 12:00 UTC; встреча по умолчанию: пятница 23.10 16:30 по Монтевидео,
+# запись закрывается в 17:30, запрос явки — в 18:00
+STARTS_AT = datetime(2026, 10, 23, 19, 30, tzinfo=UTC)
+REMINDER_AT = datetime(2026, 10, 22, 19, 30, tzinfo=UTC)
+CLOSES_AT = datetime(2026, 10, 23, 20, 30, tzinfo=UTC)
+PROMPT_AT = datetime(2026, 10, 23, 21, 0, tzinfo=UTC)
 
 
 def go_to(app: App, moment: datetime) -> datetime:
@@ -100,8 +101,8 @@ async def test_текст_напоминания_содержит_время_м�
     await join(app, event_id, 1)
     await reminder_task(app).run(go_to(app, REMINDER_AT))
     assert app.notifier.dms_to(person(1).id) == [
-        "Напоминаем: завтра встреча! суббота, 24 октября, 17:00, Кафе. "
-        "Не сможете прийти? Отмените запись до 23 октября, 20:00."
+        "Напоминаем: завтра встреча! пятница, 23 октября, 16:30, Кафе. "
+        "Не сможете прийти? Отмените запись до 22 октября, 20:00."
     ]
     assert event_id
 
@@ -110,7 +111,7 @@ async def test_напоминание_без_места_без_лишней_за
     event_id = await create_event(app)
     await join(app, event_id, 1)
     await reminder_task(app).run(go_to(app, REMINDER_AT))
-    assert "17:00. Не сможете" in app.notifier.dms_to(person(1).id)[0]
+    assert "16:30. Не сможете" in app.notifier.dms_to(person(1).id)[0]
     assert event_id
 
 
@@ -127,7 +128,7 @@ async def test_напоминание_использует_часовой_поя
     await join(app, event_id, 1)
     await app.services.settings.set("timezone", "UTC", OWNER_ID)
     await reminder_task(app).run(go_to(app, REMINDER_AT))
-    assert "суббота, 24 октября, 20:00" in app.notifier.dms_to(person(1).id)[0]
+    assert "пятница, 23 октября, 19:30" in app.notifier.dms_to(person(1).id)[0]
     assert event_id
 
 
@@ -417,7 +418,7 @@ async def test_напоминание_про_явку_через_14_часов(a
     now = go_to(app, sent_at + ATTENDANCE_REMINDER_AFTER)
     assert await attendance_reminder(app).run(now) == 1
     assert app.notifier.service == [
-        "Никто ещё не отметил явку на встрече (суббота, 24 октября, 17:00)."
+        "Никто ещё не отметил явку на встрече (пятница, 23 октября, 16:30)."
     ]
     assert (await get_event(app, event_id)).attendance_reminder_sent_at == now
 
@@ -476,7 +477,7 @@ async def test_напоминание_про_явку_принимает_зна�
     task = AttendanceReminderTask(app.sessions, app.notifier, ScheduleSettings(timezone="UTC"))
     await task.run(go_to(app, sent_at + ATTENDANCE_REMINDER_AFTER))
     assert app.notifier.service == [
-        "Никто ещё не отметил явку на встрече (суббота, 24 октября, 20:00)."
+        "Никто ещё не отметил явку на встрече (пятница, 23 октября, 19:30)."
     ]
     assert event_id
 
@@ -573,7 +574,7 @@ async def test_автосоздание_возвращает_1_при_созда
     assert await task.run(app.clock.now() + timedelta(minutes=1)) == 0
     async with app.sessions() as session:
         keys = list((await session.scalars(select(Event.recurrence_key))).all())
-    assert keys == ["weekly:2026-10-24"]
+    assert keys == ["weekly:2026-10-23"]
 
 
 async def test_автосоздание_выключено_возвращает_0(app: App) -> None:
@@ -590,10 +591,10 @@ async def test_автосоздание_принимает_асинхронны�
 
 
 async def test_задача_закрытия_записи_возвращает_число_закрытых(app: App) -> None:
-    await app.services.settings.set("registration_close_hours_before", 3, ADMIN_ID)
     await create_event(app)
     task = CloseRegistrationTask(app.services.lifecycle)
     assert await task.run(app.clock.now()) == 0
+    assert await task.run(go_to(app, STARTS_AT)) == 0
     assert await task.run(go_to(app, CLOSES_AT)) == 1
     assert await task.run(app.clock.now()) == 0
 
@@ -602,5 +603,39 @@ async def test_задача_завершения_возвращает_число
     await create_event(app)
     task = FinishEventsTask(app.services.lifecycle)
     assert await task.run(app.clock.now()) == 0
-    assert await task.run(go_to(app, STARTS_AT)) == 1
+    # Встреча завершается после закрытия записи, а не в момент начала
+    assert await task.run(go_to(app, STARTS_AT)) == 0
+    assert await task.run(go_to(app, CLOSES_AT)) == 1
     assert await task.run(app.clock.now()) == 0
+
+
+# ---- момент запроса явки (решение заказчика 2026-10-25) ------------------------------
+
+
+async def run_lifecycle_and_prompt(app: App, moment: datetime) -> int:
+    now = go_to(app, moment)
+    await CloseRegistrationTask(app.services.lifecycle).run(now)
+    await FinishEventsTask(app.services.lifecycle).run(now)
+    return await AttendancePromptTask(app.sessions, app.notifier).run(now)
+
+
+async def test_запрос_явки_встречи_16_30_уходит_в_18_00(app: App) -> None:
+    event_id = await create_event(app)
+    assert (await get_event(app, event_id)).attendance_prompt_at == PROMPT_AT
+    assert await run_lifecycle_and_prompt(app, PROMPT_AT - timedelta(seconds=1)) == 0
+    assert await run_lifecycle_and_prompt(app, PROMPT_AT) == 1
+    assert app.notifier.prompts == [(OWNER_ID, event_id), (ADMIN_ID, event_id)]
+
+
+async def test_при_закрытии_через_120_минут_запрос_явки_сдвигается_на_18_30(app: App) -> None:
+    await app.services.settings.set("registration_close_minutes_after_start", 120, ADMIN_ID)
+    event_id = await create_event(app)
+    shifted = PROMPT_AT + timedelta(minutes=30)
+    event = await get_event(app, event_id)
+    assert (event.registration_closes_at, event.attendance_prompt_at) == (shifted, shifted)
+    # В 18:00 запись ещё открыта: встреча не завершена, явку не запрашиваем
+    assert await run_lifecycle_and_prompt(app, PROMPT_AT) == 0
+    assert (await get_event(app, event_id)).status == EventStatus.OPEN.value
+    assert await run_lifecycle_and_prompt(app, shifted - timedelta(seconds=1)) == 0
+    assert await run_lifecycle_and_prompt(app, shifted) == 1
+    assert {event for _, event in app.notifier.prompts} == {event_id}

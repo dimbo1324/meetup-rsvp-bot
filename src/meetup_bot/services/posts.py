@@ -33,6 +33,7 @@ async def load_post_data(
             event_id=event.id,
             status=event.status,
             starts_at=event.starts_at,
+            ends_at=event.ends_at,
             timezone=timezone,
             capacity=event.capacity,
             seats_taken=taken,

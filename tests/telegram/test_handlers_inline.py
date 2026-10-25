@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -17,6 +17,8 @@ from tests.tg_fake import Harness, next_id, tg_user
 
 STRANGER = 4242
 INLINE_ID = "inline-msg-1"
+# Пятница, 30 октября 2026, 16:30 в Монтевидео (UTC-3)
+FRIDAY_START = datetime(2026, 10, 30, 19, 30, tzinfo=UTC)
 
 
 def inline_query_update(user_id: int, query: str = "") -> Update:
@@ -76,12 +78,12 @@ async def test_inline_запрос_постороннего_не_пишет_ег
 
 
 async def test_админ_получает_встречу_статьёй_с_кнопками(app: App, tg: Harness) -> None:
-    event_id = await make_event(app)
+    event_id = await make_event(app, starts_at=FRIDAY_START)
     answer = await query_answer(tg, ADMIN_ID)
     (result,) = answer["results"]
     assert result["type"] == "article"
     assert result["id"] == f"event:{event_id}"
-    assert result["title"] == "Встреча: суббота, 24 октября, 17:00"
+    assert result["title"] == "Встреча: пятница, 30 октября, 16:30–18:30"
     assert result["description"] == "Занято 0 из 10 мест"
     callbacks = [
         b["callback_data"] for row in result["reply_markup"]["inline_keyboard"] for b in row

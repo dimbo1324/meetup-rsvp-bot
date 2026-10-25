@@ -21,7 +21,7 @@ async def test_app_запись_и_уведомления(app: App) -> None:
     first = await app.services.registration.register(event_id, person(1))
     assert first.status is RegisterStatus.OK
     assert set(app.refresher.scheduled) <= {event_id}
-    assert app.clock.now() == datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
+    assert app.clock.now() == datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 
 
 async def test_tg_фейковая_сессия_отвечает_на_команду(tg: Harness) -> None:

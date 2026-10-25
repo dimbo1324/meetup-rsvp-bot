@@ -16,7 +16,7 @@ from meetup_bot.services.registration import RegisterStatus
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 STRANGER = 777
-NEXT_SATURDAY = datetime(2026, 10, 31, 20, 0, tzinfo=UTC)  # суббота 17:00 в Монтевидео
+NEXT_FRIDAY = datetime(2026, 10, 30, 19, 30, tzinfo=UTC)  # пятница 16:30 в Монтевидео
 
 
 async def make_event(app: App, capacity: int = 10) -> int:
@@ -67,11 +67,14 @@ async def test_создание_админом_сохраняет_поля_и_м
     assert event.description_html == "<b>Привет</b>"
     assert event.status == EventStatus.OPEN.value
     assert event.created_by == ADMIN_ID
-    assert event.starts_at == now + timedelta(hours=32)
+    # Четверг 09:00 по Монтевидео; встреча — пятница 16:30–18:30
+    assert event.starts_at == now + timedelta(hours=31, minutes=30)
+    assert event.ends_at == now + timedelta(hours=33, minutes=30)
     assert event.cancel_deadline_at == now + timedelta(hours=11)
-    assert event.registration_closes_at == now + timedelta(hours=32)  # закрытие в начале встречи
-    assert event.reminder_at == now + timedelta(hours=8)
-    assert event.attendance_prompt_at == now + timedelta(hours=37)
+    # Запись закрывается через час после начала, явка — через полтора
+    assert event.registration_closes_at == now + timedelta(hours=32, minutes=30)
+    assert event.reminder_at == now + timedelta(hours=7, minutes=30)
+    assert event.attendance_prompt_at == now + timedelta(hours=33)
     assert created.warnings == []
 
 
@@ -272,13 +275,24 @@ async def test_update_details_пересобирает_посты(app: App) -> N
 
 async def test_перенос_пересчитывает_все_моменты(app: App) -> None:
     event_id = await make_event(app)
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     event = await load(app, event_id)
-    assert event.starts_at == NEXT_SATURDAY
-    assert event.cancel_deadline_at == NEXT_SATURDAY - timedelta(hours=21)
-    assert event.registration_closes_at == NEXT_SATURDAY
-    assert event.reminder_at == NEXT_SATURDAY - timedelta(hours=24)
-    assert event.attendance_prompt_at == NEXT_SATURDAY + timedelta(hours=5)
+    assert event.starts_at == NEXT_FRIDAY
+    assert event.ends_at == NEXT_FRIDAY + timedelta(hours=2)
+    assert event.cancel_deadline_at == NEXT_FRIDAY - timedelta(hours=20, minutes=30)
+    assert event.registration_closes_at == NEXT_FRIDAY + timedelta(hours=1)
+    assert event.reminder_at == NEXT_FRIDAY - timedelta(hours=24)
+    assert event.attendance_prompt_at == NEXT_FRIDAY + timedelta(minutes=90)
+
+
+async def test_перенос_сохраняет_длительность_встречи(app: App) -> None:
+    event_id = await make_event(app)
+    before = await load(app, event_id)
+    await app.services.events.edit_moments(
+        OWNER_ID, event_id, ends_at=before.starts_at + timedelta(hours=3)
+    )
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
+    assert (await load(app, event_id)).ends_at == NEXT_FRIDAY + timedelta(hours=3)
 
 
 async def test_перенос_сбрасывает_отметки_отправленных_напоминаний(app: App) -> None:
@@ -290,9 +304,11 @@ async def test_перенос_сбрасывает_отметки_отправл
         event.reminder_sent_at = sent
         event.attendance_prompt_sent_at = sent
         event.attendance_reminder_sent_at = sent
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+        event.post_reminder_sent_at = sent
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     event = await load(app, event_id)
     assert event.reminder_sent_at is None
+    assert event.post_reminder_sent_at is None
     assert event.attendance_prompt_sent_at is None
     assert event.attendance_reminder_sent_at is None
 
@@ -302,7 +318,7 @@ async def test_перенос_уведомляет_записанных_с_до�
     for n in range(3):
         await app.services.registration.register(event_id, person(n))
     await allow_dm(app, 1000, 1001)
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     assert len(app.notifier.dms_to(1000)) == 1
     assert len(app.notifier.dms_to(1001)) == 1
     assert app.notifier.dms_to(1002) == []
@@ -314,7 +330,7 @@ async def test_перенос_уведомляет_и_очередь(app: App) -
     await app.services.registration.register(event_id, person(0))
     await app.services.registration.register(event_id, person(1))
     await allow_dm(app, 1000, 1001)
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     assert len(app.notifier.dms_to(1001)) == 1
 
 
@@ -323,14 +339,14 @@ async def test_перенос_не_уведомляет_отменивших_з�
     await app.services.registration.register(event_id, person(0))
     await allow_dm(app, 1000)
     await app.services.registration.cancel(event_id, 1000)
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     assert app.notifier.dms_to(1000) == []
 
 
 async def test_перенос_пересобирает_посты(app: App) -> None:
     event_id = await make_event(app)
     app.refresher.scheduled.clear()
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     assert app.refresher.scheduled == [event_id]
 
 
@@ -351,33 +367,36 @@ async def test_перенос_без_часового_пояса_отклоня�
 async def test_перенос_запрещён_не_админу(app: App) -> None:
     event_id = await make_event(app)
     with pytest.raises(PermissionDenied):
-        await app.services.events.reschedule(STRANGER, event_id, NEXT_SATURDAY)
+        await app.services.events.reschedule(STRANGER, event_id, NEXT_FRIDAY)
 
 
 async def test_перенос_закрытой_встречи_открывает_её_заново(app: App) -> None:
     event_id = await make_event(app)
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
-    result = await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
-    assert (result.registration_reopened, result.registration_stays_closed) == (True, False)
+    result = await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
+    assert result.registration_reopened is True
     assert (await load(app, event_id)).status == EventStatus.OPEN.value
 
 
 async def test_перенос_открытой_встречи_ничего_не_переоткрывает(app: App) -> None:
     event_id = await make_event(app)
-    result = await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
-    assert (result.registration_reopened, result.registration_stays_closed) == (False, False)
+    result = await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
+    assert result.registration_reopened is False
 
 
-async def test_перенос_закрытой_встречи_на_близкое_время_оставляет_её_закрытой(app: App) -> None:
-    # Механизм «момент закрытия записи уже прошёл» возможен только при закрытии до начала
-    await app.services.settings.set("registration_close_hours_before", 3, OWNER_ID)
+async def test_перенос_закрытой_после_начала_встречи_на_близкое_время_открывает_её(
+    app: App,
+) -> None:
+    # Закрытие записи не раньше начала, а новое начало в будущем: запись снова открыта
     event_id = await make_event(app)
+    app.clock.advance(timedelta(hours=31, minutes=50))  # пятница 16:50 по Монтевидео
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
-    app.clock.advance(timedelta(hours=30))  # суббота 18:00 UTC, закрытие записи уже прошло
     soon = app.clock.now() + timedelta(hours=1)
     result = await app.services.events.reschedule(OWNER_ID, event_id, soon)
-    assert (result.registration_reopened, result.registration_stays_closed) == (False, True)
-    assert (await load(app, event_id)).status == EventStatus.CLOSED.value
+    assert result.registration_reopened is True
+    event = await load(app, event_id)
+    assert event.status == EventStatus.OPEN.value
+    assert event.registration_closes_at == soon + timedelta(hours=1)
 
 
 async def test_перенос_раздаёт_очередь_при_автооткрытии_и_пишет_продвинутым(app: App) -> None:
@@ -389,7 +408,7 @@ async def test_перенос_раздаёт_очередь_при_автоот�
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
     first = await load_registration(app, event_id, 1000)
     await app.services.participants.admin_remove(ADMIN_ID, event_id, first.id)
-    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_SATURDAY)
+    await app.services.events.reschedule(OWNER_ID, event_id, NEXT_FRIDAY)
     assert (await statuses(app, event_id))[1001] == "active"
     assert len(app.notifier.dms_to(1001)) == 1  # одно сообщение — «место освободилось»
 
@@ -427,22 +446,31 @@ async def test_повторное_открытие_до_начала_работ�
     )
 
 
-async def test_открытие_после_начала_встречи_запрещено(app: App) -> None:
+async def test_открытие_после_времени_закрытия_записи_запрещено(app: App) -> None:
     event_id = await make_event(app)
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
-    app.clock.advance(timedelta(hours=33))
+    app.clock.advance(timedelta(hours=33))  # пятница 18:00 по Монтевидео, закрытие было в 17:30
     with pytest.raises(InvalidOperation) as exc:
         await app.services.events.set_registration_open(OWNER_ID, event_id, True)
-    assert exc.value.code == "already_started"
+    assert exc.value.code == "registration_time_passed"
 
 
-async def test_открытие_после_времени_закрытия_подтягивает_закрытие_к_началу(app: App) -> None:
+async def test_открытие_после_начала_не_меняет_время_закрытия(app: App) -> None:
     event_id = await make_event(app)
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
-    app.clock.advance(timedelta(hours=30))
+    before = await load(app, event_id)
+    app.clock.advance(timedelta(hours=32))  # пятница 17:00 по Монтевидео
     await app.services.events.set_registration_open(OWNER_ID, event_id, True)
     event = await load(app, event_id)
-    assert event.registration_closes_at == event.starts_at
+    assert event.status == EventStatus.OPEN.value
+    assert event.registration_closes_at == before.registration_closes_at
+
+
+async def test_закрытие_записи_после_начала_работает(app: App) -> None:
+    event_id = await make_event(app)
+    app.clock.advance(timedelta(hours=31, minutes=50))  # пятница 16:50 по Монтевидео
+    await app.services.events.set_registration_open(OWNER_ID, event_id, False)
+    assert (await load(app, event_id)).status == EventStatus.CLOSED.value
 
 
 async def test_повторная_смена_на_то_же_состояние_ничего_не_делает(app: App) -> None:
@@ -619,22 +647,69 @@ async def test_правка_без_изменений_не_сбрасывает_
     assert (await load(app, event_id)).reminder_sent_at == app.clock.now()
 
 
-async def test_дедлайн_отмены_позже_закрытия_записи_отклоняется(app: App) -> None:
+async def test_дедлайн_отмены_позже_начала_отклоняется(app: App) -> None:
     event_id = await make_event(app)
     event = await load(app, event_id)
     with pytest.raises(InvalidOperation) as exc:
         await app.services.events.edit_moments(
-            OWNER_ID, event_id, cancel_deadline_at=event.registration_closes_at + timedelta(hours=1)
+            OWNER_ID, event_id, cancel_deadline_at=event.starts_at + timedelta(minutes=1)
         )
     assert exc.value.code == "invalid_times"
 
 
-async def test_закрытие_записи_после_начала_отклоняется(app: App) -> None:
+async def test_закрытие_записи_после_начала_допустимо(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    closes = event.starts_at + timedelta(minutes=90)
+    await app.services.events.edit_moments(OWNER_ID, event_id, registration_closes_at=closes)
+    assert (await load(app, event_id)).registration_closes_at == closes
+
+
+async def test_закрытие_записи_раньше_начала_отклоняется(app: App) -> None:
     event_id = await make_event(app)
     event = await load(app, event_id)
     with pytest.raises(InvalidOperation) as exc:
         await app.services.events.edit_moments(
-            OWNER_ID, event_id, registration_closes_at=event.starts_at + timedelta(minutes=1)
+            OWNER_ID, event_id, registration_closes_at=event.starts_at - timedelta(minutes=1)
+        )
+    assert exc.value.code == "invalid_times"
+
+
+async def test_закрытие_записи_позже_запроса_явки_отклоняется(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    with pytest.raises(InvalidOperation) as exc:
+        await app.services.events.edit_moments(
+            OWNER_ID,
+            event_id,
+            registration_closes_at=event.attendance_prompt_at + timedelta(minutes=1),
+        )
+    assert exc.value.code == "invalid_times"
+
+
+async def test_правка_конца_встречи(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    ends = event.starts_at + timedelta(hours=3)
+    await app.services.events.edit_moments(OWNER_ID, event_id, ends_at=ends)
+    after = await load(app, event_id)
+    assert after.ends_at == ends
+    assert after.starts_at == event.starts_at
+
+
+async def test_конец_встречи_не_позже_начала_отклоняется(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    with pytest.raises(InvalidOperation) as exc:
+        await app.services.events.edit_moments(OWNER_ID, event_id, ends_at=event.starts_at)
+    assert exc.value.code == "invalid_times"
+
+
+async def test_конец_встречи_без_часового_пояса_отклоняется(app: App) -> None:
+    event_id = await make_event(app)
+    with pytest.raises(InvalidOperation) as exc:
+        await app.services.events.edit_moments(
+            OWNER_ID, event_id, ends_at=datetime(2026, 10, 23, 18, 30)
         )
     assert exc.value.code == "invalid_times"
 
@@ -674,7 +749,7 @@ async def test_неудачная_правка_моментов_не_меняе�
 async def test_правка_моментов_запрещена_не_админу(app: App) -> None:
     event_id = await make_event(app)
     with pytest.raises(PermissionDenied):
-        await app.services.events.edit_moments(STRANGER, event_id, reminder_at=NEXT_SATURDAY)
+        await app.services.events.edit_moments(STRANGER, event_id, reminder_at=NEXT_FRIDAY)
 
 
 async def test_правка_моментов_пересобирает_посты(app: App) -> None:
@@ -693,7 +768,7 @@ async def test_правка_моментов_пересобирает_посты
 async def test_список_показывает_открытые_и_закрытые_с_занятыми_местами(app: App) -> None:
     first = await make_event(app, 5)
     second = await app.services.events.create_event_as_admin(
-        OWNER_ID, starts_at=NEXT_SATURDAY, capacity=8
+        OWNER_ID, starts_at=NEXT_FRIDAY, capacity=8
     )
     await app.services.registration.register(first, person(0))
     await app.services.events.set_registration_open(OWNER_ID, second.event_id, False)
@@ -783,10 +858,10 @@ async def test_шаблон_без_встреч_это_None(app: App) -> None:
 
 async def test_шаблон_берёт_последнюю_по_времени_начала(app: App) -> None:
     await app.services.events.create_event_as_admin(
-        OWNER_ID, starts_at=NEXT_SATURDAY + timedelta(days=7), capacity=5, place="Поздняя"
+        OWNER_ID, starts_at=NEXT_FRIDAY + timedelta(days=7), capacity=5, place="Поздняя"
     )
     await app.services.events.create_event_as_admin(
-        OWNER_ID, starts_at=NEXT_SATURDAY, capacity=8, place="Ранняя"
+        OWNER_ID, starts_at=NEXT_FRIDAY, capacity=8, place="Ранняя"
     )
     template = await app.services.events.last_event_template(ADMIN_ID)
     assert template is not None
@@ -796,14 +871,14 @@ async def test_шаблон_берёт_последнюю_по_времени_н
 async def test_шаблон_пропускает_отменённую_встречу(app: App) -> None:
     await app.services.events.create_event_as_admin(
         OWNER_ID,
-        starts_at=NEXT_SATURDAY,
+        starts_at=NEXT_FRIDAY,
         place="Живая",
         description_html="<b>x</b>",
         place_url="https://example.com/m",
         photo_file_id="ph",
     )
     late = await app.services.events.create_event_as_admin(
-        OWNER_ID, starts_at=NEXT_SATURDAY + timedelta(days=7), place="Отменённая"
+        OWNER_ID, starts_at=NEXT_FRIDAY + timedelta(days=7), place="Отменённая"
     )
     await app.services.events.cancel_event(OWNER_ID, late.event_id)
     template = await app.services.events.last_event_template(OWNER_ID)
@@ -815,7 +890,7 @@ async def test_шаблон_пропускает_отменённую_встре
 
 
 async def test_шаблон_только_из_отменённых_это_None(app: App) -> None:
-    created = await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_SATURDAY)
+    created = await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_FRIDAY)
     await app.services.events.cancel_event(OWNER_ID, created.event_id)
     assert await app.services.events.last_event_template(OWNER_ID) is None
 
@@ -823,10 +898,10 @@ async def test_шаблон_только_из_отменённых_это_None(a
 async def test_шаблон_время_начала_в_поясе_настроек(app: App) -> None:
     from datetime import time
 
-    await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_SATURDAY)
+    await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_FRIDAY)
     template = await app.services.events.last_event_template(OWNER_ID)
     assert template is not None
-    assert template.start_time == time(17, 0)  # а не 20:00 UTC
+    assert template.start_time == time(16, 30)  # а не 19:30 UTC
 
 
 async def test_шаблон_недоступен_не_админу(app: App) -> None:

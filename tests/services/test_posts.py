@@ -6,11 +6,13 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import FakeClock
+from meetup_bot.db.models import Event
 from meetup_bot.renderer.post import render_post
 from meetup_bot.repositories import registrations
 from meetup_bot.services.events import EventService
 from meetup_bot.services.posts import load_post_data
 from meetup_bot.services.registration import RegisterStatus, RegistrationService, UserInfo
+from meetup_bot.texts.render import TIME_RANGE_DASH
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -134,3 +136,16 @@ async def test_рост_лимита_продвигает_очередь_и_об
     data = await load_post_data(app.sessions, event_id)
     assert data is not None
     assert data.waiting == 1
+
+
+async def test_load_post_data_передаёт_конец_встречи(app: App) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID, capacity=5)).event_id
+    async with app.sessions() as session:
+        event = await session.get(Event, event_id)
+        assert event is not None
+        starts_at, ends_at = event.starts_at, event.ends_at
+    data = await load_post_data(app.sessions, event_id)
+    assert data is not None
+    assert (data.starts_at, data.ends_at) == (starts_at, ends_at)
+    assert data.ends_at is not None and data.ends_at > data.starts_at
+    assert TIME_RANGE_DASH in render_post(data).text.split("\n")[0]

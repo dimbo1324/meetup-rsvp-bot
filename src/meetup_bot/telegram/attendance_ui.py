@@ -31,7 +31,7 @@ from meetup_bot.telegram.attendance_callbacks import (
     TARGET_NOOP,
     AttendanceCallback,
 )
-from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.render import format_interval, format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ class AttendanceUI:
                     return SheetStatus.NOT_STARTED
                 if now > event.starts_at + ATTENDANCE_WINDOW:
                     return SheetStatus.WINDOW_CLOSED
-                starts_at, place = event.starts_at, event.place
+                starts_at, ends_at, place = event.starts_at, event.ends_at, event.place
                 correction = event.attendance_marked_at is not None
             rows = await self._services.attendance.get_sheet(admin_id, event_id)
         except Exception:
@@ -210,7 +210,7 @@ class AttendanceUI:
             return SheetStatus.FAILED
 
         tz = self._services.settings.timezone_now()
-        title = f"Явка: встреча {format_moment(starts_at, tz)}"
+        title = f"Явка: встреча {format_interval(starts_at, ends_at, tz)}"
         if place:
             title += f", {place}"
         lines = [html.escape(title)]

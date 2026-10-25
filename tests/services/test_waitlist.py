@@ -294,7 +294,7 @@ async def test_продвижение_ближе_порога_помечаетс
     await enable(app, "waitlist_enabled")
     event_id = await make_event(app, 1)
     await fill_and_queue(app, event_id, 1, 1)
-    # Пятница 23:30 UTC: до начала 20.5 ч < 24 ч, а отмена по дедлайну уже закрыта → через админа
+    # Четверг 23:30 UTC: до начала 20 ч < 24 ч, а отмена по дедлайну уже закрыта → через админа
     app.clock.advance(timedelta(hours=11, minutes=30))
     active = await reg_of(app, event_id, 1000)
     await app.services.participants.admin_remove(ADMIN_ID, event_id, active.id)

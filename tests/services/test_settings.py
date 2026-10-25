@@ -352,12 +352,16 @@ async def test_reset_только_одного_ключа_не_трогает_о
 
 async def test_schedule_now_отражает_изменения(settings: SettingsService) -> None:
     await settings.set("event_time", "18:30", ADMIN_ID)
-    await settings.set("event_weekday", 4, ADMIN_ID)
-    await settings.set("registration_close_hours_before", 5, ADMIN_ID)
+    await settings.set("event_weekday", 2, ADMIN_ID)
+    await settings.set("event_duration_minutes", 150, ADMIN_ID)
+    await settings.set("registration_close_minutes_after_start", 30, ADMIN_ID)
+    await settings.set("attendance_prompt_minutes_after", 120, ADMIN_ID)
     schedule = settings.schedule_now()
     assert schedule.event_time == time(18, 30)
-    assert schedule.event_weekday == 4
-    assert schedule.registration_close_hours_before == 5
+    assert schedule.event_weekday == 2
+    assert schedule.event_duration_minutes == 150
+    assert schedule.registration_close_minutes_after_start == 30
+    assert schedule.attendance_prompt_minutes_after == 120
     assert schedule.cancel_deadline_time == time(20, 0)
     assert await settings.schedule_settings() == schedule
 

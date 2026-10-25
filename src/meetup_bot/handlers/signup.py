@@ -28,7 +28,7 @@ from meetup_bot.telegram.callbacks import (
 )
 from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, fit_alert, telegram_length
 from meetup_bot.telegram.post_updater import PostUpdater
-from meetup_bot.texts.render import date_parts
+from meetup_bot.texts.render import text_variables
 
 logger = logging.getLogger(__name__)
 
@@ -132,14 +132,8 @@ async def _register_inline_post(callback: CallbackQuery, event_id: int, services
 def _when_vars(
     services: Services, starts_at: datetime | None, deadline_at: datetime | None, place: str
 ) -> dict[str, str]:
-    tz = services.settings.timezone_now()
-    values: dict[str, str] = {"place": place}
-    if starts_at is not None:
-        values["weekday"], values["date"], values["time"] = date_parts(starts_at, tz)
-    if deadline_at is not None:
-        _, deadline_date, deadline_time = date_parts(deadline_at, tz)
-        values["deadline"] = f"{deadline_date}, {deadline_time}"
-    return values
+    params = {"starts_at": starts_at, "deadline_at": deadline_at, "place": place}
+    return text_variables(params, services.settings.timezone_now())
 
 
 def _register_text(services: Services, result: RegisterResult) -> str:

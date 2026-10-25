@@ -105,7 +105,7 @@ async def test_список_банов_показывает_имя_причин�
     await _ban_registered(app, 1)
     await _open_section(tg, "Чёрный список")
     assert "Сейчас в бане: 1." in _screen(tg)
-    assert "Участник1 (@user1) · вручную · 23.10.2026" in _labels(tg)
+    assert "Участник1 (@user1) · вручную · 22.10.2026" in _labels(tg)
 
 
 async def test_бан_неизвестного_человека_показан_по_id(app: App, tg: Harness) -> None:

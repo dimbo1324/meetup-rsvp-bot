@@ -31,7 +31,7 @@ from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.attendance_ui import SheetStatus
 from meetup_bot.telegram.common import fit_alert
 from meetup_bot.telegram.posts import build_post
-from meetup_bot.texts.render import MONTHS, format_moment
+from meetup_bot.texts.render import date_parts, format_interval, format_moment
 
 DATE_FORMAT = "%d.%m.%Y %H:%M"
 DATE_HINT = "Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ, например 15.11.2026 18:30."
@@ -51,13 +51,19 @@ SHEET_TEXTS = {
     SheetStatus.NO_ACCESS: NO_ACCESS,
     SheetStatus.FAILED: "Не удалось отправить список (напишите боту /start).",
 }
-# Моменты из 5.2: ключ параметра edit_moments -> (подпись, поле события)
+# Моменты из 5.2: ключ параметра edit_moments (он же поле события) -> подпись
 MOMENTS = {
+    "ends_at": "Время окончания",
     "cancel_deadline_at": "Дедлайн отмены записи",
     "registration_closes_at": "Закрытие записи",
     "reminder_at": "Напоминание",
     "attendance_prompt_at": "Запрос явки",
 }
+# Порядок проверяет сервис (validate_times); подсказка избавляет от гадания после отказа
+MOMENTS_ORDER_HINT = (
+    "Порядок: дедлайн отмены ≤ начало ≤ закрытие записи ≤ запрос явки; окончание — позже "
+    "начала. Закрытие записи может быть после начала: опоздавшие ещё успеют записаться."
+)
 
 
 # ---------------------------------------------------------------- помощники
@@ -140,8 +146,8 @@ async def _list_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
         return {"items": [], "header": _esc(describe_error(exc))}
     items = []
     for item in found:
-        local = item.starts_at.astimezone(tz)
-        when = f"{local.day} {MONTHS[local.month - 1]} {local:%H:%M}"
+        _weekday, day, time_ = date_parts(item.starts_at, tz)
+        when = f"{day} {time_}"
         status = STATUS_TITLES.get(item.status, item.status)
         label = f"{when} · {status} · занято {item.seats_taken} из {item.capacity}"
         items.append((label, item.id))
@@ -209,7 +215,7 @@ async def _card_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
         place = f'<a href="{html.escape(event.place_url)}">{place}</a>'
     status = STATUS_TITLES.get(event.status, event.status)
     lines = [
-        f"<b>{_esc(format_moment(event.starts_at, tz))}</b>",
+        f"<b>{_esc(format_interval(event.starts_at, event.ends_at, tz))}</b>",
         f"Место: {place}",
         f"Статус: {status}",
         f"Занято: {taken} из {event.capacity}, в очереди: {queue or 0}",
@@ -479,8 +485,6 @@ async def _on_starts(message: Message, widget: Any, manager: DialogManager, valu
     notice = "Встреча перенесена, записанным отправлено уведомление."
     if result.registration_reopened:
         notice += " Запись открыта заново."
-    elif result.registration_stays_closed:
-        notice += " Запись осталась закрытой: откройте её вручную."
     await _finish_edit(manager, notice)
 
 
@@ -694,7 +698,7 @@ DIALOGS = [
                 SwitchTo(Const("Дата и время"), id="starts", state=EventsSG.edit_starts),
                 SwitchTo(Const("Лимит мест"), id="capacity", state=EventsSG.edit_capacity),
                 SwitchTo(
-                    Const("Моменты (отмена, закрытие, напоминание, явка)"),
+                    Const("Моменты (окончание, отмена, закрытие, напоминание, явка)"),
                     id="moments",
                     state=EventsSG.edit_moments,
                 ),
@@ -743,7 +747,7 @@ DIALOGS = [
                 "<b>Дата и время</b>\n\nСейчас: {starts} ({tz}).\n\n"
                 "Введите новые дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ. Все моменты "
                 "(дедлайн отмены, закрытие записи, напоминание, запрос явки) пересчитаются, "
-                "записанным придёт уведомление."
+                "окончание сдвинется вместе с началом, записанным придёт уведомление."
             ),
             TextInput(id="starts", on_success=_on_starts),
             _back_to_edit("back"),
@@ -775,7 +779,7 @@ DIALOGS = [
             getter=_capacity_confirm_getter,
         ),
         Window(
-            Format("<b>Моменты</b> ({tz})\n\n{moments}"),
+            Format("<b>Моменты</b> ({tz})\n\n{moments}\n\n" + MOMENTS_ORDER_HINT),
             Format(
                 "\nЗначение для «{chosen_title}»: введите ДД.ММ.ГГГГ ЧЧ:ММ.",
                 when="chosen",

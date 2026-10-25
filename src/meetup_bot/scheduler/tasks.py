@@ -27,6 +27,7 @@ from meetup_bot.services.admin_support import (
 from meetup_bot.services.attendance import ATTENDANCE_WINDOW
 from meetup_bot.services.lifecycle import LifecycleService, RulesProvider
 from meetup_bot.services.ports import Notifier
+from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.safe import safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.texts.render import format_moment
@@ -155,6 +156,16 @@ class ReminderTask:
             },
         )
         await send_dms(self._notifier, user_ids, text)
+
+
+class PostReminderTask:
+    name = "post_reminder"
+
+    def __init__(self, service: PostReminderService) -> None:
+        self._service = service
+
+    async def run(self, now: datetime) -> int:
+        return len(await self._service.send_due(now))
 
 
 class AttendancePromptTask:

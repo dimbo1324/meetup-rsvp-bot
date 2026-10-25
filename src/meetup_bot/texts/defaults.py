@@ -9,7 +9,7 @@ TEXT_PREFIX = "text."
 
 # Допустимые подстановки в текстах; любое другое имя в `{...}` отклоняется при сохранении
 ALLOWED_PLACEHOLDERS: frozenset[str] = frozenset(
-    {"date", "time", "weekday", "place", "deadline", "position", "name", "reason"}
+    {"date", "time", "end_time", "weekday", "place", "deadline", "position", "name", "reason"}
 )
 
 # Тексты-сообщения (уходят обычным сообщением в HTML, а не во всплывающее окно): для них
@@ -33,7 +33,7 @@ DEFAULT_TEXTS: dict[str, str] = {
     "text.registered_late": (
         "Вы записаны на {weekday}, {date}, {time}. Обратите внимание: отменить запись уже нельзя."
     ),
-    "text.full": "Извините, мест не осталось. Попробуйте в следующую субботу!",
+    "text.full": "Извините, мест не осталось. Попробуйте в следующий раз!",
     "text.waitlisted": (
         "Мест нет, вы в листе ожидания под номером {position}. "
         "Если место освободится, бот напишет вам."

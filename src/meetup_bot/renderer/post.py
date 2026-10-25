@@ -13,10 +13,9 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from meetup_bot.db.models import EventStatus
-from meetup_bot.texts.render import MONTHS, WEEKDAYS, clip, telegram_length
+from meetup_bot.texts.render import clip, format_interval, telegram_length
 
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
@@ -43,6 +42,7 @@ class PostData:
     capacity: int
     seats_taken: int
     participants: Sequence[Participant]
+    ends_at: datetime | None = None
     description_html: str = ""
     place: str = ""
     place_url: str = ""
@@ -110,9 +110,7 @@ def truncate_html(markup: str, limit: int) -> str:
 
 
 def _when_line(data: PostData) -> str:
-    local = data.starts_at.astimezone(ZoneInfo(data.timezone))
-    weekday = WEEKDAYS[local.weekday()]
-    return f"📅 {weekday}, {local.day} {MONTHS[local.month - 1]}, {local:%H:%M}"
+    return f"📅 {format_interval(data.starts_at, data.ends_at, data.timezone)}"
 
 
 def _place_line(data: PostData) -> str:

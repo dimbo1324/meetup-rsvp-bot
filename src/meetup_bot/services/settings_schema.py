@@ -39,11 +39,12 @@ REASON_MAX_LEN = 200
 
 # Тестовые значения для пробного рендера текстов
 SAMPLE_VARS: dict[str, str] = {
-    "date": "25.10",
-    "time": "17:00",
-    "weekday": "суббота",
+    "date": "30 октября",
+    "time": "16:30",
+    "end_time": "18:30",
+    "weekday": "пятница",
     "place": "Кафе",
-    "deadline": "пятница, 20:00",
+    "deadline": "29 октября, 20:00",
     "position": "1",
     "name": "Имя",
     "reason": "Причина",
@@ -51,11 +52,12 @@ SAMPLE_VARS: dict[str, str] = {
 
 # Худший случай для проверки длины всплывающих окон: длиннейшие реальные значения подстановок
 WORST_CASE_VARS: dict[str, str] = {
-    "date": "25.10.2026",
-    "time": "17:00",
+    "date": "30 сентября",
+    "time": "23:59",
+    "end_time": "23:59 (30 сентября)",
     "weekday": "воскресенье",
     "place": "М" * PLACE_MAX_LEN,
-    "deadline": "воскресенье, 23:59",
+    "deadline": "30 сентября, 23:59",
     "position": "999",
     "name": "И" * NAME_MAX_LEN,
     "reason": "П" * REASON_MAX_LEN,
@@ -132,8 +134,9 @@ _TEXT_DESCRIPTIONS: dict[str, str] = {
 
 _SPECS: tuple[SettingSpec, ...] = (
     _int("capacity", 10, 1, 200, "Лимит мест для новых встреч"),
-    _int("event_weekday", 5, 0, 6, "День встречи (пн = 0, сб = 5)"),
-    SettingSpec("event_time", Kind.TIME, "17:00", "Время начала встречи"),
+    _int("event_weekday", 4, 0, 6, "День встречи (пн = 0, пт = 4)"),
+    SettingSpec("event_time", Kind.TIME, "16:30", "Время начала встречи"),
+    _int("event_duration_minutes", 120, 15, 720, "Длительность встречи, минут"),
     SettingSpec("default_place", Kind.STR, "", "Место по умолчанию", max_len=PLACE_MAX_LEN),
     SettingSpec(
         "default_place_url", Kind.URL, "", "Ссылка на карту (https://)", max_len=URL_MAX_LEN
@@ -152,15 +155,29 @@ _SPECS: tuple[SettingSpec, ...] = (
     _int("cancel_deadline_days_before", 1, 0, 7, "Дедлайн отмены: за сколько дней"),
     SettingSpec("cancel_deadline_time", Kind.TIME, "20:00", "Дедлайн отмены: во сколько"),
     _int(
-        "registration_close_hours_before",
+        "registration_close_minutes_after_start",
+        60,
         0,
-        0,
-        72,
-        "Закрытие записи, часов до начала (0 = в момент начала)",
+        240,
+        "Закрытие записи, минут после начала (0 = в момент начала)",
     ),
     _bool("reminder_enabled", True, "Напоминания в личку"),
     _int("reminder_hours_before", 24, 1, 72, "За сколько часов напоминать"),
-    _int("attendance_prompt_hours_after", 5, 1, 48, "Через сколько часов просить отметить явку"),
+    _int(
+        "attendance_prompt_minutes_after",
+        90,
+        30,
+        2880,
+        "Через сколько минут после начала просить отметить явку",
+    ),
+    _int(
+        "post_reminder_days_before",
+        2,
+        0,
+        14,
+        "Напомнить админам разослать пост за N дней до встречи, 0 = выключено",
+    ),
+    SettingSpec("post_reminder_time", Kind.TIME, "10:00", "Время напоминания о рассылке поста"),
     _int("ban_after_no_shows", 1, 0, 10, "Порог автобана по неявкам, 0 = выключен"),
     _bool("remove_banned_from_future_events", True, "Снимать забаненного с будущих встреч"),
     _bool("notify_user_on_ban", False, "Сообщать человеку о бане"),

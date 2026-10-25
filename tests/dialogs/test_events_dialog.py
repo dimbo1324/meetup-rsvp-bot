@@ -11,7 +11,8 @@ from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
 PLACE = "Кафе «Утро»"
-LIST_LABEL = "24 октября 17:00 · запись открыта · занято 0 из 3"
+# Встреча по умолчанию — пятница 16:30–18:30 (Монтевидео); часы стоят на четверге 22.10
+LIST_LABEL = "23 октября 16:30 · запись открыта · занято 0 из 3"
 
 
 # ---- локальные помощники -------------------------------------------------------------
@@ -115,7 +116,7 @@ async def test_список_считает_занятые_места(app: App, t
     await app.services.registration.register(event_id, person(2))
     await tg.feed(command_update(OWNER_ID, "/menu"))
     await tg.click(OWNER_ID, _inline(tg), "Встречи")
-    assert "24 октября 17:00 · запись открыта · занято 2 из 3" in _labels(tg)
+    assert "23 октября 16:30 · запись открыта · занято 2 из 3" in _labels(tg)
 
 
 async def test_пустой_список_сообщает_об_отсутствии_встреч(tg: Harness) -> None:
@@ -128,7 +129,7 @@ async def test_список_показывает_закрытую_запись(a
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
     await tg.feed(command_update(OWNER_ID, "/menu"))
     await tg.click(OWNER_ID, _inline(tg), "Встречи")
-    assert "24 октября 17:00 · запись закрыта · занято 0 из 3" in _labels(tg)
+    assert "23 октября 16:30 · запись закрыта · занято 0 из 3" in _labels(tg)
 
 
 async def test_кнопка_обновить_отвечает_обновлено(tg: Harness, event_id: int) -> None:
@@ -153,11 +154,25 @@ async def test_назад_из_списка_возвращает_в_меню(tg:
 async def test_карточка_показывает_данные_встречи(tg: Harness, event_id: int) -> None:
     await _open_card(tg)
     text = _screen(tg)
-    assert "суббота, 24 октября, 17:00" in text
+    assert "<b>пятница, 23 октября, 16:30–18:30</b>" in text
     assert PLACE in text
     assert "Статус: запись открыта" in text
     assert "Занято: 0 из 3, в очереди: 0" in text
-    assert "Дедлайн отмены: пятница, 23 октября, 20:00" in text
+    assert "Дедлайн отмены: четверг, 22 октября, 20:00" in text
+    # Запись закрывается через час после начала: опоздавшие ещё могут записаться
+    assert "Закрытие записи: пятница, 23 октября, 17:30" in text
+    assert "Запрос явки: пятница, 23 октября, 18:00" in text
+
+
+async def test_карточка_показывает_конец_встречи_через_полночь(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    starts_at = (await _event(app, event_id)).starts_at
+    await app.services.events.edit_moments(
+        OWNER_ID, event_id, ends_at=starts_at + timedelta(hours=8)
+    )
+    await _open_card(tg)
+    assert "<b>пятница, 23 октября, 16:30–00:30 (24 октября)</b>" in _screen(tg)
 
 
 async def test_карточка_содержит_кнопки_действий(tg: Harness, event_id: int) -> None:
@@ -207,6 +222,46 @@ async def test_закрыть_запись_меняет_статус_в_базе
 async def test_открыть_запись_возвращает_статус_open(app: App, tg: Harness, event_id: int) -> None:
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
     await _open_card(tg)
+    await _press(tg, "Открыть запись")
+    assert (await _event(app, event_id)).status == EventStatus.OPEN.value
+    assert "Запись открыта." in _screen(tg)
+
+
+async def test_закрыть_запись_можно_после_начала_встречи(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    starts_at = (await _event(app, event_id)).starts_at
+    app.clock.advance(starts_at - app.clock.now() + timedelta(minutes=20))
+    await _open_card(tg)
+    await _press(tg, "Закрыть запись")
+    assert (await _event(app, event_id)).status == EventStatus.CLOSED.value
+    assert "Запись закрыта." in _screen(tg)
+
+
+async def test_открыть_запись_после_времени_закрытия_объясняет_что_делать(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await app.services.events.set_registration_open(OWNER_ID, event_id, False)
+    closes_at = (await _event(app, event_id)).registration_closes_at
+    app.clock.advance(closes_at - app.clock.now() + timedelta(minutes=1))
+    await _open_card(tg)
+    await _press(tg, "Открыть запись")
+    assert _alerts(tg)[-1] == (
+        "Время записи уже вышло. Чтобы открыть запись, сначала передвиньте время закрытия "
+        "в «Моментах»."
+    )
+    assert (await _event(app, event_id)).status == EventStatus.CLOSED.value
+
+
+async def test_открыть_запись_после_переноса_закрытия_в_моментах(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await app.services.events.set_registration_open(OWNER_ID, event_id, False)
+    closes_at = (await _event(app, event_id)).registration_closes_at
+    app.clock.advance(closes_at - app.clock.now() + timedelta(minutes=1))
+    await _open_edit(tg, "Моменты")
+    await _press(tg, "Закрытие записи")
+    await _say(tg, "23.10.2026 18:00")
     await _press(tg, "Открыть запись")
     assert (await _event(app, event_id)).status == EventStatus.OPEN.value
     assert "Запись открыта." in _screen(tg)
@@ -392,7 +447,7 @@ async def test_выгрузка_csv_отправляет_документ_с_bom
     document = tg.session.of("SendDocument")[-1]
     assert document["chat_id"] == OWNER_ID
     payload = document["document"]
-    assert payload.filename == "event-2026-10-24.csv"
+    assert payload.filename == "event-2026-10-23.csv"
     assert payload.data.startswith(b"\xef\xbb\xbf")
     assert "Участник1" in payload.data.decode("utf-8-sig")
     assert _alerts(tg)[-1] == "Файл отправлен."
@@ -612,6 +667,57 @@ async def test_несогласованный_момент_отклоняетс�
     await _press(tg, "Закрытие записи")
     before = (await _event(app, event_id)).registration_closes_at
     await _say(tg, "25.10.2026 10:00")
+    assert _said(tg, "Моменты времени не согласованы")
+    assert (await _event(app, event_id)).registration_closes_at == before
+
+
+async def test_моменты_показывают_конец_встречи_и_закрытие_записи(
+    tg: Harness, event_id: int
+) -> None:
+    await _open_edit(tg, "Моменты")
+    text = _screen(tg)
+    assert "Время окончания: 23.10.2026 18:30" in text
+    assert "Закрытие записи: 23.10.2026 17:30" in text
+
+
+async def test_правка_конца_встречи(app: App, tg: Harness, event_id: int) -> None:
+    await _open_edit(tg, "Моменты")
+    await _press(tg, "Время окончания")
+    await _say(tg, "23.10.2026 19:00")
+    # 19:00 в Монтевидео (UTC-3) = 22:00 UTC
+    assert (await _event(app, event_id)).ends_at == datetime(2026, 10, 23, 22, 0, tzinfo=UTC)
+    assert "Время окончания обновлено." in _screen(tg)
+    assert "<b>пятница, 23 октября, 16:30–19:00</b>" in _screen(tg)
+
+
+async def test_конец_встречи_раньше_начала_отклоняется(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _open_edit(tg, "Моменты")
+    await _press(tg, "Время окончания")
+    before = (await _event(app, event_id)).ends_at
+    await _say(tg, "23.10.2026 16:00")
+    assert _said(tg, "Моменты времени не согласованы")
+    assert (await _event(app, event_id)).ends_at == before
+
+
+async def test_правка_закрытия_записи_после_начала(app: App, tg: Harness, event_id: int) -> None:
+    await _open_edit(tg, "Моменты")
+    await _press(tg, "Закрытие записи")
+    await _say(tg, "23.10.2026 17:45")
+    event = await _event(app, event_id)
+    assert event.registration_closes_at == datetime(2026, 10, 23, 20, 45, tzinfo=UTC)
+    assert "Закрытие записи обновлено." in _screen(tg)
+    assert "Закрытие записи: пятница, 23 октября, 17:45" in _screen(tg)
+
+
+async def test_закрытие_записи_раньше_начала_отклоняется(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _open_edit(tg, "Моменты")
+    await _press(tg, "Закрытие записи")
+    before = (await _event(app, event_id)).registration_closes_at
+    await _say(tg, "23.10.2026 16:00")
     assert _said(tg, "Моменты времени не согласованы")
     assert (await _event(app, event_id)).registration_closes_at == before
 

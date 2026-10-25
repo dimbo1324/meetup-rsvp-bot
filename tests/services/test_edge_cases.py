@@ -122,7 +122,7 @@ async def test_бан_участника_с_гостем_освобождает_
 
 def test_переход_на_зимнее_время_не_сдвигает_время_встречи() -> None:
     """Мадрид: 25.10.2026 переход CEST→CET. Встреча в 17:00 по местному и до, и после."""
-    madrid = ScheduleSettings(timezone="Europe/Madrid", event_time=time(17, 0))
+    madrid = ScheduleSettings(timezone="Europe/Madrid", event_weekday=5, event_time=time(17, 0))
     before = next_event_start(datetime(2026, 10, 20, 12, 0, tzinfo=UTC), madrid)
     after = next_event_start(datetime(2026, 10, 26, 12, 0, tzinfo=UTC), madrid)
 

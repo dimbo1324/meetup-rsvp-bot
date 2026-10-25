@@ -3,13 +3,17 @@
 Введённые значения лежат в `dialog_data` (хранилище диалогов в памяти: после перезапуска бота
 окно сбрасывается), в БД до последнего шага ничего не пишется. Предпросмотр собирается тем же
 рендерером, что и боевой пост, поэтому админ видит ровно то, что получат участники.
+
+Значения «по умолчанию» снимаются один раз при открытии мастера: поля последней неотменённой
+встречи (`last_event_template`), а если встреч ещё не было — общие настройки.
 """
 
 from __future__ import annotations
 
 import html
 import re
-from datetime import UTC, date, datetime, time
+from dataclasses import asdict
+from datetime import UTC, date, datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -19,7 +23,6 @@ from aiogram_dialog.api.entities import MediaAttachment, MediaId
 from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.kbd import (
     Button,
-    Calendar,
     Cancel,
     Column,
     Group,
@@ -27,6 +30,7 @@ from aiogram_dialog.widgets.kbd import (
     Select,
     SwitchTo,
 )
+from aiogram_dialog.widgets.kbd.calendar_kbd import CalendarUserConfig
 from aiogram_dialog.widgets.media import DynamicMedia
 from aiogram_dialog.widgets.text import Const, Format
 
@@ -39,6 +43,8 @@ from meetup_bot.dialogs._common import (
     is_admin,
     middleware_value,
 )
+from meetup_bot.dialogs.calendar_ru import RussianCalendar
+from meetup_bot.dialogs.event_wizard_support import Suggestions, length_warnings, suggestions
 from meetup_bot.dialogs.states import CreateEventSG
 from meetup_bot.renderer.post import (
     CAPTION_LIMIT,
@@ -47,7 +53,7 @@ from meetup_bot.renderer.post import (
     render_post,
     visible_length,
 )
-from meetup_bot.services.errors import InvalidOperation
+from meetup_bot.services.errors import InvalidOperation, PermissionDenied
 from meetup_bot.services.event_validation import (
     MAX_CAPACITY,
     validate_capacity,
@@ -61,10 +67,12 @@ from meetup_bot.texts.render import format_moment
 TOTAL_STEPS = 6
 _TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")
 _QUICK_TIMES = ("12:00", "15:00", "17:00", "18:00", "19:00", "20:00")
+_CALENDAR_ID = "wizard_calendar"
 
 # Ключи dialog_data
 _DATE, _TIME, _PLACE, _URL = "date", "time", "place", "place_url"
 _DESC, _PHOTO, _CAP, _NOTICE = "description_html", "photo", "capacity", "notice"
+_SUGGESTED = "suggested"
 
 
 # ---- общие помощники ----------------------------------------------------------------
@@ -117,6 +125,53 @@ def _starts_at(manager: DialogManager) -> datetime | None:
     return local.astimezone(UTC)
 
 
+async def _on_start(_: Any, manager: DialogManager) -> None:
+    services = get_services(manager)
+    try:
+        template = await services.events.last_event_template(actor_id(manager))
+    except PermissionDenied:
+        # Права отозвали между меню и мастером: первое же действие закроет его через _guard
+        template = None
+    manager.dialog_data[_SUGGESTED] = asdict(suggestions(services.settings, template))
+
+
+def _suggested(manager: DialogManager) -> Suggestions:
+    return Suggestions(**manager.dialog_data[_SUGGESTED])
+
+
+def _post_data(manager: DialogManager, photo: str | None) -> PostData | None:
+    """Пост из введённого в мастере; None, пока не выбраны дата и время."""
+    starts = _starts_at(manager)
+    if starts is None:
+        return None
+    settings = get_services(manager).settings
+    data = manager.dialog_data
+    return PostData(
+        event_id=0,
+        status="open",
+        starts_at=starts,
+        ends_at=compute_times(starts, settings.schedule_now()).ends_at,
+        timezone=settings.timezone_now().key,
+        capacity=int(data.get(_CAP, _suggested(manager).capacity)),
+        seats_taken=0,
+        participants=(),
+        description_html=data.get(_DESC, ""),
+        place=data.get(_PLACE, ""),
+        place_url=data.get(_URL, ""),
+        has_photo=bool(photo),
+        photo_file_id=photo,
+        show_names=settings.get_now("show_names_in_post"),
+        plus_one_enabled=settings.options_now().plus_one_enabled,
+    )
+
+
+def _length_warnings(manager: DialogManager) -> str:
+    """Предупреждения о длине описания для поста с фото и без; пусто, если всё помещается."""
+    post = _post_data(manager, None)
+    lines = [f"⚠️ {html.escape(w)}" for w in length_warnings(post)] if post else []
+    return "\n" + "\n".join(lines) + "\n" if lines else ""
+
+
 async def _go(manager: DialogManager, state: Any) -> None:
     _set_notice(manager, None)
     await manager.switch_to(state)
@@ -137,10 +192,22 @@ def _cancel() -> Cancel:
 # ---- шаг 1: дата ---------------------------------------------------------------------
 
 
+async def _calendar_config(manager: DialogManager) -> CalendarUserConfig:
+    """«Сегодня» в календаре — по часовому поясу встреч, а не сервера."""
+    offset = _now(manager).astimezone(_tz(manager)).utcoffset()
+    assert offset is not None
+    return CalendarUserConfig(timezone=timezone(offset))
+
+
 async def _date_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     services = get_services(dialog_manager)
     tz = services.settings.timezone_now()
-    nearest = next_event_start(_now(dialog_manager), services.settings.schedule_now())
+    now = _now(dialog_manager)
+    calendar = dialog_manager.find(_CALENDAR_ID)
+    if calendar is not None and calendar.get_offset() is None:
+        # Иначе календарь открылся бы на месяце системных часов, а не часов бота
+        calendar.set_offset(now.astimezone(tz).date())
+    nearest = next_event_start(now, services.settings.schedule_now())
     return {
         "text": _head(1, "дата")
         + _notice(dialog_manager)
@@ -177,18 +244,16 @@ async def _on_nearest(callback: CallbackQuery, _: Any, manager: DialogManager) -
 
 
 async def _time_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    schedule = get_services(dialog_manager).settings.schedule_now()
-    default = f"{schedule.event_time:%H:%M}"
+    suggested = _suggested(dialog_manager)
     picked = date.fromisoformat(dialog_manager.dialog_data[_DATE])
-    quick = sorted({*_QUICK_TIMES, default})
     return {
         "text": _head(2, "время")
         + f"Дата: <b>{picked:%d.%m.%Y}</b>\n"
         + _notice(dialog_manager)
-        + f"\nВыберите время кнопкой или пришлите его в формате <code>ЧЧ:ММ</code>, "
-        f"например <code>18:30</code>. По умолчанию — {default}.",
-        "quick_times": quick,
-        "default_time": default,
+        + "\nВыберите время кнопкой или пришлите его в формате <code>ЧЧ:ММ</code>, "
+        f"например <code>18:30</code>. По умолчанию — {suggested.time}{suggested.source}.",
+        "quick_times": list(_QUICK_TIMES),
+        "default_time": suggested.time,
     }
 
 
@@ -225,6 +290,13 @@ async def _on_quick_time(
     await _accept_time(callback, manager, hours, minutes)
 
 
+async def _on_time_default(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
+    if not await _guard(callback, manager):
+        return
+    hours, minutes = map(int, _suggested(manager).time.split(":"))
+    await _accept_time(callback, manager, hours, minutes)
+
+
 async def _on_time_text(message: Message, _: Any, manager: DialogManager) -> None:
     if not await _guard(message, manager):
         return
@@ -239,23 +311,28 @@ async def _on_time_text(message: Message, _: Any, manager: DialogManager) -> Non
 
 
 async def _place_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    defaults = get_services(dialog_manager).settings.defaults_now()
-    shown = html.escape(defaults.place) if defaults.place else "не задано"
+    suggested = _suggested(dialog_manager)
+    has_default = bool(suggested.place or suggested.place_url)
+    if has_default:
+        shown = html.escape(suggested.place or suggested.place_url) + suggested.source
+    else:
+        shown = "не задано"
     return {
         "text": _head(3, "место")
         + _notice(dialog_manager)
         + "\nПришлите название места. Ссылку на карту можно добавить через «|»:\n"
         "<code>Кафе «Утро» | https://maps.example.com/xyz</code>\n"
         f"Место по умолчанию: {shown}",
+        "has_default_place": has_default,
     }
 
 
 async def _on_place_default(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    defaults = get_services(manager).settings.defaults_now()
-    manager.dialog_data[_PLACE] = defaults.place
-    manager.dialog_data[_URL] = defaults.place_url
+    suggested = _suggested(manager)
+    manager.dialog_data[_PLACE] = suggested.place
+    manager.dialog_data[_URL] = suggested.place_url
     await _go(manager, CreateEventSG.description)
 
 
@@ -287,22 +364,26 @@ async def _on_place_text(message: Message, _: Any, manager: DialogManager) -> No
 # ---- шаг 4: текст --------------------------------------------------------------------
 
 
+def _default_hint(manager: DialogManager, what: str) -> str:
+    return f"\nЕсть {what} по умолчанию{_suggested(manager).source} — кнопка «По умолчанию»."
+
+
 async def _description_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    defaults = get_services(dialog_manager).settings.defaults_now()
+    has_default = bool(_suggested(dialog_manager).description_html)
     return {
         "text": _head(4, "текст объявления")
         + _notice(dialog_manager)
+        + _length_warnings(dialog_manager)
         + "\nПришлите текст встречи: форматирование (жирный, курсив, ссылки) сохранится. "
-        "Или выберите кнопку.",
-        "has_default_text": bool(defaults.description_html),
+        "Или выберите кнопку." + (_default_hint(dialog_manager, "текст") if has_default else ""),
+        "has_default_text": has_default,
     }
 
 
 async def _on_description_default(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    defaults = get_services(manager).settings.defaults_now()
-    manager.dialog_data[_DESC] = defaults.description_html
+    manager.dialog_data[_DESC] = _suggested(manager).description_html
     await _go(manager, CreateEventSG.photo)
 
 
@@ -333,20 +414,21 @@ async def _on_description_text(message: Message, _: Any, manager: DialogManager)
 
 
 async def _photo_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    defaults = get_services(dialog_manager).settings.defaults_now()
+    has_default = bool(_suggested(dialog_manager).photo_file_id)
     return {
         "text": _head(5, "фото")
         + _notice(dialog_manager)
-        + "\nПришлите фото для поста (именно фото, не файл) или пропустите шаг.",
-        "has_default_photo": bool(defaults.photo_file_id),
+        + _length_warnings(dialog_manager)
+        + "\nПришлите фото для поста (именно фото, не файл) или пропустите шаг."
+        + (_default_hint(dialog_manager, "фото") if has_default else ""),
+        "has_default_photo": has_default,
     }
 
 
 async def _on_photo_default(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    defaults = get_services(manager).settings.defaults_now()
-    manager.dialog_data[_PHOTO] = defaults.photo_file_id
+    manager.dialog_data[_PHOTO] = _suggested(manager).photo_file_id
     await _go(manager, CreateEventSG.capacity)
 
 
@@ -377,19 +459,20 @@ async def _on_photo_wrong(message: Message, _: Any, manager: DialogManager) -> N
 
 
 async def _capacity_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    defaults = get_services(dialog_manager).settings.defaults_now()
+    default = _suggested(dialog_manager).capacity
     return {
         "text": _head(6, "лимит мест")
         + _notice(dialog_manager)
-        + f"\nПришлите число мест от 1 до {MAX_CAPACITY} или нажмите кнопку.",
-        "default_capacity": defaults.capacity,
+        + f"\nПришлите число мест от 1 до {MAX_CAPACITY} или нажмите кнопку. "
+        f"По умолчанию — {default}{_suggested(dialog_manager).source}.",
+        "default_capacity": default,
     }
 
 
 async def _on_capacity_default(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    manager.dialog_data[_CAP] = get_services(manager).settings.defaults_now().capacity
+    manager.dialog_data[_CAP] = _suggested(manager).capacity
     await _go(manager, CreateEventSG.preview)
 
 
@@ -413,28 +496,11 @@ async def _on_capacity_text(message: Message, _: Any, manager: DialogManager) ->
 
 
 async def _preview_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    services = get_services(dialog_manager)
     data = dialog_manager.dialog_data
-    starts = _starts_at(dialog_manager)
-    if starts is None or _CAP not in data:
-        return {"text": "Данные неполные, начните заново.", "photo": None, "has_photo": False}
     photo = data.get(_PHOTO)
-    post = PostData(
-        event_id=0,
-        status="open",
-        starts_at=starts,
-        timezone=services.settings.timezone_now().key,
-        capacity=int(data[_CAP]),
-        seats_taken=0,
-        participants=(),
-        description_html=data.get(_DESC, ""),
-        place=data.get(_PLACE, ""),
-        place_url=data.get(_URL, ""),
-        has_photo=bool(photo),
-        photo_file_id=photo,
-        show_names=services.settings.get_now("show_names_in_post"),
-        plus_one_enabled=services.settings.options_now().plus_one_enabled,
-    )
+    post = _post_data(dialog_manager, photo)
+    if post is None or _CAP not in data:
+        return {"text": "Данные неполные, начните заново.", "photo": None, "has_photo": False}
     rendered = render_post(post)
     buttons = " | ".join(b.text for row in rendered.keyboard for b in row)
     header = f"<b>👁 Предпросмотр. Всё верно?</b>\n{_notice(dialog_manager)}\n"
@@ -495,7 +561,7 @@ _BODY = Format("{text}")
 
 _date_window = Window(
     _BODY,
-    Calendar(id="wizard_calendar", on_click=_on_calendar),
+    RussianCalendar(id=_CALENDAR_ID, on_click=_on_calendar, user_config=_calendar_config),
     Button(Format("📅 Ближайшая: {nearest}"), id="nearest_date", on_click=_on_nearest),
     _cancel(),
     state=CreateEventSG.date,
@@ -514,6 +580,7 @@ _time_window = Window(
         ),
         width=3,
     ),
+    Button(Format("По умолчанию ({default_time})"), id="time_default", on_click=_on_time_default),
     MessageInput(_on_time_text, content_types=ContentType.TEXT),
     Row(_back(CreateEventSG.date, "time"), _cancel()),
     state=CreateEventSG.time,
@@ -522,7 +589,12 @@ _time_window = Window(
 
 _place_window = Window(
     _BODY,
-    Button(Const("По умолчанию"), id="place_default", on_click=_on_place_default),
+    Button(
+        Const("По умолчанию"),
+        id="place_default",
+        on_click=_on_place_default,
+        when="has_default_place",
+    ),
     Button(Const("Без места"), id="place_none", on_click=_on_place_none),
     MessageInput(_on_place_text, content_types=ContentType.TEXT),
     Row(_back(CreateEventSG.time, "place"), _cancel()),
@@ -592,5 +664,6 @@ DIALOGS: list[Dialog] = [
         _photo_window,
         _capacity_window,
         _preview_window,
+        on_start=_on_start,
     )
 ]

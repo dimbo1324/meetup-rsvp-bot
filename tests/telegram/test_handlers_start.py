@@ -204,7 +204,7 @@ async def test_dev_shift_сдвигает_часы_и_показывает_вр�
     tg.dispatcher.workflow_data["clock"] = shifted
     await tg.feed(command_update(OWNER_ID, "/dev_shift 60"))
     assert shifted.offset == timedelta(minutes=60)
-    assert sent_texts(tg) == ["Часы сдвинуты на 60 мин. Сейчас: пятница, 23 октября, 10:00."]
+    assert sent_texts(tg) == ["Часы сдвинуты на 60 мин. Сейчас: четверг, 22 октября, 10:00."]
 
 
 async def test_dev_shift_допускает_отрицательное_значение(tg: Harness) -> None:

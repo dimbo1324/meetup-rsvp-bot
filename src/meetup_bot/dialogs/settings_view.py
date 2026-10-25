@@ -6,17 +6,9 @@ import html
 from typing import Any
 
 from meetup_bot.services.settings_schema import SCHEMA, Kind, SettingSpec
+from meetup_bot.texts.render import WEEKDAYS
 
 WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
-WEEKDAYS_FULL = (
-    "понедельник",
-    "вторник",
-    "среда",
-    "четверг",
-    "пятница",
-    "суббота",
-    "воскресенье",
-)
 WEEKDAY_KEYS = frozenset({"event_weekday"})
 PHOTO_KEY = "default_photo_file_id"
 
@@ -37,6 +29,7 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
             "capacity",
             "event_weekday",
             "event_time",
+            "event_duration_minutes",
             "default_place",
             "default_place_url",
             "default_description",
@@ -52,10 +45,12 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
             "auto_create_time",
             "cancel_deadline_days_before",
             "cancel_deadline_time",
-            "registration_close_hours_before",
+            "registration_close_minutes_after_start",
             "reminder_enabled",
             "reminder_hours_before",
-            "attendance_prompt_hours_after",
+            "attendance_prompt_minutes_after",
+            "post_reminder_days_before",
+            "post_reminder_time",
         ),
     ),
     "rules": (
@@ -79,6 +74,7 @@ LABELS: dict[str, str] = {
     "capacity": "Лимит мест",
     "event_weekday": "День встречи",
     "event_time": "Время начала",
+    "event_duration_minutes": "Длительность встречи",
     "default_place": "Место",
     "default_place_url": "Ссылка на карту",
     "default_description": "Описание в посте",
@@ -88,10 +84,12 @@ LABELS: dict[str, str] = {
     "auto_create_time": "Время автосоздания",
     "cancel_deadline_days_before": "Дедлайн отмены: дней до встречи",
     "cancel_deadline_time": "Дедлайн отмены: время",
-    "registration_close_hours_before": "Закрытие записи",
+    "registration_close_minutes_after_start": "Закрытие записи",
     "reminder_enabled": "Напоминания в личку",
     "reminder_hours_before": "Когда напоминать",
-    "attendance_prompt_hours_after": "Запрос явки через",
+    "attendance_prompt_minutes_after": "Запрос явки через",
+    "post_reminder_days_before": "Напоминание разослать пост",
+    "post_reminder_time": "Время напоминания о посте",
     "ban_after_no_shows": "Автобан по неявкам",
     "remove_banned_from_future_events": "Снимать забаненных со встреч",
     "notify_user_on_ban": "Сообщать о бане человеку",
@@ -111,8 +109,18 @@ EXTRA_HELP: dict[str, str] = {
         "Если место освободилось позже чем за столько часов до встречи, "
         "человека из листа ожидания записывают как «поздно»."
     ),
-    "registration_close_hours_before": (
-        "За сколько часов до начала запись закрывается. 0 — запись идёт до самого начала."
+    "registration_close_minutes_after_start": (
+        "Через сколько минут после начала встречи запись закрывается: опоздавшие ещё могут "
+        "записаться, если есть места. 0 — в момент начала. Закрыть раньше можно вручную "
+        "в карточке встречи."
+    ),
+    "attendance_prompt_minutes_after": (
+        "Через сколько минут после начала прислать админам список для отметки явки. "
+        "Не раньше закрытия записи."
+    ),
+    "post_reminder_days_before": (
+        "За сколько дней до встречи напомнить в служебном чате, что пост ещё не разослан. "
+        "0 — не напоминать."
     ),
     "auto_create_days_after": (
         "Через сколько дней после встречи создавать следующую: "
@@ -126,10 +134,19 @@ _UNITS: dict[str, str] = {
     "capacity": " мест",
     "cancel_deadline_days_before": " дн.",
     "auto_create_days_after": " дн. после встречи",
-    "registration_close_hours_before": " ч до начала",
+    "event_duration_minutes": " мин",
+    "registration_close_minutes_after_start": " мин после начала",
+    "post_reminder_days_before": " дн. до встречи",
     "reminder_hours_before": " ч до встречи",
-    "attendance_prompt_hours_after": " ч после начала",
+    "attendance_prompt_minutes_after": " мин после начала",
     "late_promotion_hours": " ч",
+}
+
+# Числовые настройки, у которых 0 означает особый режим, а не «0 единиц»
+_ZERO_VALUES: dict[str, str] = {
+    "ban_after_no_shows": "выключен",
+    "post_reminder_days_before": "выключено",
+    "registration_close_minutes_after_start": "в момент начала",
 }
 
 _FREE_TEXT_KINDS = frozenset({Kind.STR, Kind.URL, Kind.HTML, Kind.OPT_STR})
@@ -154,11 +171,13 @@ def display_value(key: str, value: Any, *, limit: int = 40) -> str:
     if spec.kind is Kind.BOOL:
         return "включено" if value else "выключено"
     if key in WEEKDAY_KEYS:
-        return WEEKDAYS_FULL[int(value)]
+        return WEEKDAYS[int(value)]
     if key == PHOTO_KEY:
         return "задано" if value else "не задано"
+    if spec.kind is Kind.INT and int(value) == 0 and key in _ZERO_VALUES:
+        return _ZERO_VALUES[key]
     if key == "ban_after_no_shows":
-        return "выключен" if int(value) == 0 else f"порог {int(value)}"
+        return f"порог {int(value)}"
     if spec.kind is Kind.INT:
         return f"{value}{_UNITS.get(key, '')}"
     text = " ".join(str(value).split()) if value is not None else ""

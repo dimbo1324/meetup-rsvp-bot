@@ -67,8 +67,8 @@ async def test_csv_строка_участника_по_образцу_прил�
     await app.services.registration.register(event_id, UserInfo(111111, "Света", None, "sveta_mvd"))
     rows = await export(app, event_id)
     assert rows[1] == [
-        "2026-10-24", "1", "Света", "sveta_mvd", "111111", "tg://user?id=111111",
-        "active", "0", "2026-10-23 09:00", "unknown",
+        "2026-10-23", "1", "Света", "sveta_mvd", "111111", "tg://user?id=111111",
+        "active", "0", "2026-10-22 09:00", "unknown",
     ]  # fmt: skip
 
 
@@ -76,8 +76,8 @@ async def test_csv_время_в_часовом_поясе_из_аргумент
     await app.services.registration.register(event_id, person(1))
     local = (await export(app, event_id, tz=TZ))[1]
     utc = (await export(app, event_id, tz="UTC"))[1]
-    assert (local[0], local[8]) == ("2026-10-24", "2026-10-23 09:00")
-    assert (utc[0], utc[8]) == ("2026-10-24", "2026-10-23 12:00")
+    assert (local[0], local[8]) == ("2026-10-23", "2026-10-22 09:00")
+    assert (utc[0], utc[8]) == ("2026-10-23", "2026-10-22 12:00")
 
 
 async def test_csv_дата_встречи_локальная_а_не_UTC(app: App) -> None:

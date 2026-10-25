@@ -18,8 +18,9 @@ from tests.tg_fake import Harness
 
 @pytest.fixture
 def clock() -> FakeClock:
-    # Пятница 12:00 UTC (09:00 в Монтевидео): до дедлайна отмены ближайшей субботы
-    return FakeClock(datetime(2026, 10, 23, 12, 0, tzinfo=UTC))
+    # Четверг 12:00 UTC (09:00 в Монтевидео): до дедлайна отмены ближайшей пятничной встречи
+    # (четверг 20:00); сама встреча — пятница 23.10 16:30 = 19:30 UTC
+    return FakeClock(datetime(2026, 10, 22, 12, 0, tzinfo=UTC))
 
 
 @pytest.fixture
@@ -51,7 +52,7 @@ def event_service(sessions: async_sessionmaker[AsyncSession], clock: FakeClock) 
 
 @pytest.fixture
 async def app(tmp_path: Path, clock: FakeClock) -> AsyncIterator[App]:
-    """Полное приложение на фейковых часах (пятница 12:00 UTC); владелец id=1, админ id=2."""
+    """Полное приложение на фейковых часах (четверг 12:00 UTC); владелец id=1, админ id=2."""
     application = await make_app(tmp_path, clock)
     yield application
     await application.engine.dispose()

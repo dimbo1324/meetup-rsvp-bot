@@ -24,7 +24,7 @@ INLINE = "inline-1"
 USER_INFO = UserInfo(id=USER, first_name="Люди1001", username="u1001")
 DEFAULTS = {
     "text.already": "Вы уже записаны.",
-    "text.full": "Извините, мест не осталось. Попробуйте в следующую субботу!",
+    "text.full": "Извините, мест не осталось. Попробуйте в следующий раз!",
     "text.closed": "Запись на эту встречу закрыта.",
     "text.cancelled": "Запись отменена. Спасибо, что предупредили!",
     "text.not_registered": "Вы не были записаны на эту встречу.",
@@ -59,8 +59,8 @@ async def test_успешная_запись_показывает_дату_и_д
     event_id = await make_event(app)
     answer = await press(tg, event_id)
     assert answer["show_alert"] is True
-    assert answer["text"].startswith("Вы записаны на суббота, 24 октября, 17:00.")
-    assert "отмените запись до 23 октября, 20:00" in answer["text"]
+    assert answer["text"].startswith("Вы записаны на пятница, 23 октября, 16:30.")
+    assert "отмените запись до 22 октября, 20:00" in answer["text"]
 
 
 async def test_ответ_всегда_во_всплывающем_окне_и_не_длиннее_лимита(app: App, tg: Harness) -> None:
@@ -200,7 +200,7 @@ async def test_отмена_подставляет_дату_в_настроен�
     event_id = await make_event(app)
     await press(tg, event_id)
     answer = await press(tg, event_id, action="c")
-    assert answer["text"] == "Снято: суббота, 24 октября, 17:00"
+    assert answer["text"] == "Снято: пятница, 23 октября, 16:30"
 
 
 async def test_текст_на_границе_лимита_окна_не_режется(app: App, tg: Harness) -> None:

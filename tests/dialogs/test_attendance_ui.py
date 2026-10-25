@@ -103,7 +103,7 @@ async def test_список_отправляется_админу_с_кнопк�
     assert status is SheetStatus.SENT
     sent = tg.session.of("SendMessage")[-1]
     assert sent["chat_id"] == OWNER_ID
-    assert "Явка: встреча суббота, 24 октября, 17:00, Кафе" in sent["text"]
+    assert "Явка: встреча пятница, 23 октября, 16:30–18:30, Кафе" in sent["text"]
     assert "Нажмите на имя, чтобы отметить неявку" in sent["text"]
     assert _labels(tg, _last_sheet_mid(tg)) == [
         "✅ Участник1",

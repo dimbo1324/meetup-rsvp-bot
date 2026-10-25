@@ -350,7 +350,7 @@ async def test_планировщик_делает_бэкап_живой_баз�
     first = await app.services.scheduler.tick()
     second = await app.services.scheduler.tick()
     assert (first["backup"], second["backup"]) == (1, 0)
-    path = app.tmp_path / "backups" / "bot-2026-10-23.db"
+    path = app.tmp_path / "backups" / "bot-2026-10-22.db"
     connection = sqlite3.connect(path)
     try:
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master")}
@@ -374,7 +374,7 @@ async def test_планировщик_отправляет_копию_в_слу�
         await application.services.scheduler.tick()
     finally:
         await application.engine.dispose()
-    assert sent == [tmp_path / "backups" / "bot-2026-10-23.db"]
+    assert sent == [tmp_path / "backups" / "bot-2026-10-22.db"]
 
 
 async def test_бэкап_берёт_часовой_пояс_из_настроек(app: App) -> None:
@@ -383,4 +383,4 @@ async def test_бэкап_берёт_часовой_пояс_из_настрое
     assert (await app.services.scheduler.tick())["backup"] == 0
     await app.services.settings.set("timezone", "UTC", 1)
     assert (await app.services.scheduler.tick())["backup"] == 1
-    assert os.path.exists(app.tmp_path / "backups" / "bot-2026-10-23.db")
+    assert os.path.exists(app.tmp_path / "backups" / "bot-2026-10-22.db")

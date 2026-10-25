@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -97,8 +97,6 @@ class CreatedEvent:
 class RescheduleResult:
     # Закрытая встреча открыта заново автоматически (новые моменты в будущем)
     registration_reopened: bool
-    # Встреча была закрыта и остаётся закрытой: админу нужно открыть запись вручную
-    registration_stays_closed: bool
 
 
 class EventService:
@@ -229,6 +227,7 @@ class EventService:
             event = Event(
                 status=EventStatus.OPEN.value,
                 starts_at=times.starts_at,
+                ends_at=times.ends_at,
                 capacity=capacity,
                 description_html=description_html,
                 photo_file_id=photo_file_id,
@@ -344,19 +343,23 @@ class EventService:
     ) -> RescheduleResult:
         """Переносит встречу: все моменты пересчитываются по 5.2, записанным уходит уведомление.
 
-        Закрытая встреча открывается заново автоматически, если и закрытие записи, и начало
-        нового времени в будущем; иначе остаётся закрытой (см. `registration_stays_closed`).
+        Длительность встречи сохраняется: её могли задать вручную, а не из настроек.
+        Закрытая встреча открывается заново автоматически: новое начало в будущем, а закрытие
+        записи не раньше начала.
         """
         now = self._clock.now()
         schedule = self._schedule_settings()
         try:
-            times = compute_times(new_starts_at, schedule)
+            computed = compute_times(new_starts_at, schedule)
         except ValueError as exc:
             raise InvalidOperation("invalid_times", str(exc)) from exc
-        if times.starts_at <= now:
+        if computed.starts_at <= now:
             raise InvalidOperation("invalid_times", "Новое время встречи уже прошло.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
+            times = replace(
+                computed, ends_at=computed.starts_at + (event.ends_at - event.starts_at)
+            )
             try:
                 # Порядок считается от создания встречи, а не от «сейчас» (как в edit_moments):
                 # иначе нельзя было бы перенести встречу на близкую дату
@@ -368,7 +371,6 @@ class EventService:
             event.updated_at = now
             recipients = await events_admin.dm_recipients(session, event_id, events_admin.LIVE)
             reopen = event.status == EventStatus.CLOSED.value and times.registration_closes_at > now
-            stays_closed = event.status == EventStatus.CLOSED.value and not reopen
             promotions: list[Promotion] = []
             if reopen:
                 promotions = await self._reopen(session, event, now)
@@ -391,9 +393,7 @@ class EventService:
         promoted_ids = {p.user_id for p in promotions}
         await send_dms(self._notifier, [u for u in recipients if u not in promoted_ids], text)
         await notify_promotions(self._notifier, self._render, promotions)
-        return RescheduleResult(
-            registration_reopened=reopen, registration_stays_closed=stays_closed
-        )
+        return RescheduleResult(registration_reopened=reopen)
 
     async def set_capacity(self, actor_id: int, event_id: int, new_capacity: int) -> None:
         new_capacity = validate_capacity(new_capacity)
@@ -429,7 +429,11 @@ class EventService:
         await notify_promotions(self._notifier, self._render, promotions)
 
     async def set_registration_open(self, actor_id: int, event_id: int, open: bool) -> None:
-        """Открывает или закрывает запись; при открытии освободившиеся места раздаёт очередь."""
+        """Открывает или закрывает запись; при открытии освободившиеся места раздаёт очередь.
+
+        Закрыть можно в любой момент до завершения встречи, в том числе после начала. Открыть —
+        только пока не наступило закрытие записи по времени: иначе планировщик закрыл бы её снова.
+        """
         now = self._clock.now()
         promotions: list[Promotion] = []
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
@@ -443,8 +447,11 @@ class EventService:
             if open == (current == EventStatus.OPEN.value):
                 return
             if open:
-                if now >= event.starts_at:
-                    raise InvalidOperation("already_started")
+                if now >= event.registration_closes_at:
+                    raise InvalidOperation(
+                        "registration_time_passed",
+                        "Время записи вышло: сначала перенесите закрытие записи.",
+                    )
                 promotions = await self._reopen(session, event, now)
                 action = "event.open"
             else:
@@ -488,20 +495,31 @@ class EventService:
         actor_id: int,
         event_id: int,
         *,
+        ends_at: datetime | None = None,
         cancel_deadline_at: datetime | None = None,
         registration_closes_at: datetime | None = None,
         reminder_at: datetime | None = None,
         attendance_prompt_at: datetime | None = None,
     ) -> None:
-        """Ручная правка моментов; инварианты 5.2 проверяются по итоговому набору."""
+        """Ручная правка моментов; инварианты 5.2 проверяются по итоговому набору.
+
+        Закрытие записи может быть позже начала (опоздавшие записываются, пока есть места).
+        """
         now = self._clock.now()
-        given = (cancel_deadline_at, registration_closes_at, reminder_at, attendance_prompt_at)
+        given = (
+            ends_at,
+            cancel_deadline_at,
+            registration_closes_at,
+            reminder_at,
+            attendance_prompt_at,
+        )
         if any(value is not None and value.tzinfo is None for value in given):
             raise InvalidOperation("invalid_times", "Время должно быть с часовым поясом.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
             new = EventTimes(
                 starts_at=event.starts_at,
+                ends_at=ends_at or event.ends_at,
                 cancel_deadline_at=cancel_deadline_at or event.cancel_deadline_at,
                 registration_closes_at=registration_closes_at or event.registration_closes_at,
                 reminder_at=reminder_at or event.reminder_at,
@@ -520,6 +538,7 @@ class EventService:
                 event.attendance_prompt_sent_at = None
                 event.attendance_reminder_sent_at = None
             for name in (
+                "ends_at",
                 "cancel_deadline_at",
                 "registration_closes_at",
                 "reminder_at",
@@ -544,9 +563,6 @@ class EventService:
         """Открывает запись и раздаёт освободившиеся места очереди (под блокировкой встречи)."""
         event.status = EventStatus.OPEN.value
         event.closed_at = None
-        # Иначе запись осталась бы закрытой по времени, а планировщик закрыл бы её снова
-        if event.registration_closes_at <= now:
-            event.registration_closes_at = event.starts_at
         await session.flush()
         return await promote_waitlist(
             session, event, now, late_promotion_hours=self._rules_settings().late_promotion_hours
@@ -555,12 +571,14 @@ class EventService:
     @staticmethod
     def _apply_times(event: Event, times: EventTimes) -> None:
         event.starts_at = times.starts_at
+        event.ends_at = times.ends_at
         event.cancel_deadline_at = times.cancel_deadline_at
         event.registration_closes_at = times.registration_closes_at
         event.reminder_at = times.reminder_at
         event.attendance_prompt_at = times.attendance_prompt_at
         # Моменты сдвинулись, поэтому напоминания и опрос явки должны сработать заново
         event.reminder_sent_at = None
+        event.post_reminder_sent_at = None
         event.attendance_prompt_sent_at = None
         event.attendance_reminder_sent_at = None
 

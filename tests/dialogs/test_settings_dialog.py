@@ -1,6 +1,6 @@
 """Диалог настроек: группы, переключатели, ввод чисел/времени/текстов, сброс, часовой пояс."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram.types import Message, PhotoSize, Update
 
@@ -139,7 +139,7 @@ async def test_текст_в_настройке_с_кнопками_не_при�
 
 async def test_выбор_дня_недели_кнопкой(app: App, tg: Harness) -> None:
     await _open(tg, "Встречи по умолчанию", "День встречи")
-    assert "✅ сб" in _labels(tg)
+    assert "✅ пт" in _labels(tg)
     await _press_exact(tg, "вс")
     assert app.services.settings.get_now("event_weekday") == 6
     assert "Сейчас: <b>воскресенье</b>" in _screen(tg)
@@ -191,7 +191,7 @@ async def test_неверное_время_отклоняется(app: App, tg: 
     await _open(tg, "Встречи по умолчанию", "Время начала")
     await _say(tg, "25:00")
     assert "Время должно быть в формате ЧЧ:ММ, например 17:00." in _screen(tg)
-    assert app.services.settings.get_now("event_time") == "17:00"
+    assert app.services.settings.get_now("event_time") == "16:30"
 
 
 async def test_новое_время_применяется_к_ближайшей_встрече(app: App, tg: Harness) -> None:
@@ -203,7 +203,83 @@ async def test_новое_время_применяется_к_ближайше�
 
         event = await session.get(Event, created.event_id)
     assert event is not None
-    assert event.starts_at == datetime(2026, 10, 24, 22, 0, tzinfo=UTC)
+    # Пятница 23.10, 19:00 в Монтевидео (UTC-3) = 22:00 UTC
+    assert event.starts_at == datetime(2026, 10, 23, 22, 0, tzinfo=UTC)
+
+
+# ---- моменты встречи: длительность, закрытие записи, запрос явки, напоминание о посте ------
+
+
+async def test_новые_ключи_видны_в_группах_с_единицами(tg: Harness) -> None:
+    await _open(tg, "Встречи по умолчанию")
+    assert "Длительность встречи: 120 мин · по умолч." in _labels(tg)
+    await _press(tg, "Назад")
+    await _press(tg, "Расписание")
+    labels = _labels(tg)
+    for expected in (
+        "Закрытие записи: 60 мин после начала · по умолч.",
+        "Запрос явки через: 90 мин после начала · по умолч.",
+        "Напоминание разослать пост: 2 дн. до встречи · по умолч.",
+        "Время напоминания о посте: 10:00 · по умолч.",
+    ):
+        assert expected in labels
+
+
+async def test_закрытие_записи_меняется_и_сбрасывается(app: App, tg: Harness) -> None:
+    await _open(tg, "Расписание", "Закрытие записи")
+    assert "Сейчас: <b>60 мин после начала</b> (по умолчанию)" in _screen(tg)
+    await _say(tg, "30")
+    assert app.services.settings.get_now("registration_close_minutes_after_start") == 30
+    assert "Сейчас: <b>30 мин после начала</b>" in _screen(tg)
+    await _say(tg, "0")
+    assert "Сейчас: <b>в момент начала</b>" in _screen(tg)
+    await _press(tg, "Сбросить по умолчанию")
+    assert app.services.settings.get_now("registration_close_minutes_after_start") == 60
+
+
+async def test_закрытие_записи_вне_диапазона_отклоняется(app: App, tg: Harness) -> None:
+    await _open(tg, "Расписание", "Закрытие записи")
+    await _say(tg, "300")
+    assert "Значение должно быть от 0 до 240." in _screen(tg)
+    assert app.services.settings.get_now("registration_close_minutes_after_start") == 60
+
+
+async def test_запрос_явки_в_минутах(app: App, tg: Harness) -> None:
+    await _open(tg, "Расписание", "Запрос явки через")
+    await _say(tg, "120")
+    assert app.services.settings.get_now("attendance_prompt_minutes_after") == 120
+    assert "Сейчас: <b>120 мин после начала</b>" in _screen(tg)
+
+
+async def test_длительность_встречи_применяется_к_новой_встрече(app: App, tg: Harness) -> None:
+    await _open(tg, "Встречи по умолчанию", "Длительность встречи")
+    await _say(tg, "90")
+    assert app.services.settings.get_now("event_duration_minutes") == 90
+    assert "Сейчас: <b>90 мин</b>" in _screen(tg)
+    created = await app.services.events.create_event_as_admin(OWNER_ID)
+    async with app.sessions() as session:
+        from meetup_bot.db.models import Event
+
+        event = await session.get(Event, created.event_id)
+    assert event is not None
+    assert event.ends_at - event.starts_at == timedelta(minutes=90)
+
+
+async def test_напоминание_о_посте_выключается_нулём(app: App, tg: Harness) -> None:
+    await _open(tg, "Расписание", "Напоминание разослать пост")
+    await _say(tg, "0")
+    assert app.services.settings.get_now("post_reminder_days_before") == 0
+    assert "Сейчас: <b>выключено</b>" in _screen(tg)
+
+
+async def test_время_напоминания_о_посте(app: App, tg: Harness) -> None:
+    await _open(tg, "Расписание", "Время напоминания о посте")
+    await _say(tg, "25:00")
+    assert app.services.settings.get_now("post_reminder_time") == "10:00"
+    await _say(tg, "09:15")
+    assert app.services.settings.get_now("post_reminder_time") == "09:15"
+    await _press(tg, "Сбросить по умолчанию")
+    assert app.services.settings.get_now("post_reminder_time") == "10:00"
 
 
 # ---- строки, ссылки, описание, фото ------------------------------------------------------------
@@ -350,8 +426,8 @@ async def test_смена_пояса_меняет_время_в_списке_в�
     await _press(tg, "Назад")
     await _press(tg, "В меню")
     await _press(tg, "Встречи")
-    # 17:00 в Монтевидео = 20:00 UTC = 23:00 в Москве
-    assert any(t.startswith("24 октября 23:00") for t in _labels(tg))
+    # 16:30 в Монтевидео = 19:30 UTC = 22:30 в Москве
+    assert any(t.startswith("23 октября 22:30") for t in _labels(tg))
 
 
 # ---- права ---------------------------------------------------------------------------------------

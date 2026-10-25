@@ -1,5 +1,6 @@
 """Мастер «Новая встреча»: шаги, проверки ввода, предпросмотр, создание и отмена."""
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from aiogram.types import Message, PhotoSize, Update
@@ -9,8 +10,9 @@ from meetup_bot.db.models import Event
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
-# 18:00 в Монтевидео (UTC-3) в ближайшую субботу
-SATURDAY_18 = datetime(2026, 10, 24, 21, 0, tzinfo=UTC)
+# Часы фикстуры: четверг 22.10.2026, 09:00 в Монтевидео (UTC-3); встреча по умолчанию — пятница
+# 18:00 в Монтевидео в ближайшую пятницу
+FRIDAY_18 = datetime(2026, 10, 23, 21, 0, tzinfo=UTC)
 
 
 # ---- локальные помощники -------------------------------------------------------------
@@ -114,7 +116,7 @@ async def test_полный_проход_мастера_создаёт_встр�
     events = await _events(app)
     assert len(events) == 1
     event = events[0]
-    assert event.starts_at == SATURDAY_18
+    assert event.starts_at == FRIDAY_18
     assert event.capacity == 12
     assert event.place == "Кафе «Утро»"
     assert event.place_url == "https://maps.example.com/xyz"
@@ -157,14 +159,14 @@ async def test_предпросмотр_показывает_пост_и_кно�
 # ---- шаг 1: дата ---------------------------------------------------------------------
 
 
-async def test_кнопка_ближайшая_предлагает_ближайшую_субботу(tg: Harness) -> None:
+async def test_кнопка_ближайшая_предлагает_ближайшую_пятницу(tg: Harness) -> None:
     await _start(tg)
-    assert any("Ближайшая: суббота, 24 октября" in t for t in _labels(tg))
+    assert any("Ближайшая: пятница, 23 октября" in t for t in _labels(tg))
 
 
 async def test_прошедшая_дата_в_календаре_отклоняется(tg: Harness) -> None:
     await _start(tg)
-    await _press(tg, "22")
+    await _press(tg, "21")  # вчера
     assert "Эта дата уже прошла" in _screen(tg)
     assert "шаг 1 из 6" in _screen(tg)
 
@@ -188,7 +190,7 @@ async def test_время_вводится_текстом(app: App, tg: Harness)
     await _press(tg, "Пропустить")
     await _say(tg, "5")
     await _press(tg, "Создать")
-    assert (await _events(app))[0].starts_at == datetime(2026, 10, 24, 21, 30, tzinfo=UTC)
+    assert (await _events(app))[0].starts_at == datetime(2026, 10, 23, 21, 30, tzinfo=UTC)
 
 
 async def test_непонятное_время_даёт_подсказку_и_шаг_остаётся(tg: Harness) -> None:
@@ -200,7 +202,7 @@ async def test_непонятное_время_даёт_подсказку_и_ш
 
 async def test_слишком_близкое_время_возвращает_к_выбору_даты(tg: Harness) -> None:
     await _start(tg)
-    await _press(tg, "23")  # сегодня
+    await _press(tg, "22")  # сегодня: дедлайн отмены (вчера, 20:00) уже прошёл
     await _say(tg, "10:00")
     text = _screen(tg)
     assert "Моменты времени не согласованы" in text
@@ -395,3 +397,179 @@ async def test_админ_потерявший_права_не_может_соз
     await _press(tg, "Создать", user=ADMIN_ID)
     assert _alerts(tg)[-1] == "Нет доступа."
     assert await _events(app) == []
+
+
+# ---- подстановка из прошлой встречи ------------------------------------------------------
+
+# Пятница 30.10.2026, 19:00 в Монтевидео
+LAST_EVENT_START = datetime(2026, 10, 30, 22, 0, tzinfo=UTC)
+# Среда 28.10.2026 в календаре: дата новой встречи в тестах шаблона
+NEW_EVENT_DAY = "28"
+
+
+async def _create_last_event(
+    app: App, *, starts_at: datetime = LAST_EVENT_START, place: str = "Mercado Ferrando"
+) -> int:
+    created = await app.services.events.create_event_as_admin(
+        OWNER_ID,
+        starts_at=starts_at,
+        capacity=15,
+        description_html="Как <b>обычно</b>",
+        place=place,
+        place_url="https://maps.example.com/mf",
+        photo_file_id="last-photo",
+    )
+    return created.event_id
+
+
+async def _new_event(app: App) -> Event:
+    found = [e for e in await _events(app) if e.starts_at != LAST_EVENT_START]
+    assert len(found) == 1
+    return found[0]
+
+
+async def test_шаблон_прошлой_встречи_подставляется_во_все_шаги(app: App, tg: Harness) -> None:
+    await app.services.settings.set("default_place", "Библиотека", OWNER_ID)
+    await app.services.settings.set("capacity", 33, OWNER_ID)
+    await _create_last_event(app)
+    await _start(tg)
+    await _press(tg, NEW_EVENT_DAY)
+    assert "По умолчанию — 19:00" in _screen(tg)
+    await _press(tg, "По умолчанию (19:00)")
+    assert "Место по умолчанию: Mercado Ferrando (как на прошлой встрече)" in _screen(tg)
+    await _press(tg, "По умолчанию")
+    await _press(tg, "По умолчанию")
+    await _press(tg, "По умолчанию")
+    assert "По умолчанию (15)" in _labels(tg)
+    # Кнопкой не жмём: фейковый Telegram не умеет EditMessageMedia (текст → фото), а нажатие
+    # «По умолчанию» на лимите уже проверено тестом с настройками; ввод того же числа равноценен
+    await _say(tg, "15")
+    await _press(tg, "Создать")
+    event = await _new_event(app)
+    assert event.starts_at == datetime(2026, 10, 28, 22, 0, tzinfo=UTC)
+    assert event.place == "Mercado Ferrando"
+    assert event.place_url == "https://maps.example.com/mf"
+    assert event.description_html == "Как <b>обычно</b>"
+    assert event.photo_file_id == "last-photo"
+    assert event.capacity == 15
+
+
+async def test_любое_поле_шаблона_можно_заменить_своим(app: App, tg: Harness) -> None:
+    await _create_last_event(app)
+    await _start(tg)
+    await _press(tg, NEW_EVENT_DAY)
+    await _say(tg, "18:15")
+    await _say(tg, "Парк Батлье")
+    await _say(tg, "Новый текст")
+    await _press(tg, "Пропустить")
+    await _say(tg, "8")
+    await _press(tg, "Создать")
+    event = await _new_event(app)
+    assert event.starts_at == datetime(2026, 10, 28, 21, 15, tzinfo=UTC)
+    assert event.place == "Парк Батлье"
+    assert event.place_url == ""
+    assert event.description_html == "Новый текст"
+    assert event.photo_file_id is None
+    assert event.capacity == 8
+
+
+async def test_без_прошлых_встреч_умолчания_берутся_из_настроек(app: App, tg: Harness) -> None:
+    await app.services.settings.set("default_place", "Библиотека", OWNER_ID)
+    await _to_time(tg)
+    assert "По умолчанию — 16:30" in _screen(tg)
+    await _press(tg, "По умолчанию (16:30)")
+    text = _screen(tg)
+    assert "Место по умолчанию: Библиотека" in text
+    assert "прошлой встрече" not in text
+    await _press(tg, "По умолчанию")
+    await _press(tg, "Без текста")
+    await _press(tg, "Пропустить")
+    await _press(tg, "По умолчанию (10)")
+    await _press(tg, "Создать")
+    event = (await _events(app))[0]
+    assert event.starts_at == datetime(2026, 10, 23, 19, 30, tzinfo=UTC)
+    assert event.place == "Библиотека"
+    assert event.capacity == 10
+
+
+async def test_отменённая_прошлая_встреча_в_шаблон_не_берётся(app: App, tg: Harness) -> None:
+    await _create_last_event(app, place="Старое место")
+    cancelled = await _create_last_event(
+        app, starts_at=LAST_EVENT_START + timedelta(days=7), place="Отменённое место"
+    )
+    await app.services.events.cancel_event(OWNER_ID, cancelled)
+    await _start(tg)
+    await _press(tg, NEW_EVENT_DAY)
+    await _press(tg, "По умолчанию")
+    assert "Место по умолчанию: Старое место" in _screen(tg)
+
+
+# ---- календарь на русском ---------------------------------------------------------------
+
+
+async def test_календарь_подписан_по_русски(tg: Harness) -> None:
+    await _start(tg)
+    labels = _labels(tg)
+    for weekday in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"):
+        assert weekday in labels
+    assert any("Октябрь 2026" in t for t in labels)
+    assert not any(english in t for t in labels for english in ("Mon", "Sun", "October"))
+
+
+async def test_календарь_открывается_на_месяце_по_часам_бота(app: App, tg: Harness) -> None:
+    app.clock.advance(timedelta(days=60))
+    await _start(tg)
+    assert any("Декабрь 2026" in t for t in _labels(tg))
+
+
+async def test_список_месяцев_календаря_по_русски(tg: Harness) -> None:
+    await _start(tg)
+    await _press(tg, "Октябрь 2026")
+    labels = _labels(tg)
+    assert any("Январь" in t for t in labels)
+    assert any("Декабрь" in t for t in labels)
+
+
+# ---- предупреждение о длине поста --------------------------------------------------------
+
+_OVERFLOW_RE = re.compile(r"лишних символов: (\d+)")
+
+
+def _overflows(tg: Harness) -> list[int]:
+    return [int(n) for n in _OVERFLOW_RE.findall(_screen(tg))]
+
+
+async def _describe(tg: Harness, text: str) -> None:
+    """С шага фото возвращается к описанию и присылает новый текст."""
+    await _press(tg, "Назад")
+    await _say(tg, text)
+
+
+async def test_длинное_описание_с_фото_даёт_точное_число_лишних_символов(tg: Harness) -> None:
+    await _to_description(tg)
+    await _say(tg, "а" * 1100)
+    text = _screen(tg)
+    assert "шаг 5 из 6: фото" in text
+    assert "1024" in text
+    extra = _overflows(tg)
+    assert len(extra) == 1 and extra[0] > 0
+    await _describe(tg, "а" * (1100 - extra[0] + 1))
+    assert _overflows(tg) == [1]
+    await _describe(tg, "а" * (1100 - extra[0]))
+    assert _overflows(tg) == []
+    assert "лишних" not in _screen(tg)
+
+
+async def test_короткое_описание_не_даёт_предупреждения(tg: Harness) -> None:
+    await _to_photo(tg)
+    assert "лишних" not in _screen(tg)
+
+
+async def test_описание_длиннее_поста_без_фото_тоже_предупреждает(tg: Harness) -> None:
+    await _to_description(tg)
+    # Эмодзи вне BMP Telegram считает за 2 символа: 2100 эмодзи — 4200 символов
+    await _say(tg, "😀" * 2100)
+    text = _screen(tg)
+    assert "1024" in text
+    assert "4096" in text
+    assert len(_overflows(tg)) == 2

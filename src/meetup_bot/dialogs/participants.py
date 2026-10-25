@@ -37,6 +37,8 @@ from meetup_bot.texts.render import format_moment
 MAX_MANUAL_NAME = 100
 MAX_BAN_COMMENT = 200
 _BUTTON_LIMIT = 60
+NO_DM_MARK = "📵"
+NO_DM_HINT = f"{NO_DM_MARK} — не нажимал(а) «Старт» у бота, личные сообщения не дойдут"
 
 _NOTICE, _REG, _PENDING, _ADD = "notice", "reg_id", "pending", "pending_add"
 
@@ -89,18 +91,29 @@ def _back_to_list(suffix: str) -> SwitchTo:
     )
 
 
-def _short(text: str) -> str:
-    return text if len(text) <= _BUTTON_LIMIT else text[: _BUTTON_LIMIT - 1] + "…"
+def _short(text: str, limit: int = _BUTTON_LIMIT) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _plain_name(row: ParticipantRow) -> str:
     return row.name + (" (+1)" if row.guests else "")
 
 
+def _dm_unreachable(row: ParticipantRow) -> bool:
+    # Ручной записи без аккаунта писать некому в принципе: её выдаёт пометка «(вручную)»
+    return row.user_id is not None and not row.dm_available
+
+
 def _row_label(row: ParticipantRow, index: int) -> str:
     if row.status == RegistrationStatus.WAITLIST.value:
-        return _short(f"⏳ {row.position}. {_plain_name(row)}")
-    return _short(f"{index}. {_plain_name(row)}")
+        label = f"⏳ {row.position}. {_plain_name(row)}"
+    else:
+        label = f"{index}. {_plain_name(row)}"
+    if not _dm_unreachable(row):
+        return _short(label)
+    suffix = f" {NO_DM_MARK}"
+    # Обрезается имя, а не пометка: иначе у длинного имени она пропала бы
+    return _short(label, _BUTTON_LIMIT - len(suffix)) + suffix
 
 
 async def _load_rows(manager: DialogManager) -> tuple[list[ParticipantRow], Any]:
@@ -127,8 +140,10 @@ async def _list_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     ]
     body = "Пока никого нет." if not rows else "Выберите участника:"
     queue = f"\nВ очереди: {len(result.waitlist)}" if result.waitlist else ""
+    no_dm = f"\n{NO_DM_HINT}" if any(_dm_unreachable(row) for row in rows) else ""
     text = (
-        f"<b>👥 Участники</b>\nЗанято мест: {result.seats_taken} из {result.capacity}{queue}\n"
+        f"<b>👥 Участники</b>\nЗанято мест: {result.seats_taken} из {result.capacity}{queue}"
+        f"{no_dm}\n"
         f"{_notice(dialog_manager)}\n{body}"
     )
     return {"text": text, "items": items}

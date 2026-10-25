@@ -14,10 +14,11 @@ from meetup_bot.repositories import users
 from meetup_bot.scheduler.tick import DEFAULT_TASK_TIMEOUT, Scheduler
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
-STARTS_AT = datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
-REMINDER_AT = datetime(2026, 10, 23, 20, 0, tzinfo=UTC)
-CLOSES_AT = datetime(2026, 10, 24, 17, 0, tzinfo=UTC)
-PROMPT_AT = datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
+# Встреча по умолчанию: пятница 23.10 16:30 по Монтевидео; запись до 17:30, явка в 18:00
+STARTS_AT = datetime(2026, 10, 23, 19, 30, tzinfo=UTC)
+REMINDER_AT = datetime(2026, 10, 22, 19, 30, tzinfo=UTC)
+CLOSES_AT = datetime(2026, 10, 23, 20, 30, tzinfo=UTC)
+PROMPT_AT = datetime(2026, 10, 23, 21, 0, tzinfo=UTC)
 
 
 class FakeTask:
@@ -59,8 +60,8 @@ async def test_тик_передаёт_задачам_время_часов(cloc
     clock.advance(timedelta(minutes=1))
     await scheduler.tick()
     assert task.seen == [
-        datetime(2026, 10, 23, 12, 0, tzinfo=UTC),
-        datetime(2026, 10, 23, 12, 1, tzinfo=UTC),
+        datetime(2026, 10, 22, 12, 0, tzinfo=UTC),
+        datetime(2026, 10, 22, 12, 1, tzinfo=UTC),
     ]
 
 
@@ -128,7 +129,7 @@ async def test_пульс_обновляется_на_каждом_тике(cloc
     await scheduler.tick()
     clock.advance(timedelta(minutes=1))
     await scheduler.tick()
-    assert heartbeat.read_text(encoding="utf-8") == "2026-10-23T12:01:00+00:00"
+    assert heartbeat.read_text(encoding="utf-8") == "2026-10-22T12:01:00+00:00"
 
 
 async def test_сбой_записи_пульса_не_роняет_тик(
@@ -245,8 +246,12 @@ async def test_двойной_тик_не_создаёт_встречу_дваж
     assert first["auto_create"] == 1
     assert second["auto_create"] == 0
     assert await count_events(app) == 1
-    assert (await only_event(app)).recurrence_key == "weekly:2026-10-24"
-    assert app.notifier.service.count("Создана встреча на суббота, 24 октября, 17:00.") == 1
+    assert (await only_event(app)).recurrence_key == "weekly:2026-10-23"
+    created = [t for t in app.notifier.service if t.startswith("Создана встреча")]
+    assert created == [
+        "Создана встреча на пятница, 23 октября, 16:30. Разошлите пост: в нужном чате "
+        "наберите @ и имя бота и выберите встречу."
+    ]
 
 
 async def test_тики_каждую_минуту_не_плодят_встречи(app: App) -> None:  # кейс 15
@@ -268,7 +273,6 @@ async def test_двойной_тик_не_шлёт_напоминание_два
 
 
 async def test_двойной_тик_закрывает_запись_один_раз(app: App) -> None:  # кейс 15
-    await app.services.settings.set("registration_close_hours_before", 3, ADMIN_ID)
     await app.services.scheduler.tick()
     event = await only_event(app)
     await join(app, event.id, 1)
@@ -282,7 +286,7 @@ async def test_двойной_тик_закрывает_запись_один_р
 
 async def test_двойной_тик_завершает_встречу_один_раз(app: App) -> None:  # кейс 15
     await app.services.scheduler.tick()
-    go_to(app, STARTS_AT)
+    go_to(app, CLOSES_AT)
     first = await app.services.scheduler.tick()
     second = await app.services.scheduler.tick()
     assert (first["finish_events"], second["finish_events"]) == (1, 0)
@@ -307,13 +311,15 @@ async def test_двойной_тик_закрывает_окно_явки_оди
     assert (first["attendance_expire"], second["attendance_expire"]) == (1, 0)
 
 
-async def test_без_автозакрытия_один_тик_в_момент_начала_закрывает_и_завершает(
-    app: App,
-) -> None:
+async def test_один_тик_в_момент_закрытия_записи_закрывает_и_завершает(app: App) -> None:
     await app.services.scheduler.tick()
     event = await only_event(app)
     await join(app, event.id, 1)
     go_to(app, event.starts_at)
+    at_start = await app.services.scheduler.tick()
+    # В момент начала запись ещё открыта для опоздавших
+    assert (at_start["close_registration"], at_start["finish_events"]) == (0, 0)
+    go_to(app, event.registration_closes_at)
     first = await app.services.scheduler.tick()
     second = await app.services.scheduler.tick()
     assert (first["close_registration"], first["finish_events"]) == (1, 1)
@@ -328,7 +334,7 @@ async def test_тик_после_простоя_в_2_суток_догоняет
     event = await only_event(app)
     await join(app, event.id, 1)
     app.notifier.service.clear()
-    app.clock.advance(timedelta(days=2))  # воскресенье 09:00 по Монтевидео
+    app.clock.advance(timedelta(days=2))  # суббота 09:00 по Монтевидео
 
     done = await app.services.scheduler.tick()
 
@@ -393,7 +399,7 @@ async def test_тик_после_простоя_в_9_суток_закрывае
 
 
 async def test_тик_после_простоя_не_создаёт_встречу_задним_числом(app: App) -> None:  # кейс 16
-    app.clock.advance(timedelta(days=9))  # воскресенье 1 ноября 09:00 по Монтевидео
+    app.clock.advance(timedelta(days=9))  # суббота 31 октября 09:00 по Монтевидео
     done = await app.services.scheduler.tick()
     assert done["auto_create"] == 0
     assert await count_events(app) == 0
@@ -402,7 +408,7 @@ async def test_тик_после_простоя_не_создаёт_встреч
 async def test_контейнер_собирает_задачи_в_нужном_порядке(app: App) -> None:
     done = await app.services.scheduler.tick()
     assert list(done) == [
-        "auto_create", "reminder", "close_registration", "finish_events",
+        "auto_create", "reminder", "post_reminder", "close_registration", "finish_events",
         "attendance_prompt", "attendance_reminder", "attendance_expire", "ban_recheck",
         "backup",
     ]  # fmt: skip

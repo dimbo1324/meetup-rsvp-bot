@@ -20,7 +20,8 @@ from meetup_bot.services.bans import BanOutcome
 from meetup_bot.services.errors import InvalidOperation, NotFound, PermissionDenied
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
-# Первая суббота относительно фикстуры clock (пятница 2026-10-23); дальше шаг в неделю
+# Явно заданное начало (суббота 24.10 17:00 по Монтевидео) позже фикстуры clock (четверг
+# 2026-10-22); дальше шаг в неделю
 FIRST_START = datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
 STRANGER_ID = 777
 

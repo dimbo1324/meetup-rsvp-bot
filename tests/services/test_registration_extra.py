@@ -13,9 +13,10 @@ from meetup_bot.services.registration import CancelStatus, RegisterStatus
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 # Моменты ближайшей встречи при часах «пятница 12:00 UTC»
-STARTS_AT_HOURS = 32  # суббота 20:00 UTC
-DEADLINE_HOURS = 11  # пятница 23:00 UTC
-CLOSES_HOURS = 29  # суббота 17:00 UTC
+# От «сейчас» (четверг 12:00 UTC) до моментов встречи по умолчанию (пятница 16:30 в Монтевидео)
+STARTS_IN = timedelta(hours=31, minutes=30)  # пятница 19:30 UTC
+DEADLINE_HOURS = 11  # четверг 23:00 UTC
+CLOSES_IN = timedelta(hours=32, minutes=30)  # пятница 20:30 UTC: через час после начала
 
 
 async def make_event(app: App, capacity: int = 10) -> int:
@@ -52,7 +53,7 @@ async def test_результат_записи_содержит_данные_в�
         await app.services.events.create_event_as_admin(OWNER_ID, capacity=5, place="Кафе")
     ).event_id
     result = await app.services.registration.register(event_id, person(1))
-    assert result.starts_at == app.clock.now() + timedelta(hours=STARTS_AT_HOURS)
+    assert result.starts_at == app.clock.now() + STARTS_IN
     assert result.cancel_deadline_at == app.clock.now() + timedelta(hours=DEADLINE_HOURS)
     assert result.place == "Кафе"
     assert (result.seats_taken, result.capacity) == (1, 5)
@@ -158,13 +159,11 @@ async def test_из_очереди_можно_выйти_после_дедлай
 
 async def test_после_закрытия_записи_из_очереди_выйти_нельзя(app: App) -> None:
     await enable(app, "waitlist_enabled")
-    # закрытие за 3 часа до начала: иначе оно совпадает с началом и окно не отделить от дедлайна
-    await app.services.settings.set("registration_close_hours_before", 3, OWNER_ID)
     event_id = await make_event(app, 1)
     reg = app.services.registration
     await reg.register(event_id, person(1))
     await reg.register(event_id, person(2))
-    app.clock.advance(timedelta(hours=CLOSES_HOURS, minutes=1))
+    app.clock.advance(CLOSES_IN + timedelta(minutes=1))
     result = await reg.cancel(event_id, 1002)
     assert (result.status, result.was_waitlist) == (CancelStatus.TOO_LATE, True)
     assert await status_of(app, event_id, 1002) == "waitlist"
@@ -176,7 +175,7 @@ async def test_после_закрытия_записи_из_очереди_вы
 async def test_отмена_после_закрытия_записи_отклоняется(app: App) -> None:
     event_id = await make_event(app)
     await app.services.registration.register(event_id, person(1))
-    app.clock.advance(timedelta(hours=CLOSES_HOURS, minutes=1))
+    app.clock.advance(CLOSES_IN + timedelta(minutes=1))
     result = await app.services.registration.cancel(event_id, 1001)
     assert result.status is CancelStatus.TOO_LATE
     assert await taken(app, event_id) == 1
@@ -196,7 +195,7 @@ async def test_отмена_возвращает_данные_встречи_и_
     await app.services.registration.register(event_id, person(2))
     result = await app.services.registration.cancel(event_id, 1001)
     assert (result.seats_taken, result.capacity) == (1, 5)
-    assert result.starts_at == app.clock.now() + timedelta(hours=STARTS_AT_HOURS)
+    assert result.starts_at == app.clock.now() + STARTS_IN
     assert result.changed_state is True
 
 
@@ -231,7 +230,7 @@ async def test_закрытая_админом_встреча_не_приним�
 
 async def test_запись_за_секунду_до_закрытия_проходит(app: App) -> None:
     event_id = await make_event(app)
-    app.clock.advance(timedelta(hours=CLOSES_HOURS) - timedelta(seconds=1))
+    app.clock.advance(CLOSES_IN - timedelta(seconds=1))
     result = await app.services.registration.register(event_id, person(1))
     assert (result.status, result.cancel_deadline_passed) == (RegisterStatus.OK, True)
 

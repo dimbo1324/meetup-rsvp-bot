@@ -133,11 +133,12 @@ class SettingsService:
             timezone=v["timezone"],
             event_weekday=v["event_weekday"],
             event_time=_to_time(v["event_time"]),
+            event_duration_minutes=v["event_duration_minutes"],
             cancel_deadline_days_before=v["cancel_deadline_days_before"],
             cancel_deadline_time=_to_time(v["cancel_deadline_time"]),
-            registration_close_hours_before=v["registration_close_hours_before"],
+            registration_close_minutes_after_start=v["registration_close_minutes_after_start"],
             reminder_hours_before=v["reminder_hours_before"],
-            attendance_prompt_hours_after=v["attendance_prompt_hours_after"],
+            attendance_prompt_minutes_after=v["attendance_prompt_minutes_after"],
         )
 
     def options_now(self) -> RegistrationOptions:
@@ -160,6 +161,8 @@ class SettingsService:
             auto_create_enabled=v["auto_create_enabled"],
             auto_create_days_after=v["auto_create_days_after"],
             auto_create_time=_to_time(v["auto_create_time"]),
+            post_reminder_days_before=v["post_reminder_days_before"],
+            post_reminder_time=_to_time(v["post_reminder_time"]),
         )
 
     def defaults_now(self) -> DefaultEventParams:

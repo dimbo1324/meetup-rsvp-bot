@@ -1,5 +1,8 @@
 """Жизненный цикл встречи по времени: закрытие записи, завершение, автосоздание (5.1, 5.9).
 
+Запись закрывается не в момент начала, а позже (опоздавшие ещё могут записаться), поэтому
+встреча завершается только после закрытия записи.
+
 Каждый метод идемпотентен: выбирается только невыполненное, статус перепроверяется под
 блокировкой встречи, поэтому повторный или параллельный вызов ничего не дублирует.
 Уведомления и пересборка постов идут после коммита: сбой Telegram не откатывает статус.
@@ -18,7 +21,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import InstrumentedAttribute
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import Event, EventStatus
@@ -42,8 +44,14 @@ from meetup_bot.services.timing import (
     next_event_start,
 )
 from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.service import AUTO_CREATED_TEXT
 
 logger = logging.getLogger(__name__)
+
+# Сколько после закрытия записи итог ещё актуален, даже если запрос явки совпал с закрытием
+CLOSED_SUMMARY_GRACE = timedelta(minutes=30)
+
+# Подсказка «как разослать пост»: бот сам в чаты не публикует, это делает админ
 
 # Провайдер может быть и синхронным, и асинхронным
 RulesProvider = Callable[[], RulesSettings | Awaitable[RulesSettings]]
@@ -78,6 +86,28 @@ class AutoCreateResult:
     status: AutoCreateStatus
     recurrence_key: str | None = None
     event_id: int | None = None
+
+
+_UNFINISHED = (EventStatus.OPEN.value, EventStatus.CLOSED.value)
+
+
+def _finish_due(event: Event, now: datetime) -> bool:
+    return (
+        event.status in _UNFINISHED
+        and event.starts_at <= now
+        and event.registration_closes_at <= now
+    )
+
+
+def closed_summary_relevant(event: Event, now: datetime) -> bool:
+    """Нужен ли итог записи в служебный чат при закрытии по времени.
+
+    После долгого простоя бота мог наступить и запрос явки: тогда список уже придёт в нём,
+    а итог «запись закрыта» только зашумит чат. Запрос явки может совпадать с закрытием
+    (он не бывает раньше него), поэтому своевременному закрытию дан запас.
+    """
+    deadline = max(event.attendance_prompt_at, event.registration_closes_at + CLOSED_SUMMARY_GRACE)
+    return now < deadline
 
 
 class LifecycleService:
@@ -120,7 +150,7 @@ class LifecycleService:
     async def close_due(self, now: datetime) -> list[int]:
         """Закрывает запись у встреч, у которых наступил `registration_closes_at`."""
         closed: list[int] = []
-        for event_id in await self._due_ids(EventStatus.OPEN, Event.registration_closes_at, now):
+        for event_id in await self._close_due_ids(now):
             async with self._locks.lock(event_id), self._sessions() as session, session.begin():
                 event = await session.get(Event, event_id)
                 # Статус могли сменить (админ закрыл или отменил) между выборкой и блокировкой
@@ -140,42 +170,32 @@ class LifecycleService:
                     event_id=event_id,
                     payload={"by": "scheduler"},
                 )
-                starts_at = event.starts_at
+                send_summary = closed_summary_relevant(event, now)
             closed.append(event_id)
             safe_schedule(self._refresher, event_id)
-            # Если встреча уже началась (долгий простой), итог в чат уже не нужен
-            if now < starts_at:
+            if send_summary:
                 await self._send_closed_summary(event_id)
         return closed
 
     async def finish_due(self, now: datetime) -> list[int]:
-        """Переводит в `finished` встречи, у которых наступил `starts_at`."""
+        """Переводит в `finished` встречи, у которых наступили и начало, и закрытие записи."""
         finished: list[int] = []
-        for status in (EventStatus.OPEN, EventStatus.CLOSED):
-            for event_id in await self._due_ids(status, Event.starts_at, now):
-                async with (
-                    self._locks.lock(event_id),
-                    self._sessions() as session,
-                    session.begin(),
-                ):
-                    event = await session.get(Event, event_id)
-                    if (
-                        event is None
-                        or event.status not in (EventStatus.OPEN.value, EventStatus.CLOSED.value)
-                        or event.starts_at > now
-                    ):
-                        continue
-                    event.status = EventStatus.FINISHED.value
-                    event.updated_at = now
-                    await audit.add(
-                        session,
-                        action="event.finish",
-                        now=now,
-                        event_id=event_id,
-                        payload={"by": "scheduler"},
-                    )
-                finished.append(event_id)
-                safe_schedule(self._refresher, event_id)
+        for event_id in await self._finish_due_ids(now):
+            async with self._locks.lock(event_id), self._sessions() as session, session.begin():
+                event = await session.get(Event, event_id)
+                if event is None or not _finish_due(event, now):
+                    continue
+                event.status = EventStatus.FINISHED.value
+                event.updated_at = now
+                await audit.add(
+                    session,
+                    action="event.finish",
+                    now=now,
+                    event_id=event_id,
+                    payload={"by": "scheduler"},
+                )
+            finished.append(event_id)
+            safe_schedule(self._refresher, event_id)
         return finished
 
     async def create_weekly_event(self, rules: RulesSettings, now: datetime) -> AutoCreateResult:
@@ -232,17 +252,24 @@ class LifecycleService:
             return AutoCreateResult(AutoCreateStatus.INVALID, key)
 
         when = format_moment(starts_at, schedule.timezone)
-        await safe_send_service(self._notifier, f"Создана встреча на {when}.")
+        await safe_send_service(self._notifier, AUTO_CREATED_TEXT.format(when=when))
         return AutoCreateResult(AutoCreateStatus.CREATED, key, event_id)
 
-    async def _due_ids(
-        self, status: EventStatus, column: InstrumentedAttribute[datetime], now: datetime
-    ) -> list[int]:
+    async def _close_due_ids(self, now: datetime) -> list[int]:
         # Выборка без блокировок: решающая проверка повторяется под блокировкой встречи
         async with self._sessions() as session:
             stmt = select(Event.id).where(
-                Event.status == status.value,
-                column <= now,
+                Event.status == EventStatus.OPEN.value,
+                Event.registration_closes_at <= now,
+            )
+            return list((await session.scalars(stmt.order_by(Event.id))).all())
+
+    async def _finish_due_ids(self, now: datetime) -> list[int]:
+        async with self._sessions() as session:
+            stmt = select(Event.id).where(
+                Event.status.in_(_UNFINISHED),
+                Event.starts_at <= now,
+                Event.registration_closes_at <= now,
             )
             return list((await session.scalars(stmt.order_by(Event.id))).all())
 

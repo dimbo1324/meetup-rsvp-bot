@@ -25,7 +25,7 @@ from meetup_bot.telegram.common import check_admin
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.telegram.posts import build_post
-from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.render import format_interval
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ async def on_inline_query(
                     )
                 )
                 continue
-            when = format_moment(item.starts_at, tz)
+            when = format_interval(data.starts_at, data.ends_at, tz)
             results.append(
                 InlineQueryResultArticle(
                     id=result_id,

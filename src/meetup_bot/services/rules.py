@@ -30,3 +30,5 @@ class RulesSettings:
     auto_create_enabled: bool = True
     auto_create_days_after: int = 1
     auto_create_time: time = time(10, 0)
+    post_reminder_days_before: int = 2
+    post_reminder_time: time = time(10, 0)

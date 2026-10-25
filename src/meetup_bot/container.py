@@ -25,6 +25,7 @@ from meetup_bot.scheduler.tasks import (
     BanRecheckTask,
     CloseRegistrationTask,
     FinishEventsTask,
+    PostReminderTask,
     ReminderTask,
     ScheduledTask,
 )
@@ -39,6 +40,7 @@ from meetup_bot.services.lifecycle import EventDefaults, LifecycleService
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.participants import ParticipantService
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
+from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.registration import RegistrationService
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.services.users import UserService
@@ -161,6 +163,11 @@ async def build_services(
     tasks: list[ScheduledTask] = [
         AutoCreateTask(lifecycle, settings.rules_now),
         ReminderTask(sessions, notifier, settings.rules_now, render),
+        PostReminderTask(
+            PostReminderService(
+                sessions, notifier, settings.rules_now, settings.schedule_now, locks=locks
+            )
+        ),
         CloseRegistrationTask(lifecycle),
         FinishEventsTask(lifecycle),
         AttendancePromptTask(sessions, notifier),

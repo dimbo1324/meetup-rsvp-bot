@@ -7,6 +7,7 @@ from aiogram.types import Message, SharedUser, Update, UsersShared
 from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
+from meetup_bot.repositories.users import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
@@ -118,19 +119,65 @@ async def test_список_показывает_активных_и_очере�
     await _register(app, event_id, 1, 2, 3, 4)
     await _open(tg)
     labels = _labels(tg)
-    assert "1. Участник1" in labels
-    assert "3. Участник3" in labels
-    assert "⏳ 1. Участник4" in labels
+    assert "1. Участник1 📵" in labels
+    assert "3. Участник3 📵" in labels
+    assert "⏳ 1. Участник4 📵" in labels
     text = _screen(tg)
     assert "Занято мест: 3 из 3" in text
     assert "В очереди: 1" in text
+
+
+async def _allow_dm(app: App, user_id: int) -> None:
+    """Личные сообщения уходят только тем, кто нажимал /start у бота."""
+    async with app.sessions() as session, session.begin():
+        user = await session.get(User, user_id)
+        assert user is not None
+        user.dm_available = True
+
+
+NO_DM_HINT = "📵 — не нажимал(а) «Старт» у бота, личные сообщения не дойдут"
+
+
+async def test_без_лички_помечены_и_есть_пояснение(app: App, tg: Harness, event_id: int) -> None:
+    await _register(app, event_id, 1, 2)
+    await _allow_dm(app, person(2).id)
+    await _open(tg)
+    labels = _labels(tg)
+    assert "1. Участник1 📵" in labels
+    assert "2. Участник2" in labels
+    assert _screen(tg).count(NO_DM_HINT) == 1
+
+
+async def test_все_с_личкой_без_пометок_и_пояснения(app: App, tg: Harness, event_id: int) -> None:
+    await _register(app, event_id, 1)
+    await _allow_dm(app, person(1).id)
+    await _open(tg)
+    assert "1. Участник1" in _labels(tg)
+    assert "📵" not in _screen(tg)
+    assert not any("📵" in label for label in _labels(tg))
+
+
+async def test_ручная_запись_без_аккаунта_не_помечается(tg: Harness, event_id: int) -> None:
+    # Человек без аккаунта и не мог нажать «Старт»: пометка «(вручную)» уже всё объясняет
+    await _open(tg)
+    await _press(tg, "Добавить участника")
+    await _press(tg, "Ввести имя вручную")
+    await _say(tg, "Анна")
+    assert "1. Анна (вручную)" in _labels(tg)
+    assert "📵" not in _screen(tg)
+
+
+async def test_пометка_не_обрезается_у_длинного_имени(app: App, tg: Harness, event_id: int) -> None:
+    await app.services.registration.register(event_id, UserInfo(id=1001, first_name="Я" * 90))
+    await _open(tg)
+    assert any(label.startswith("1. ЯЯЯ") and label.endswith("… 📵") for label in _labels(tg))
 
 
 async def test_гость_помечен_в_списке(app: App, tg: Harness, event_id: int) -> None:
     await app.services.settings.set("plus_one_enabled", True, OWNER_ID)
     await app.services.registration.register(event_id, person(1), guests=1)
     await _open(tg)
-    assert "1. Участник1 (+1)" in _labels(tg)
+    assert "1. Участник1 (+1) 📵" in _labels(tg)
 
 
 async def test_карточка_участника_показывает_источник_записи(

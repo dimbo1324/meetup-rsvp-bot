@@ -1,8 +1,9 @@
 """Подстановка значений в тексты бота: единые правила для всплывающих окон и сообщений.
 
-Сервисы передают «сырые» параметры (`starts_at`, `deadline_at` — моменты; `place`, `name`,
-`reason`, `position` — строки), а здесь они превращаются в подстановки шаблона:
-`{weekday}`, `{date}`, `{time}`, `{deadline}`, `{place}`, `{name}`, `{reason}`, `{position}`.
+Сервисы передают «сырые» параметры (`starts_at`, `ends_at`, `deadline_at` — моменты; `place`,
+`name`, `reason`, `position` — строки), а здесь они превращаются в подстановки шаблона:
+`{weekday}`, `{date}`, `{time}`, `{end_time}`, `{deadline}`, `{place}`, `{name}`, `{reason}`,
+`{position}`.
 """
 
 from __future__ import annotations
@@ -38,6 +39,25 @@ MONTHS = (
     "ноября",
     "декабря",
 )
+# Для календаря: заголовки столбцов и названия месяцев в именительном падеже
+WEEKDAYS_SHORT = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+MONTHS_NOMINATIVE = (
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+)
+
+# Короткое тире между началом и концом встречи: «16:30–18:30»
+TIME_RANGE_DASH = "–"
 
 # Значение подстановки {reason}: префикс добавляется только при непустой причине
 REASON_PREFIX = "Причина: "
@@ -82,19 +102,42 @@ def date_parts(moment: datetime, tz: ZoneInfo) -> tuple[str, str, str]:
     return WEEKDAYS[local.weekday()], f"{local.day} {MONTHS[local.month - 1]}", f"{local:%H:%M}"
 
 
+def _zone(tz: ZoneInfo | str) -> ZoneInfo:
+    return tz if isinstance(tz, ZoneInfo) else ZoneInfo(tz)
+
+
 def format_moment(moment: datetime, tz: ZoneInfo | str) -> str:
     """«суббота, 1 ноября, 17:00»."""
-    weekday, date, time_ = date_parts(moment, tz if isinstance(tz, ZoneInfo) else ZoneInfo(tz))
+    weekday, date, time_ = date_parts(moment, _zone(tz))
     return f"{weekday}, {date}, {time_}"
+
+
+def end_time_label(starts_at: datetime, ends_at: datetime, tz: ZoneInfo | str) -> str:
+    """Время конца: «18:30»; если встреча идёт через полночь — «01:30 (1 ноября)»."""
+    zone = _zone(tz)
+    _, start_date, _ = date_parts(starts_at, zone)
+    _, end_date, end_time = date_parts(ends_at, zone)
+    return end_time if end_date == start_date else f"{end_time} ({end_date})"
+
+
+def format_interval(starts_at: datetime, ends_at: datetime | None, tz: ZoneInfo | str) -> str:
+    """«пятница, 30 октября, 16:30–18:30»; без конца или при пустом интервале — только начало."""
+    start = format_moment(starts_at, tz)
+    if ends_at is None or ends_at <= starts_at:
+        return start
+    return f"{start}{TIME_RANGE_DASH}{end_time_label(starts_at, ends_at, tz)}"
 
 
 def text_variables(params: Mapping[str, Any], tz: ZoneInfo | str) -> dict[str, str]:
     """Сырые параметры сервиса → подстановки шаблона (без экранирования)."""
-    zone = tz if isinstance(tz, ZoneInfo) else ZoneInfo(tz)
+    zone = _zone(tz)
     values: dict[str, str] = {}
     starts_at = params.get("starts_at")
     if isinstance(starts_at, datetime):
         values["weekday"], values["date"], values["time"] = date_parts(starts_at, zone)
+        ends_at = params.get("ends_at")
+        if isinstance(ends_at, datetime):
+            values["end_time"] = end_time_label(starts_at, ends_at, zone)
     deadline_at = params.get("deadline_at")
     if isinstance(deadline_at, datetime):
         _, deadline_date, deadline_time = date_parts(deadline_at, zone)
