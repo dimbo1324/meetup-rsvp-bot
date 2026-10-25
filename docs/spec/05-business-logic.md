@@ -30,17 +30,21 @@ stateDiagram-v2
 
 Все моменты вычисляются при создании встречи из настроек и сохраняются в самой встрече. Если позже поменять настройки, уже созданные встречи не изменятся. Каждый момент админ может поправить вручную в карточке встречи.
 
-| Поле | Формула по умолчанию | Пример (встреча в субботу, 17:00) |
+| Поле | Формула по умолчанию | Пример (встреча в пятницу, 16:30) |
 |---|---|---|
-| `starts_at` | день недели и время из настроек | сб, 17:00 |
-| `cancel_deadline_at` | `starts_at.date − cancel_deadline_days_before` в `cancel_deadline_time` | пт, 20:00 |
-| `registration_closes_at` | `starts_at − registration_close_hours_before` (по умолчанию 0: запись закрывается в момент начала) | сб, 17:00 |
-| `reminder_at` | `starts_at − reminder_hours_before` | пт, 17:00 |
-| `attendance_prompt_at` | `starts_at + attendance_prompt_hours_after` | сб, 22:00 |
+| `starts_at` | день недели и время из настроек | пт, 16:30 |
+| `ends_at` | `starts_at + event_duration_minutes` | пт, 18:30 |
+| `cancel_deadline_at` | `starts_at.date − cancel_deadline_days_before` в `cancel_deadline_time`, но не позже начала | чт, 20:00 |
+| `registration_closes_at` | `starts_at + registration_close_minutes_after_start` | пт, 17:30 |
+| `reminder_at` | `starts_at − reminder_hours_before` | чт, 16:30 |
+| `attendance_prompt_at` | `max(starts_at + attendance_prompt_minutes_after, registration_closes_at)` | пт, 18:00 |
 
 **Инварианты** (проверяются при создании и редактировании):
-`created_at < cancel_deadline_at <= registration_closes_at <= starts_at < attendance_prompt_at`.
-Если дедлайн отмены получается позже закрытия записи, он приравнивается к закрытию.
+`created_at < cancel_deadline_at <= starts_at <= registration_closes_at <= attendance_prompt_at`,
+`starts_at < ends_at`, `starts_at < attendance_prompt_at`.
+Запись открыта и после начала встречи — до `registration_closes_at` (опоздавшие могут подойти, если есть
+места). Встреча переходит в `finished`, когда наступили и начало, и закрытие записи. Запрос явки не
+приходит раньше закрытия записи: пока можно записаться, отмечать явку рано.
 
 **Часовой пояс.** В БД всё хранится в UTC. На экран всё выводится в часовом поясе из настроек (по умолчанию `America/Montevideo`). Вычисления по календарю («суббота, 17:00») делаются в локальном поясе через `zoneinfo`, потом переводятся в UTC.
 
@@ -154,7 +158,7 @@ no_shows(user) = количество записей пользователя, �
 ```
 {description}                     ← текст, заданный админом (HTML)
 
-📅 {weekday}, {date}, {time}
+📅 {weekday}, {date}, {time}–{end_time}
 📍 {place}                        ← ссылка, если задан location_url
 
 Записались: {taken} из {capacity}

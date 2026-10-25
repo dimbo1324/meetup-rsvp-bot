@@ -5,9 +5,10 @@
 | Задача | Условие выборки | Действие | Отметка |
 |---|---|---|---|
 | Автосоздание встречи | 5.9 | Создать встречу, уведомить служебный чат | `recurrence_key` UNIQUE |
+| Напоминание о рассылке поста | `status = open`, `post_reminder_sent_at IS NULL`, `starts_at > now`, нет живых постов и наступил момент «дата начала − `post_reminder_days_before` дней в `post_reminder_time`» | Сообщение в служебный чат: пост не разослан и как его разослать | `post_reminder_sent_at` |
 | Напоминание | `status IN (open, closed)` и `reminder_at <= now` и `reminder_sent_at IS NULL` | Написать в личку активным участникам с `dm_available` | `reminder_sent_at` |
-| Закрытие записи | `status = open` и `registration_closes_at <= now` | `status = closed`, пересборка постов, итоговый список в служебный чат | `closed_at` |
-| Завершение | `status IN (open, closed)` и `starts_at <= now` | `status = finished` | статус |
+| Закрытие записи | `status = open` и `registration_closes_at <= now` | `status = closed`, пересборка постов, итоговый список в служебный чат (если ещё не наступил запрос явки) | `closed_at` |
+| Завершение | `status IN (open, closed)`, `starts_at <= now` и `registration_closes_at <= now` | `status = finished` | статус |
 | Запрос явки | `status = finished` и `attendance_prompt_at <= now` и `attendance_prompt_sent_at IS NULL` | Сообщение каждому админу (5.8) | `attendance_prompt_sent_at` |
 | Напоминание про явку | Запрос отправлен больше 14 ч назад, `attendance_marked_at IS NULL`, напоминание не отправлено | Сообщение в служебный чат | `attendance_reminder_sent_at` |
 | Бэкап | Раз в сутки в 04:00 по локальному времени | 17.5 | Файл-маркер с датой |
