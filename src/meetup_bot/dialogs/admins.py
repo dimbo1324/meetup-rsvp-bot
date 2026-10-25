@@ -11,19 +11,16 @@ from aiogram_dialog.widgets.kbd import Button, Column, Row, ScrollingGroup, Sele
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.db.models import AdminRole
-from meetup_bot.dialogs._common import (
-    NO_ACCESS,
-    actor_id,
-    describe_error,
-    get_services,
-    get_sessions,
-)
+from meetup_bot.dialogs._buttons import BACK, NO
+from meetup_bot.dialogs._common import actor_id, get_services, get_sessions
 from meetup_bot.dialogs.states import AdminsSG, PickerSG
 from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.admins import AdminEntry
+from meetup_bot.services.names import admin_label
 from meetup_bot.telegram.commands import set_admin_commands
 from meetup_bot.telegram.common import fit_alert
+from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 
 _ROLES = {AdminRole.OWNER.value: "владелец", AdminRole.ADMIN.value: "админ"}
 
@@ -34,8 +31,7 @@ async def is_owner(manager: DialogManager) -> bool:
 
 
 def _name(entry: AdminEntry) -> str:
-    full = " ".join(p for p in (entry.first_name, entry.last_name) if p) or f"ID {entry.user_id}"
-    return f"{full} (@{entry.username})" if entry.username else full
+    return admin_label(entry.first_name, entry.last_name, entry.username, entry.user_id)
 
 
 async def _entries(manager: DialogManager) -> list[AdminEntry]:
@@ -180,7 +176,7 @@ DIALOGS = [
                 hide_on_single_page=True,
             ),
             Button(Const("➕ Добавить админа"), id="admin_add", on_click=on_add, when="owner"),
-            Button(Const("⬅ Назад"), id="close", on_click=on_close),
+            Button(Const(BACK), id="close", on_click=on_close),
             getter=list_getter,
             state=AdminsSG.list,
             parse_mode="HTML",
@@ -195,7 +191,7 @@ DIALOGS = [
                     when="removable",
                 ),
             ),
-            Button(Const("⬅ Назад"), id="item_back", on_click=on_back_to_list),
+            Button(Const(BACK), id="item_back", on_click=on_back_to_list),
             getter=item_getter,
             state=AdminsSG.item,
             parse_mode="HTML",
@@ -204,7 +200,7 @@ DIALOGS = [
             Format("{text}"),
             Row(
                 Button(Const("Да, удалить"), id="remove_yes", on_click=on_remove_confirm),
-                Button(Const("Нет"), id="remove_no", on_click=on_back_to_item),
+                Button(Const(NO), id="remove_no", on_click=on_back_to_item),
             ),
             getter=confirm_getter,
             state=AdminsSG.confirm_remove,

@@ -20,10 +20,6 @@ from meetup_bot.services.settings_schema import (
     get_spec,
     parse_hhmm,
     validate,
-    validate_capacity,
-    validate_description,
-    validate_place,
-    validate_url,
 )
 from meetup_bot.texts.defaults import (
     ALLOWED_PLACEHOLDERS,
@@ -213,28 +209,28 @@ def test_часовой_пояс_не_строка_отклоняется() -> N
 
 
 def test_место_обрезает_пробелы() -> None:
-    assert validate_place("  Кафе  ") == "Кафе"
+    assert validate(SCHEMA["default_place"], "  Кафе  ")[0] == "Кафе"
 
 
 def test_место_пустое_допустимо() -> None:
-    assert validate_place("") == ""
+    assert validate(SCHEMA["default_place"], "")[0] == ""
 
 
 def test_место_ровно_200_допустимо_201_нет() -> None:
-    assert validate_place("м" * 200) == "м" * 200
+    assert validate(SCHEMA["default_place"], "м" * 200)[0] == "м" * 200
     with pytest.raises(SettingsValidationError, match="200"):
-        validate_place("м" * 201)
+        validate(SCHEMA["default_place"], "м" * 201)
 
 
 @pytest.mark.parametrize("value", ["a\nb", "a\tb", "a\x00b", "a\x7fb"])
 def test_место_без_управляющих_символов(value: str) -> None:
     with pytest.raises(SettingsValidationError, match="управляющих"):
-        validate_place(value)
+        validate(SCHEMA["default_place"], value)
 
 
 def test_место_не_строка_отклоняется() -> None:
     with pytest.raises(SettingsValidationError, match="строка"):
-        validate_place(5)
+        validate(SCHEMA["default_place"], 5)
 
 
 def test_опциональная_строка_принимает_none() -> None:
@@ -255,11 +251,14 @@ def test_опциональная_строка_некорректная(value: o
 
 
 def test_ссылка_пустая_значит_без_ссылки() -> None:
-    assert validate_url("") == ""
+    assert validate(SCHEMA["default_place_url"], "")[0] == ""
 
 
 def test_ссылка_https_допустима_и_обрезается() -> None:
-    assert validate_url("  https://maps.example/x?q=1  ") == "https://maps.example/x?q=1"
+    assert (
+        validate(SCHEMA["default_place_url"], "  https://maps.example/x?q=1  ")[0]
+        == "https://maps.example/x?q=1"
+    )
 
 
 @pytest.mark.parametrize(
@@ -280,22 +279,22 @@ def test_ссылка_https_допустима_и_обрезается() -> None
 )
 def test_ссылка_некорректная(value: str) -> None:
     with pytest.raises(SettingsValidationError):
-        validate_url(value)
+        validate(SCHEMA["default_place_url"], value)
 
 
 def test_ссылка_длиннее_2000_отклоняется() -> None:
     with pytest.raises(SettingsValidationError, match="2000"):
-        validate_url("https://a.b/" + "x" * 2000)
+        validate(SCHEMA["default_place_url"], "https://a.b/" + "x" * 2000)
 
 
 def test_вместимость_возвращает_int() -> None:
-    assert validate_capacity(25) == 25
+    assert validate(SCHEMA["capacity"], 25)[0] == 25
 
 
 @pytest.mark.parametrize("value", [0, 201, -5, True, "10", 1.5])
 def test_вместимость_некорректная(value: object) -> None:
     with pytest.raises(SettingsValidationError):
-        validate_capacity(value)
+        validate(SCHEMA["capacity"], value)
 
 
 # ---- HTML-описание --------------------------------------------------------------------
@@ -406,14 +405,14 @@ def test_html_длиннее_порога_даёт_предупреждение(
     assert check_html("default_description", "а" * (DESCRIPTION_WARN_LEN + 1))
 
 
-def test_validate_description_возвращает_предупреждения_списком() -> None:
-    assert validate_description("а" * (DESCRIPTION_WARN_LEN + 1))
-    assert validate_description("<b>ok</b>") == []
+def test_описание_по_схеме_возвращает_предупреждения_списком() -> None:
+    assert validate(SCHEMA["default_description"], "а" * (DESCRIPTION_WARN_LEN + 1))[1]
+    assert validate(SCHEMA["default_description"], "<b>ok</b>")[1] == []
 
 
-def test_validate_description_ошибки_исключением() -> None:
+def test_описание_по_схеме_ошибки_исключением() -> None:
     with pytest.raises(SettingsValidationError):
-        validate_description("<script>")
+        validate(SCHEMA["default_description"], "<script>")
 
 
 # ---- шаблоны текстов (кейс 20) --------------------------------------------------------

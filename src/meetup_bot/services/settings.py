@@ -26,7 +26,6 @@ from meetup_bot.services import access
 from meetup_bot.services.errors import DomainError
 from meetup_bot.services.rules import RegistrationOptions, RulesSettings
 from meetup_bot.services.settings_schema import (
-    SAMPLE_VARS,
     SCHEMA,
     SettingSpec,
     SettingsValidationError,
@@ -299,7 +298,3 @@ class SettingsService:
     async def default_event_params(self) -> DefaultEventParams:
         await self._load()
         return self.defaults_now()
-
-
-# SAMPLE_VARS реэкспортируется для UI предпросмотра текстов
-SAMPLE_TEXT_VARS = SAMPLE_VARS

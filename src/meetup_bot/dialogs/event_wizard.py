@@ -34,15 +34,9 @@ from aiogram_dialog.widgets.kbd.calendar_kbd import CalendarUserConfig
 from aiogram_dialog.widgets.media import DynamicMedia
 from aiogram_dialog.widgets.text import Const, Format
 
-from meetup_bot.dialogs._common import (
-    ERROR_TEXTS,
-    NO_ACCESS,
-    actor_id,
-    describe_error,
-    get_services,
-    is_admin,
-    middleware_value,
-)
+from meetup_bot.db.models import EventStatus
+from meetup_bot.dialogs._buttons import BACK, CANCEL, USE_DEFAULT
+from meetup_bot.dialogs._common import actor_id, get_services, is_admin, middleware_value
 from meetup_bot.dialogs.calendar_ru import RussianCalendar
 from meetup_bot.dialogs.event_wizard_support import Suggestions, length_warnings, suggestions
 from meetup_bot.dialogs.states import CreateEventSG
@@ -53,16 +47,17 @@ from meetup_bot.renderer.post import (
     render_post,
     visible_length,
 )
-from meetup_bot.services.errors import InvalidOperation, PermissionDenied
+from meetup_bot.services.errors import ErrorCode, InvalidOperation, PermissionDenied
 from meetup_bot.services.event_validation import (
-    MAX_CAPACITY,
     validate_capacity,
     validate_description,
     validate_place,
     validate_url,
 )
+from meetup_bot.services.settings_schema import MAX_CAPACITY, MIN_CAPACITY
 from meetup_bot.services.timing import compute_times, next_event_start, validate_times
-from meetup_bot.texts.render import format_moment
+from meetup_bot.telegram.errors_text import ERROR_TEXTS, NO_ACCESS, describe_error
+from meetup_bot.texts.render import DATE_INPUT_FORMAT, format_moment
 
 TOTAL_STEPS = 6
 _TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")
@@ -148,7 +143,7 @@ def _post_data(manager: DialogManager, photo: str | None) -> PostData | None:
     data = manager.dialog_data
     return PostData(
         event_id=0,
-        status="open",
+        status=EventStatus.OPEN.value,
         starts_at=starts,
         ends_at=compute_times(starts, settings.schedule_now()).ends_at,
         timezone=settings.timezone_now().key,
@@ -182,11 +177,11 @@ async def _clear_notice(_: CallbackQuery, __: Any, manager: DialogManager) -> No
 
 
 def _back(state: Any, suffix: str) -> SwitchTo:
-    return SwitchTo(Const("⬅️ Назад"), id=f"back_{suffix}", state=state, on_click=_clear_notice)
+    return SwitchTo(Const(BACK), id=f"back_{suffix}", state=state, on_click=_clear_notice)
 
 
 def _cancel() -> Cancel:
-    return Cancel(Const("✖️ Отмена"), id="cancel_wizard")
+    return Cancel(Const(CANCEL), id="cancel_wizard")
 
 
 # ---- шаг 1: дата ---------------------------------------------------------------------
@@ -248,7 +243,7 @@ async def _time_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     picked = date.fromisoformat(dialog_manager.dialog_data[_DATE])
     return {
         "text": _head(2, "время")
-        + f"Дата: <b>{picked:%d.%m.%Y}</b>\n"
+        + f"Дата: <b>{picked.strftime(DATE_INPUT_FORMAT)}</b>\n"
         + _notice(dialog_manager)
         + "\nВыберите время кнопкой или пришлите его в формате <code>ЧЧ:ММ</code>, "
         f"например <code>18:30</code>. По умолчанию — {suggested.time}{suggested.source}.",
@@ -273,7 +268,7 @@ async def _accept_time(
         manager.dialog_data.pop(_TIME, None)
         _set_notice(
             manager,
-            f"{ERROR_TEXTS['invalid_times']} Скорее всего, момент уже прошёл или слишком "
+            f"{ERROR_TEXTS[ErrorCode.INVALID_TIMES]} Скорее всего, момент уже прошёл или слишком "
             "близко (запись закрывается заранее). Выберите дату заново.",
         )
         await manager.switch_to(CreateEventSG.date)
@@ -463,7 +458,7 @@ async def _capacity_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
     return {
         "text": _head(6, "лимит мест")
         + _notice(dialog_manager)
-        + f"\nПришлите число мест от 1 до {MAX_CAPACITY} или нажмите кнопку. "
+        + f"\nПришлите число мест от {MIN_CAPACITY} до {MAX_CAPACITY} или нажмите кнопку. "
         f"По умолчанию — {default}{_suggested(dialog_manager).source}.",
         "default_capacity": default,
     }
@@ -483,7 +478,7 @@ async def _on_capacity_text(message: Message, _: Any, manager: DialogManager) ->
     try:
         value = validate_capacity(int(raw))
     except ValueError:
-        _set_notice(manager, f"Нужно целое число от 1 до {MAX_CAPACITY}. Пример: 12.")
+        _set_notice(manager, f"Нужно целое число от {MIN_CAPACITY} до {MAX_CAPACITY}. Пример: 12.")
         return
     except InvalidOperation as exc:
         _set_notice(manager, f"{describe_error(exc)} Пример: 12.")
@@ -535,7 +530,7 @@ async def _on_create(callback: CallbackQuery, _: Any, manager: DialogManager) ->
             photo_file_id=data.get(_PHOTO),
         )
     except InvalidOperation as exc:
-        if exc.code == "invalid_times":
+        if exc.code == ErrorCode.INVALID_TIMES:
             data.pop(_DATE, None)
             data.pop(_TIME, None)
             _set_notice(manager, f"{describe_error(exc)} Выберите дату заново.")
@@ -590,7 +585,7 @@ _time_window = Window(
 _place_window = Window(
     _BODY,
     Button(
-        Const("По умолчанию"),
+        Const(USE_DEFAULT),
         id="place_default",
         on_click=_on_place_default,
         when="has_default_place",
@@ -605,7 +600,7 @@ _place_window = Window(
 _description_window = Window(
     _BODY,
     Button(
-        Const("По умолчанию"),
+        Const(USE_DEFAULT),
         id="desc_default",
         on_click=_on_description_default,
         when="has_default_text",
@@ -620,7 +615,7 @@ _description_window = Window(
 _photo_window = Window(
     _BODY,
     Button(
-        Const("По умолчанию"),
+        Const(USE_DEFAULT),
         id="photo_default",
         on_click=_on_photo_default,
         when="has_default_photo",

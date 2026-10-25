@@ -5,9 +5,13 @@ from __future__ import annotations
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
-
-LIVE_STATUSES = (RegistrationStatus.ACTIVE.value, RegistrationStatus.WAITLIST.value)
+from meetup_bot.db.models import (
+    LIVE_REGISTRATION_STATUSES,
+    Attendance,
+    Registration,
+    RegistrationStatus,
+    User,
+)
 
 
 async def get_live(session: AsyncSession, event_id: int, user_id: int) -> Registration | None:
@@ -16,7 +20,7 @@ async def get_live(session: AsyncSession, event_id: int, user_id: int) -> Regist
         select(Registration).where(
             Registration.event_id == event_id,
             Registration.user_id == user_id,
-            Registration.status.in_(LIVE_STATUSES),
+            Registration.status.in_(LIVE_REGISTRATION_STATUSES),
         )
     )
 

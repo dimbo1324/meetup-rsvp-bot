@@ -16,7 +16,8 @@ from aiogram_dialog.api.exceptions import (
 
 from meetup_bot.clock import Clock
 from meetup_bot.services.ports import Notifier
-from meetup_bot.telegram.common import GENERIC_ERROR_TEXT
+from meetup_bot.telegram.common import GENERIC_ERROR_TEXT, safe_answer
+from meetup_bot.texts.service import ERROR_REPORT_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,7 @@ async def on_error(event: ErrorEvent, notifier: Notifier, clock: Clock) -> bool:
         logger.info("устаревшая кнопка диалога: %s", kind)
         stale = event.update.callback_query
         if stale is not None:
-            try:
-                await stale.answer(text=STALE_DIALOG_TEXT, show_alert=True)
-            except Exception:
-                logger.debug("не удалось ответить на устаревшую кнопку", exc_info=True)
+            await safe_answer(stale, STALE_DIALOG_TEXT)
         return True
     # Трейсбек идёт только в лог: в нём могут быть данные пользователей, а токен в него не попадает
     logger.error("необработанная ошибка в обработчике: %s", kind, exc_info=exception)
@@ -52,15 +50,11 @@ async def on_error(event: ErrorEvent, notifier: Notifier, clock: Clock) -> bool:
     if last is None or now - last >= REPORT_INTERVAL:
         _last_report[kind] = now
         try:
-            await notifier.send_service(f"⚠️ Ошибка: {kind}")
+            await notifier.send_service(ERROR_REPORT_TEXT.format(kind=kind))
         except Exception:
             logger.exception("не удалось отправить сообщение об ошибке в служебный чат")
 
     callback = event.update.callback_query
     if callback is not None:
-        try:
-            await callback.answer(text=GENERIC_ERROR_TEXT, show_alert=True)
-        except Exception:
-            # Уже отвечено или запрос устарел — пользователю это не поможет, просто пропускаем
-            logger.debug("повторный ответ на callback не удался", exc_info=True)
+        await safe_answer(callback, GENERIC_ERROR_TEXT)
     return True

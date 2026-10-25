@@ -17,13 +17,13 @@ from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.kbd import Button, Cancel, Group, Select, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
 
-from meetup_bot.dialogs._common import NO_ACCESS, actor_id, describe_error, get_services, is_admin
+from meetup_bot.dialogs._buttons import BACK, RESET_DEFAULT, TO_MENU
+from meetup_bot.dialogs._common import actor_id, get_services, is_admin
 from meetup_bot.dialogs.settings_view import (
     GROUPS,
     PHOTO_KEY,
     POPULAR_TIMEZONES,
     WEEKDAY_KEYS,
-    WEEKDAYS_SHORT,
     accepts_input,
     button_label,
     can_clear,
@@ -39,11 +39,13 @@ from meetup_bot.services.settings_schema import (
     Kind,
     SettingSpec,
 )
+from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 from meetup_bot.texts.defaults import (
     ALLOWED_PLACEHOLDERS,
     DEFAULT_TEXTS,
     MESSAGE_TEXT_KEYS,
 )
+from meetup_bot.texts.render import WEEKDAYS_SHORT, clip
 
 _PARSE = "HTML"
 _TEXT_KEYS = tuple(DEFAULT_TEXTS)
@@ -149,7 +151,9 @@ async def edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]
     value = await settings.get(key)
     is_default = await settings.is_default(key)
     notice = _pop_notice(dialog_manager)
-    weekdays = [(("✅ " if value == i else "") + name, i) for i, name in enumerate(WEEKDAYS_SHORT)]
+    weekdays = [
+        (("✅ " if value == i else "") + name.lower(), i) for i, name in enumerate(WEEKDAYS_SHORT)
+    ]
     return {
         "body": edit_body(spec, value, is_default, notice),
         "is_bool": spec.kind is Kind.BOOL,
@@ -219,7 +223,7 @@ async def _on_input(message: Message, widget: Any, manager: DialogManager) -> No
     await _save(manager, key, value)
 
 
-_BACK_TO_GROUP = SwitchTo(Const("⬅️ Назад"), id="edit_back", state=SettingsSG.group)
+_BACK_TO_GROUP = SwitchTo(Const(BACK), id="edit_back", state=SettingsSG.group)
 
 edit_window = Window(
     Format("{body}"),
@@ -237,7 +241,7 @@ edit_window = Window(
         when="is_weekday",
     ),
     Button(Const("🧹 Очистить"), id="clear", on_click=_on_clear, when="can_clear"),
-    Button(Const("↩️ Сбросить по умолчанию"), id="reset", on_click=_on_reset),
+    Button(Const(RESET_DEFAULT), id="reset", on_click=_on_reset),
     _BACK_TO_GROUP,
     MessageInput(_on_input, content_types=[ContentType.TEXT, ContentType.PHOTO]),
     state=SettingsSG.edit,
@@ -283,10 +287,6 @@ def _placeholders(template: str) -> list[str]:
 PREVIEW_CLIP = 1200
 
 
-def _clip(text: str) -> str:
-    return text if len(text) <= PREVIEW_CLIP else text[: PREVIEW_CLIP - 1] + "…"
-
-
 async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     key = _current_key(dialog_manager)
     settings = get_services(dialog_manager).settings
@@ -308,7 +308,7 @@ async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
         f"<b>{html.escape(SCHEMA[key].description)}</b>",
         "",
         f"Текст сейчас{mark}:",
-        f"<blockquote>{html.escape(_clip(template))}</blockquote>",
+        f"<blockquote>{html.escape(clip(template, PREVIEW_CLIP))}</blockquote>",
         "",
         f"Подстановки в стандартном тексте: {html.escape(used)}",
         f"Все допустимые: {html.escape(allowed)}",
@@ -316,7 +316,7 @@ async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
         f"Длина: {limit}.",
         "",
         "Предпросмотр с примерными значениями:",
-        f"<blockquote>{html.escape(_clip(preview))}</blockquote>",
+        f"<blockquote>{html.escape(clip(preview, PREVIEW_CLIP))}</blockquote>",
         "",
         "Отправьте новый текст сообщением.",
     ]
@@ -352,7 +352,7 @@ texts_window = Window(
         ),
         width=1,
     ),
-    SwitchTo(Const("⬅️ Назад"), id="texts_back", state=SettingsSG.menu),
+    SwitchTo(Const(BACK), id="texts_back", state=SettingsSG.menu),
     state=SettingsSG.texts,
     getter=texts_getter,
     parse_mode=_PARSE,
@@ -360,8 +360,8 @@ texts_window = Window(
 
 text_edit_window = Window(
     Format("{body}"),
-    Button(Const("↩️ Сбросить по умолчанию"), id="text_reset", on_click=_on_text_reset),
-    SwitchTo(Const("⬅️ Назад"), id="text_edit_back", state=SettingsSG.texts),
+    Button(Const(RESET_DEFAULT), id="text_reset", on_click=_on_text_reset),
+    SwitchTo(Const(BACK), id="text_edit_back", state=SettingsSG.texts),
     MessageInput(_on_text_input, content_types=[ContentType.TEXT]),
     state=SettingsSG.text_edit,
     getter=text_edit_getter,
@@ -415,8 +415,8 @@ timezone_window = Window(
         ),
         width=1,
     ),
-    Button(Const("↩️ Сбросить по умолчанию"), id="zone_reset", on_click=_on_zone_reset),
-    SwitchTo(Const("⬅️ Назад"), id="zone_back", state=SettingsSG.menu),
+    Button(Const(RESET_DEFAULT), id="zone_reset", on_click=_on_zone_reset),
+    SwitchTo(Const(BACK), id="zone_back", state=SettingsSG.menu),
     MessageInput(_on_zone_input, content_types=[ContentType.TEXT]),
     state=SettingsSG.timezone,
     getter=timezone_getter,
@@ -453,7 +453,7 @@ menu_window = Window(
     Button(Const("Правила"), id="g_rules", on_click=_open_group("rules")),
     Button(Const("Тексты сообщений"), id="g_texts", on_click=_open_texts),
     Button(Const("Часовой пояс"), id="g_timezone", on_click=_open_timezone),
-    Cancel(Const("⬅️ В меню")),
+    Cancel(Const(TO_MENU)),
     state=SettingsSG.menu,
     getter=menu_getter,
     parse_mode=_PARSE,
@@ -471,7 +471,7 @@ group_window = Window(
         ),
         width=1,
     ),
-    SwitchTo(Const("⬅️ Назад"), id="group_back", state=SettingsSG.menu),
+    SwitchTo(Const(BACK), id="group_back", state=SettingsSG.menu),
     state=SettingsSG.group,
     getter=group_getter,
     parse_mode=_PARSE,

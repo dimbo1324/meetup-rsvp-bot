@@ -14,6 +14,7 @@ from meetup_bot.repositories import audit, events, events_admin
 from meetup_bot.services import access
 from meetup_bot.services.errors import NotFound
 from meetup_bot.services.names import display_name
+from meetup_bot.texts.render import ISO_DATE, ISO_MINUTE, format_local
 
 HEADER = [
     "event_date",
@@ -57,7 +58,7 @@ class ExportService:
             )
             await session.commit()
 
-        event_date = event.starts_at.astimezone(tz).strftime("%Y-%m-%d")
+        event_date = format_local(event.starts_at, tz, ISO_DATE)
         order = {
             RegistrationStatus.ACTIVE.value: 0,
             RegistrationStatus.WAITLIST.value: 1,
@@ -85,7 +86,7 @@ class ExportService:
                     f"tg://user?id={registration.user_id}" if registration.user_id else "",
                     registration.status,
                     registration.guests,
-                    registration.created_at.astimezone(tz).strftime("%Y-%m-%d %H:%M"),
+                    format_local(registration.created_at, tz, ISO_MINUTE),
                     registration.attendance,
                 ]
             )

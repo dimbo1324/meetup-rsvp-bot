@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
@@ -60,9 +61,18 @@ class AdminRole(enum.StrEnum):
     ADMIN = "admin"
 
 
-def _in(column: str, enum_cls: type[enum.StrEnum]) -> str:
-    values = ", ".join(f"'{member.value}'" for member in enum_cls)
-    return f"{column} IN ({values})"
+# Запись занимает место или стоит в очереди: по этим статусам действует уникальный индекс
+LIVE_REGISTRATION_STATUSES: tuple[str, ...] = (
+    RegistrationStatus.ACTIVE.value,
+    RegistrationStatus.WAITLIST.value,
+)
+# Встреча ещё не завершена и не отменена: её можно править, закрывать и завершать
+UNFINISHED_EVENT_STATUSES: tuple[str, ...] = (EventStatus.OPEN.value, EventStatus.CLOSED.value)
+
+
+def _in(column: str, values: Iterable[str]) -> str:
+    quoted = ", ".join(f"'{value}'" for value in values)
+    return f"{column} IN ({quoted})"
 
 
 class User(Base):
@@ -139,7 +149,9 @@ class Registration(Base):
             "event_id",
             "user_id",
             unique=True,
-            sqlite_where=text("status IN ('active', 'waitlist') AND user_id IS NOT NULL"),
+            sqlite_where=text(
+                f"{_in('status', LIVE_REGISTRATION_STATUSES)} AND user_id IS NOT NULL"
+            ),
         ),
         Index("ix_registrations_event_status_created_at", "event_id", "status", "created_at"),
         Index("ix_registrations_user_id", "user_id"),

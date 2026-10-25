@@ -23,9 +23,13 @@ from aiogram_dialog.widgets.kbd import Button, Column, Keyboard, Row, Select
 from aiogram_dialog.widgets.markup.reply_keyboard import ReplyKeyboardFactory
 from aiogram_dialog.widgets.text import Const, Format
 
-from meetup_bot.dialogs._common import NO_ACCESS, get_sessions, is_admin
+from meetup_bot.dialogs._buttons import BACK, CANCEL
+from meetup_bot.dialogs._common import get_sessions, is_admin
 from meetup_bot.dialogs.states import PickerSG
 from meetup_bot.repositories import users_known
+from meetup_bot.services.names import admin_label
+from meetup_bot.telegram.common import page_count
+from meetup_bot.telegram.errors_text import NO_ACCESS
 
 PAGE_SIZE = 8
 _REQUEST_ID = 1
@@ -156,15 +160,13 @@ async def known_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str
     page = int(dialog_manager.dialog_data.get("page", 0))
     async with get_sessions(dialog_manager)() as session:
         total = await users_known.count_known(session, exclude)
-        pages = max(1, -(-total // PAGE_SIZE))
+        pages = page_count(total, PAGE_SIZE)
         page = min(max(page, 0), pages - 1)
         dialog_manager.dialog_data["page"] = page
         rows = await users_known.list_known(session, PAGE_SIZE, page * PAGE_SIZE, exclude)
     users = []
     for row in rows:
-        label = " ".join(p for p in (row.first_name, row.last_name) if p)
-        if row.username:
-            label += f" (@{row.username})"
+        label = admin_label(row.first_name, row.last_name, row.username, row.id)
         users.append({"id": row.id, "label": label})
     text = (
         f"Известные пользователи, страница {page + 1} из {pages}."
@@ -207,7 +209,7 @@ DIALOGS = [
             Format("{text}"),
             RequestUsers("👤 Выбрать пользователя"),
             Button(Const("📋 Из списка записывавшихся"), id="known", on_click=on_known),
-            Button(Const("✖ Отмена"), id="cancel", on_click=on_cancel),
+            Button(Const(CANCEL), id="cancel", on_click=on_cancel),
             MessageInput(on_message, content_types=ContentType.ANY),
             markup_factory=ReplyKeyboardFactory(resize_keyboard=True),
             getter=pick_getter,
@@ -230,8 +232,8 @@ DIALOGS = [
                 Button(Const("◀"), id="prev", on_click=on_prev, when="has_prev"),
                 Button(Const("▶"), id="next", on_click=on_next, when="has_next"),
             ),
-            Button(Const("⬅ Назад"), id="back", on_click=on_back),
-            Button(Const("✖ Отмена"), id="known_cancel", on_click=on_known_cancel),
+            Button(Const(BACK), id="back", on_click=on_back),
+            Button(Const(CANCEL), id="known_cancel", on_click=on_known_cancel),
             getter=known_getter,
             state=PickerSG.known,
             parse_mode="HTML",

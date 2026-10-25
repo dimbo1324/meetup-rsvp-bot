@@ -15,10 +15,17 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from meetup_bot.db.models import EventStatus
-from meetup_bot.texts.render import clip, format_interval, telegram_length
+from meetup_bot.texts.render import GUEST_SUFFIX, clip, format_interval, telegram_length
 
 CAPTION_LIMIT = 1024
 TEXT_LIMIT = 4096
+
+# Формат callback_data кнопок поста: `r:<event_id>:<action>`; разбирает его SignupCallback
+SIGNUP_PREFIX = "r"
+SIGNUP_SEP = ":"
+ACTION_JOIN = "j"
+ACTION_JOIN_PLUS_ONE = "j1"
+ACTION_CANCEL = "c"
 
 
 _TAG_RE = re.compile(r"<[^>]*>")
@@ -69,8 +76,7 @@ class RenderedPost:
 
 
 def signup_callback(event_id: int, action: str) -> str:
-    """`r:<event_id>:<action>`, где action: `j` — записаться, `j1` — записаться +1, `c` — отмена."""
-    return f"r:{event_id}:{action}"
+    return SIGNUP_SEP.join((SIGNUP_PREFIX, str(event_id), action))
 
 
 def visible_length(markup: str) -> int:
@@ -135,8 +141,9 @@ def _status_line(data: PostData) -> str:
     return ""
 
 
-def _participant_line(index: int, participant: Participant) -> str:
-    suffix = " (+1)" if participant.guests else ""
+def participant_line(index: int, participant: Participant) -> str:
+    """«1. Имя (+1)» с экранированным под HTML именем."""
+    suffix = GUEST_SUFFIX if participant.guests else ""
     return f"{index}. {html.escape(participant.name, quote=False)}{suffix}"
 
 
@@ -154,7 +161,7 @@ def _compose(data: PostData, description: str, shown: int) -> str:
         counter.append(f"В очереди: {data.waiting}")
     if data.show_names and data.participants:
         counter.extend(
-            _participant_line(i, p) for i, p in enumerate(data.participants[:shown], start=1)
+            participant_line(i, p) for i, p in enumerate(data.participants[:shown], start=1)
         )
         hidden = len(data.participants) - shown
         if hidden > 0:
@@ -184,12 +191,14 @@ def _keyboard(data: PostData) -> tuple[tuple[ButtonSpec, ...], ...]:
         return ()
     rows: list[tuple[ButtonSpec, ...]] = [
         (
-            ButtonSpec("Записаться", signup_callback(data.event_id, "j")),
-            ButtonSpec("Отменить запись", signup_callback(data.event_id, "c")),
+            ButtonSpec("Записаться", signup_callback(data.event_id, ACTION_JOIN)),
+            ButtonSpec("Отменить запись", signup_callback(data.event_id, ACTION_CANCEL)),
         )
     ]
     if data.plus_one_enabled:
-        rows.append((ButtonSpec("Записаться +1", signup_callback(data.event_id, "j1")),))
+        rows.append(
+            (ButtonSpec("Записаться +1", signup_callback(data.event_id, ACTION_JOIN_PLUS_ONE)),)
+        )
     return tuple(rows)
 
 

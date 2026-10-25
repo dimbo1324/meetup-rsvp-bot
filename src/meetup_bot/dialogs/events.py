@@ -16,26 +16,33 @@ from aiogram_dialog.widgets.kbd import Button, Column, Row, ScrollingGroup, Sele
 from aiogram_dialog.widgets.text import Const, Format
 from sqlalchemy import func, select
 
-from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus
-from meetup_bot.dialogs._common import (
-    NO_ACCESS,
-    actor_id,
-    describe_error,
-    get_services,
-    get_sessions,
-    is_admin,
+from meetup_bot.db.models import (
+    UNFINISHED_EVENT_STATUSES,
+    Event,
+    EventStatus,
+    Registration,
+    RegistrationStatus,
 )
+from meetup_bot.dialogs._buttons import BACK, NO_REASON, TO_EVENT, TO_LIST
+from meetup_bot.dialogs._common import actor_id, get_services, get_sessions, is_admin
 from meetup_bot.dialogs.states import CreateEventSG, EventsSG, ParticipantsSG
 from meetup_bot.repositories import events as events_repo
-from meetup_bot.services.errors import DomainError
+from meetup_bot.services.errors import DomainError, ErrorCode
+from meetup_bot.services.settings_schema import MAX_CAPACITY, MIN_CAPACITY, REASON_MAX_LEN
 from meetup_bot.telegram.attendance_ui import SheetStatus
 from meetup_bot.telegram.common import fit_alert
+from meetup_bot.telegram.errors_text import ERROR_TEXTS, NO_ACCESS, describe_error
 from meetup_bot.telegram.posts import build_post
-from meetup_bot.texts.render import date_parts, format_interval, format_moment
+from meetup_bot.texts.render import (
+    ISO_DATE,
+    SHORT_DATETIME,
+    date_parts,
+    format_interval,
+    format_local,
+    format_moment,
+)
 
-DATE_FORMAT = "%d.%m.%Y %H:%M"
 DATE_HINT = "Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ, например 15.11.2026 18:30."
-REASON_LIMIT = 300
 
 STATUS_TITLES = {
     EventStatus.OPEN.value: "запись открыта",
@@ -46,8 +53,8 @@ STATUS_TITLES = {
 SHEET_TEXTS = {
     SheetStatus.SENT: "Список отправлен вам в личные сообщения.",
     SheetStatus.NOT_STARTED: "Встреча ещё не началась.",
-    SheetStatus.WINDOW_CLOSED: "Окно отметки явки закрыто (прошло более 7 суток).",
-    SheetStatus.CANCELLED: "Встреча отменена.",
+    SheetStatus.WINDOW_CLOSED: ERROR_TEXTS[ErrorCode.ATTENDANCE_WINDOW_CLOSED],
+    SheetStatus.CANCELLED: ERROR_TEXTS[ErrorCode.EVENT_CANCELLED],
     SheetStatus.NO_ACCESS: NO_ACCESS,
     SheetStatus.FAILED: "Не удалось отправить список (напишите боту /start).",
 }
@@ -90,10 +97,6 @@ def _tz(manager: DialogManager) -> ZoneInfo:
     return get_services(manager).settings.timezone_now()
 
 
-def _local_input(moment: datetime, tz: ZoneInfo) -> str:
-    return moment.astimezone(tz).strftime(DATE_FORMAT)
-
-
 MIN_YEAR = 2000
 MAX_YEAR = 2100
 
@@ -101,7 +104,7 @@ MAX_YEAR = 2100
 def parse_local(text: str, tz: ZoneInfo) -> datetime | None:
     """«ДД.ММ.ГГГГ ЧЧ:ММ» в часовом поясе клуба -> UTC; при ошибке формата None."""
     try:
-        naive = datetime.strptime(text.strip(), DATE_FORMAT)  # noqa: DTZ007
+        naive = datetime.strptime(text.strip(), SHORT_DATETIME)  # noqa: DTZ007
         if not MIN_YEAR <= naive.year <= MAX_YEAR:
             # Вычитание часов в compute_times у границы диапазона дало бы OverflowError
             return None
@@ -232,7 +235,7 @@ async def _card_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
 
 def _flags(event: Event | None) -> dict[str, bool]:
     status = event.status if event else ""
-    editable = status in (EventStatus.OPEN.value, EventStatus.CLOSED.value)
+    editable = status in UNFINISHED_EVENT_STATUSES
     return {
         "editable": editable,
         "can_close": status == EventStatus.OPEN.value,
@@ -288,7 +291,7 @@ async def _on_export(callback: CallbackQuery, button: Button, manager: DialogMan
     except DomainError as exc:
         await _alert(callback, exc)
         return
-    filename = f"event-{event.starts_at.astimezone(tz):%Y-%m-%d}.csv"
+    filename = f"event-{format_local(event.starts_at, tz, ISO_DATE)}.csv"
     # Документ шлём в личку админа, а не «ответом»: исходное сообщение может быть недоступно
     await callback.bot.send_document(  # type: ignore[union-attr]
         chat_id=actor_id(manager), document=BufferedInputFile(data, filename=filename)
@@ -320,7 +323,7 @@ async def _preview_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, 
 async def _on_reason(message: Message, widget: Any, manager: DialogManager, value: str) -> None:
     if await _deny_message(message, manager):
         return
-    manager.dialog_data["reason"] = value.strip()[:REASON_LIMIT] or None
+    manager.dialog_data["reason"] = value.strip()[:REASON_MAX_LEN] or None
     await manager.switch_to(EventsSG.cancel_confirm)
 
 
@@ -374,12 +377,13 @@ async def _edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
         }
     chosen = str(dialog_manager.dialog_data.get("moment", ""))
     moments = "\n".join(
-        f"{title}: {_local_input(getattr(event, name), tz)}" for name, title in MOMENTS.items()
+        f"{title}: {format_local(getattr(event, name), tz, SHORT_DATETIME)}"
+        for name, title in MOMENTS.items()
     )
     return {
         "place": _esc(event.place) or "не указано",
         "place_url": _esc(event.place_url) or "не указана",
-        "starts": _local_input(event.starts_at, tz),
+        "starts": format_local(event.starts_at, tz, SHORT_DATETIME),
         "capacity": event.capacity,
         "moments": moments,
         "chosen": chosen,
@@ -583,7 +587,7 @@ async def _on_edit_back(callback: CallbackQuery, button: Button, manager: Dialog
 
 
 def _back_to_edit(id_: str) -> Button:
-    return Button(Const("⬅️ Назад"), id=id_, on_click=_on_edit_back)
+    return Button(Const(BACK), id=id_, on_click=_on_edit_back)
 
 
 DIALOGS = [
@@ -606,7 +610,7 @@ DIALOGS = [
             ),
             Button(Const("➕ Новая встреча"), id="new", on_click=_on_new_event),
             Button(Const("🔄 Обновить"), id="refresh", on_click=_on_refresh),
-            Button(Const("⬅️ Назад"), id="back", on_click=_on_close_list),
+            Button(Const(BACK), id="back", on_click=_on_close_list),
             state=EventsSG.list,
             getter=_list_getter,
         ),
@@ -664,27 +668,27 @@ DIALOGS = [
                 state=EventsSG.cancel_reason,
                 when="editable",
             ),
-            SwitchTo(Const("⬅️ К списку"), id="to_list", state=EventsSG.list),
+            SwitchTo(Const(TO_LIST), id="to_list", state=EventsSG.list),
             state=EventsSG.card,
             getter=_card_getter,
         ),
         Window(
             Format("{text}"),
-            SwitchTo(Const("⬅️ К встрече"), id="back", state=EventsSG.card),
+            SwitchTo(Const(TO_EVENT), id="back", state=EventsSG.card),
             state=EventsSG.preview,
             getter=_preview_getter,
         ),
         Window(
             Const("<b>Отмена встречи</b>\n\nНапишите причину отмены — её получат записавшиеся."),
             TextInput(id="reason", on_success=_on_reason),
-            Button(Const("Без причины"), id="no_reason", on_click=_on_no_reason),
-            SwitchTo(Const("⬅️ Назад"), id="back", state=EventsSG.card),
+            Button(Const(NO_REASON), id="no_reason", on_click=_on_no_reason),
+            SwitchTo(Const(BACK), id="back", state=EventsSG.card),
             state=EventsSG.cancel_reason,
         ),
         Window(
             Format("<b>Отменить встречу?</b>\n\n{reason_text}\n\nЗаписанным придёт уведомление."),
             Button(Const("❌ Да, отменить"), id="confirm", on_click=_on_cancel_confirm),
-            SwitchTo(Const("⬅️ Назад"), id="back", state=EventsSG.cancel_reason),
+            SwitchTo(Const(BACK), id="back", state=EventsSG.cancel_reason),
             state=EventsSG.cancel_confirm,
             getter=_cancel_getter,
         ),
@@ -703,7 +707,7 @@ DIALOGS = [
                     state=EventsSG.edit_moments,
                 ),
             ),
-            SwitchTo(Const("⬅️ К встрече"), id="back", state=EventsSG.card),
+            SwitchTo(Const(TO_EVENT), id="back", state=EventsSG.card),
             state=EventsSG.edit_menu,
         ),
         Window(
@@ -755,7 +759,10 @@ DIALOGS = [
             getter=_edit_getter,
         ),
         Window(
-            Format("<b>Лимит мест</b>\n\nСейчас: {capacity}.\n\nВведите новое число от 1 до 200."),
+            Format(
+                "<b>Лимит мест</b>\n\nСейчас: {capacity}.\n\n"
+                f"Введите новое число от {MIN_CAPACITY} до {MAX_CAPACITY}."
+            ),
             TextInput(
                 id="capacity",
                 type_factory=int,
@@ -796,7 +803,7 @@ DIALOGS = [
                     when=lambda data, w, m: not data["chosen"],
                 ),
             ),
-            Button(Const("⬅️ Назад"), id="back", on_click=_on_moment_back),
+            Button(Const(BACK), id="back", on_click=_on_moment_back),
             state=EventsSG.edit_moments,
             getter=_edit_getter,
         ),

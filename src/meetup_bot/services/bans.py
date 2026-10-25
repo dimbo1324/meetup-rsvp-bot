@@ -12,10 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import (
+    LIVE_REGISTRATION_STATUSES,
+    UNFINISHED_EVENT_STATUSES,
     Ban,
     BanReason,
     Event,
-    EventStatus,
     Registration,
     RegistrationStatus,
     User,
@@ -26,7 +27,7 @@ from meetup_bot.repositories import users as users_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import RenderText, default_render_text, notify_promotions
-from meetup_bot.services.errors import InvalidOperation
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, PostRefresher
 from meetup_bot.services.rules import RulesSettings
@@ -35,8 +36,6 @@ from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 # Повторы на случай, когда между поиском будущих встреч и блокировкой пользователь записался
 _MAX_LOCK_ATTEMPTS = 5
-
-_LIVE = (RegistrationStatus.ACTIVE.value, RegistrationStatus.WAITLIST.value)
 
 
 @dataclass(frozen=True)
@@ -90,14 +89,16 @@ class BanService:
         выбрал человека из Telegram, `user` сохраняет его имя для чёрного списка.
         """
         if user is not None and user.id != user_id:
-            raise InvalidOperation("invalid_user", "данные пользователя не совпадают с ID")
+            raise InvalidOperation(ErrorCode.INVALID_USER, "данные пользователя не совпадают с ID")
         if user_id <= 0:
-            raise InvalidOperation("invalid_user", "некорректный Telegram ID")
+            raise InvalidOperation(ErrorCode.INVALID_USER, "некорректный Telegram ID")
         async with self._sessions() as session, session.begin():
             await access.require_admin(session, actor_id)
             # Владельца, админов и себя банить нельзя: иначе можно отрезать доступ к управлению
             if reason is BanReason.MANUAL and await admins.is_admin(session, user_id):
-                raise InvalidOperation("cannot_ban_admin", "нельзя забанить админа или владельца")
+                raise InvalidOperation(
+                    ErrorCode.CANNOT_BAN_ADMIN, "нельзя забанить админа или владельца"
+                )
         created = await self._ban_user(actor_id, user_id, reason, comment, event_id, user)
         return created.ban
 
@@ -245,8 +246,8 @@ class BanService:
             .join(Event, Registration.event_id == Event.id)
             .where(
                 Registration.user_id == user_id,
-                Registration.status.in_(_LIVE),
-                Event.status.in_((EventStatus.OPEN.value, EventStatus.CLOSED.value)),
+                Registration.status.in_(LIVE_REGISTRATION_STATUSES),
+                Event.status.in_(UNFINISHED_EVENT_STATUSES),
                 Event.starts_at > self._clock.now(),
             )
         )
@@ -269,7 +270,7 @@ class BanService:
                 select(Registration).where(
                     Registration.event_id == event_id,
                     Registration.user_id == user_id,
-                    Registration.status.in_(_LIVE),
+                    Registration.status.in_(LIVE_REGISTRATION_STATUSES),
                 )
             )
             freed_seat = False

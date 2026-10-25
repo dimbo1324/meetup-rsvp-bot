@@ -74,7 +74,25 @@ def test_время_только_через_clock(path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["display_name", "DEFAULT_TIMEZONE", "ATTENDANCE_WINDOW", "PROMOTED_DM_TEXT"]
+    "name",
+    [
+        "display_name",
+        "DEFAULT_TIMEZONE",
+        "ATTENDANCE_WINDOW",
+        "PROMOTED_DM_TEXT",
+        "LIVE_REGISTRATION_STATUSES",
+        "UNFINISHED_EVENT_STATUSES",
+        "DEFAULT_CAPACITY",
+        "MAX_CAPACITY",
+        "GENERIC_ERROR_TEXT",
+        "ERROR_TEXTS",
+        "MAX_RETRY_AFTER",
+        "GUEST_SUFFIX",
+        "WEEKDAYS_SHORT",
+        "page_count",
+        "admin_label",
+        "participant_line",
+    ],
 )
 def test_единый_источник_определения(name: str) -> None:
     assert len(_definitions(name)) <= 1, _definitions(name)
@@ -93,4 +111,11 @@ def test_диалоги_и_хендлеры_не_пишут_в_бд_напрям
     """Запись — только через сервисы: в UI-слое нет add/delete/commit сессии."""
     pattern = re.compile(r"session\.(add|delete|commit|merge)\(|\.begin\(\)")
     for path in _sources("dialogs") + _sources("handlers"):
+        assert not pattern.search(path.read_text(encoding="utf-8")), path.name
+
+
+def test_коды_ошибок_сервисов_только_из_errorcode() -> None:
+    """Код InvalidOperation — член ErrorCode: строковый литерал разошёлся бы с текстами UI."""
+    pattern = re.compile(r"InvalidOperation\(\s*[\"']")
+    for path in _sources():
         assert not pattern.search(path.read_text(encoding="utf-8")), path.name

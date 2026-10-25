@@ -13,30 +13,25 @@ from aiogram_dialog.widgets.kbd import Button, Column, Row, ScrollingGroup, Sele
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.db.models import Ban, BanReason, User
-from meetup_bot.dialogs._common import (
-    NO_ACCESS,
-    actor_id,
-    describe_error,
-    get_services,
-    get_sessions,
-    is_admin,
-)
+from meetup_bot.dialogs._buttons import BACK, CANCEL, NO, NO_REASON
+from meetup_bot.dialogs._common import actor_id, get_services, get_sessions, is_admin
 from meetup_bot.dialogs.states import BansSG, PickerSG
 from meetup_bot.repositories import users_known
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.names import admin_label
+from meetup_bot.services.settings_schema import REASON_MAX_LEN
 from meetup_bot.telegram.common import fit_alert
-from meetup_bot.texts.render import format_moment
+from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
+from meetup_bot.texts.render import DATE_INPUT_FORMAT, format_local, format_moment
 
-MAX_COMMENT = 200
 _HISTORY_LIMIT = 15
 _REASONS = {BanReason.NO_SHOW.value: "неявка", BanReason.MANUAL.value: "вручную"}
 
 
 def _name(user: User | None, user_id: int) -> str:
-    if user is None or not user.first_name:
-        return f"Пользователь {user_id}"
-    full = " ".join(p for p in (user.first_name, user.last_name) if p)
-    return f"{full} (@{user.username})" if user.username else full
+    if user is None:
+        return admin_label(None, None, None, user_id)
+    return admin_label(user.first_name, user.last_name, user.username, user_id)
 
 
 def _target(manager: DialogManager) -> int | None:
@@ -73,7 +68,8 @@ async def list_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
             "id": ban.user_id,
             "label": (
                 f"{_name(users.get(ban.user_id), ban.user_id)} · "
-                f"{_REASONS.get(ban.reason, ban.reason)} · {ban.banned_at.astimezone(tz):%d.%m.%Y}"
+                f"{_REASONS.get(ban.reason, ban.reason)} · "
+                f"{format_local(ban.banned_at, tz, DATE_INPUT_FORMAT)}"
             ),
         }
         for ban in bans
@@ -158,7 +154,7 @@ async def ban_comment_getter(dialog_manager: DialogManager, **kwargs: Any) -> di
     return {
         "text": (
             f"Бан: <b>{html.escape(label)}</b>\n\n"
-            f"Напишите причину (до {MAX_COMMENT} символов) или нажмите «Без причины»."
+            f"Напишите причину (до {REASON_MAX_LEN} символов) или нажмите «{NO_REASON}»."
         )
     }
 
@@ -196,9 +192,8 @@ async def on_picked(start_data: Any, result: Any, manager: DialogManager) -> Non
         "last_name": info.last_name,
         "username": info.username,
     }
-    manager.dialog_data["ban_label"] = _name(
-        User(first_name=info.first_name, last_name=info.last_name, username=info.username),
-        info.id,
+    manager.dialog_data["ban_label"] = admin_label(
+        info.first_name, info.last_name, info.username, info.id
     )
     await manager.switch_to(BansSG.ban_comment)
 
@@ -237,7 +232,7 @@ async def _do_ban(
 
 def _comment(value: str) -> str:
     text = value.strip()
-    if not text or len(text) > MAX_COMMENT:
+    if not text or len(text) > REASON_MAX_LEN:
         raise ValueError("bad length")
     return text
 
@@ -249,7 +244,7 @@ async def on_comment(message: Message, widget: Any, manager: DialogManager, comm
 async def on_comment_error(
     message: Message, widget: Any, manager: DialogManager, error: ValueError
 ) -> None:
-    await message.answer(f"Причина должна быть непустой и не длиннее {MAX_COMMENT} символов.")
+    await message.answer(f"Причина должна быть непустой и не длиннее {REASON_MAX_LEN} символов.")
 
 
 async def on_no_comment(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
@@ -339,7 +334,7 @@ DIALOGS = [
                 hide_on_single_page=True,
             ),
             Button(Const("➕ Забанить"), id="ban_new", on_click=on_ban_start),
-            Button(Const("⬅ Назад"), id="close", on_click=on_close),
+            Button(Const(BACK), id="close", on_click=on_close),
             getter=list_getter,
             state=BansSG.list,
             parse_mode="HTML",
@@ -350,14 +345,14 @@ DIALOGS = [
                 Button(Const("✅ Разбанить"), id="unban", on_click=on_unban, when="has_ban"),
                 Button(Const("📜 История"), id="history", on_click=on_history),
             ),
-            Button(Const("⬅ Назад"), id="item_back", on_click=on_back_to_list),
+            Button(Const(BACK), id="item_back", on_click=on_back_to_list),
             getter=item_getter,
             state=BansSG.item,
             parse_mode="HTML",
         ),
         Window(
             Format("{text}"),
-            Button(Const("⬅ Назад"), id="history_back", on_click=on_back_to_item),
+            Button(Const(BACK), id="history_back", on_click=on_back_to_item),
             getter=history_getter,
             state=BansSG.history,
             parse_mode="HTML",
@@ -371,8 +366,8 @@ DIALOGS = [
                 on_error=on_comment_error,
             ),
             Row(
-                Button(Const("Без причины"), id="no_comment", on_click=on_no_comment),
-                Button(Const("✖ Отмена"), id="ban_cancel", on_click=on_ban_cancel),
+                Button(Const(NO_REASON), id="no_comment", on_click=on_no_comment),
+                Button(Const(CANCEL), id="ban_cancel", on_click=on_ban_cancel),
             ),
             getter=ban_comment_getter,
             state=BansSG.ban_comment,
@@ -382,7 +377,7 @@ DIALOGS = [
             Format("{text}"),
             Row(
                 Button(Const("Да, разбанить"), id="unban_yes", on_click=on_unban_confirm),
-                Button(Const("Нет"), id="unban_no", on_click=on_back_to_item),
+                Button(Const(NO), id="unban_no", on_click=on_back_to_item),
             ),
             getter=confirm_getter,
             state=BansSG.confirm_unban,

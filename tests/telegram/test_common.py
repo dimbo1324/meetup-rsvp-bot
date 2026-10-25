@@ -7,8 +7,20 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from meetup_bot.telegram.common import ALERT_LIMIT, check_admin, fit_alert
-from meetup_bot.texts.render import date_parts, format_moment
+from meetup_bot.telegram.common import (
+    ALERT_LIMIT,
+    check_admin,
+    fit_alert,
+    page_count,
+    safe_answer,
+)
+from meetup_bot.texts.render import (
+    ISO_DATE,
+    SHORT_DATETIME,
+    date_parts,
+    format_local,
+    format_moment,
+)
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 
 MONTEVIDEO = ZoneInfo("America/Montevideo")
@@ -90,3 +102,40 @@ async def test_check_admin_для_постороннего(app: App) -> None:
 async def test_check_admin_после_снятия_прав(app: App) -> None:
     await app.services.admins.remove_admin(OWNER_ID, ADMIN_ID)
     assert await check_admin(app.sessions, ADMIN_ID) is False
+
+
+def test_format_local_по_формату_в_часовом_поясе_клуба() -> None:
+    assert format_local(MOMENT, MONTEVIDEO, SHORT_DATETIME) == "24.10.2026 17:00"
+    assert format_local(MOMENT, "America/Montevideo", ISO_DATE) == "2026-10-24"
+
+
+@pytest.mark.parametrize(
+    ("total", "size", "pages"), [(0, 25, 1), (1, 25, 1), (25, 25, 1), (26, 25, 2), (51, 25, 3)]
+)
+def test_page_count_округляет_вверх_и_не_меньше_одной(total: int, size: int, pages: int) -> None:
+    assert page_count(total, size) == pages
+
+
+class _Callback:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def answer(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+
+
+async def test_safe_answer_обрезает_текст_до_лимита_окна() -> None:
+    callback = _Callback()
+    await safe_answer(callback, "я" * (ALERT_LIMIT + 50))  # type: ignore[arg-type]
+    (call,) = callback.calls
+    assert call["text"] == fit_alert("я" * (ALERT_LIMIT + 50))
+    assert call["show_alert"] is True
+
+
+async def test_safe_answer_не_роняет_обработчик_при_сбое_ответа() -> None:
+    callback = _Callback(RuntimeError("query is too old"))
+    await safe_answer(callback, None, show_alert=False)  # type: ignore[arg-type]
+    assert callback.calls == [{"text": None, "show_alert": False, "url": None}]

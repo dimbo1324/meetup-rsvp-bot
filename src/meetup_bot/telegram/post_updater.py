@@ -23,14 +23,13 @@ from meetup_bot.clock import Clock
 from meetup_bot.renderer.post import RenderedPost
 from meetup_bot.repositories import event_posts
 from meetup_bot.services.settings import SettingsService
+from meetup_bot.telegram.common import MAX_RETRY_AFTER
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.posts import build_post
 
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
-# Верхняя граница ожидания при лимитах и сбоях сети, чтобы правка не зависала надолго
-MAX_RETRY_AFTER = 30.0
 
 _NOT_MODIFIED = "message is not modified"
 # Сообщение недоступно навсегда: пост исчез, истёк или не принадлежит боту

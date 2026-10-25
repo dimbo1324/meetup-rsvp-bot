@@ -13,7 +13,7 @@ from meetup_bot.db.models import AdminRole, User
 from meetup_bot.repositories import admins, audit, users
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
-from meetup_bot.services.errors import InvalidOperation, NotFound
+from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ class AdminService:
         async with self._sessions() as session, session.begin():
             await access.require_owner(session, actor_id)
             if await admins.get(session, user.id) is not None:
-                raise InvalidOperation("already_admin")
+                raise InvalidOperation(ErrorCode.ALREADY_ADMIN)
             await users.upsert(session, user, now)
             await admins.insert(
                 session, user_id=user.id, role=AdminRole.ADMIN, added_by=actor_id, now=now
@@ -90,7 +90,7 @@ class AdminService:
             if admin is None:
                 raise NotFound(f"админ {user_id} не найден")
             if admin.role == AdminRole.OWNER.value:
-                raise InvalidOperation("cannot_remove_owner")
+                raise InvalidOperation(ErrorCode.CANNOT_REMOVE_OWNER)
             await admins.delete(session, admin)
             await audit.add(
                 session, action="admin.remove", now=now, actor_id=actor_id, target_user_id=user_id

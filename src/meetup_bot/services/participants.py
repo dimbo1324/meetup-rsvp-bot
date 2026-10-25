@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import (
+    LIVE_REGISTRATION_STATUSES,
+    UNFINISHED_EVENT_STATUSES,
     Attendance,
     Event,
-    EventStatus,
     Registration,
     RegistrationSource,
     RegistrationStatus,
@@ -28,7 +29,7 @@ from meetup_bot.services.admin_support import (
     resolve,
 )
 from meetup_bot.services.bans import BanService
-from meetup_bot.services.errors import InvalidOperation, NotFound
+from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import display_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
@@ -116,17 +117,17 @@ class ParticipantService:
     ) -> AddResult:
         manual_name = (manual_name or "").strip() or None
         if (user is None) == (manual_name is None):
-            raise InvalidOperation("who_required", "нужен либо пользователь, либо имя")
+            raise InvalidOperation(ErrorCode.WHO_REQUIRED, "нужен либо пользователь, либо имя")
         now = self._clock.now()
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_event(session, actor_id, event_id)
             taken = await events.seats_taken(session, event_id)
             over = taken + 1 > event.capacity
             if over and not force:
-                raise InvalidOperation("over_capacity")
+                raise InvalidOperation(ErrorCode.OVER_CAPACITY)
             if user is not None:
                 if await registrations.get_live(session, event_id, user.id) is not None:
-                    raise InvalidOperation("already_registered")
+                    raise InvalidOperation(ErrorCode.ALREADY_REGISTERED)
                 await users.upsert(session, user, now)
             registration = Registration(
                 event_id=event_id,
@@ -185,7 +186,8 @@ class ParticipantService:
         )
         if not (result.ban_recalc_required and self._bans and result.user_id is not None):
             return result
-        # Сбой пересчёта не должен терять уже сохранённую отмену: дожмёт reevaluate_bans
+        # Сбой пересчёта не должен терять уже сохранённую отмену: неявку учтёт отметка явки
+        # этой встречи (`mark`), а её сбой дожмёт BanRecheckTask (`retry_pending_bans`)
         try:
             outcome = await self._bans.recalc_for_attendance(actor_id, result.user_id, event_id)
         except Exception:
@@ -196,7 +198,7 @@ class ParticipantService:
     async def list_participants(self, actor_id: int, event_id: int) -> ParticipantList:
         async with self._sessions() as session:
             event = await self._load_event(session, actor_id, event_id, editable_only=False)
-            rows = await events_admin.list_with_users(session, event_id, events_admin.LIVE)
+            rows = await events_admin.list_with_users(session, event_id, LIVE_REGISTRATION_STATUSES)
             active: list[ParticipantRow] = []
             waitlist: list[ParticipantRow] = []
             for registration, user in rows:
@@ -228,12 +230,12 @@ class ParticipantService:
             registration = await events_admin.get_registration(session, registration_id)
             if registration is None or registration.event_id != event_id:
                 raise NotFound(f"запись {registration_id} не найдена")
-            if registration.status not in events_admin.LIVE:
-                raise InvalidOperation("not_live")
+            if registration.status not in LIVE_REGISTRATION_STATUSES:
+                raise InvalidOperation(ErrorCode.NOT_LIVE)
             was_active = registration.status == RegistrationStatus.ACTIVE.value
             if as_no_show:
                 if not was_active:
-                    raise InvalidOperation("no_show_requires_active")
+                    raise InvalidOperation(ErrorCode.NO_SHOW_REQUIRES_ACTIVE)
                 registration.status = RegistrationStatus.CANCELLED.value
                 registration.cancelled_at = now
                 registration.attendance = Attendance.NO_SHOW.value
@@ -281,9 +283,6 @@ class ParticipantService:
         event = await events.get(session, event_id)
         if event is None:
             raise NotFound(f"встреча {event_id} не найдена")
-        if editable_only and event.status not in (
-            EventStatus.OPEN.value,
-            EventStatus.CLOSED.value,
-        ):
-            raise InvalidOperation("bad_status")
+        if editable_only and event.status not in UNFINISHED_EVENT_STATUSES:
+            raise InvalidOperation(ErrorCode.BAD_STATUS)
         return event

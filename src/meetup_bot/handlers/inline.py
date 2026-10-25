@@ -21,7 +21,7 @@ from meetup_bot.container import Services
 from meetup_bot.db.models import EventStatus
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
-from meetup_bot.telegram.common import check_admin
+from meetup_bot.telegram.common import START_ABOUT, check_admin
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.telegram.posts import build_post
@@ -34,7 +34,9 @@ router = Router(name="inline")
 RESULT_PREFIX = "event:"
 # Telegram принимает не более 50 результатов в одном ответе
 MAX_RESULTS = 50
-_NOT_ADMIN_BUTTON = InlineQueryResultsButton(text="Бот записи на встречи", start_parameter="about")
+_NOT_ADMIN_BUTTON = InlineQueryResultsButton(
+    text="Бот записи на встречи", start_parameter=START_ABOUT
+)
 
 
 @router.inline_query()

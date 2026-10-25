@@ -6,6 +6,7 @@ from aiogram.types import Message, SharedUser, Update, UsersShared
 from sqlalchemy import select
 
 from meetup_bot.db.models import Admin, Ban, BanReason
+from meetup_bot.services.settings_schema import REASON_MAX_LEN
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import (
     Harness,
@@ -164,8 +165,8 @@ async def test_слишком_длинная_причина_бана_откло�
     mid = await _open_section(tg, "Чёрный список")
     await tg.click(OWNER_ID, mid, "Забанить")
     await tg.feed(_shared_update(OWNER_ID, 555, "Борис"))
-    await _say(tg, "П" * 201)
-    assert _said(tg, "Причина должна быть непустой и не длиннее 200 символов.")
+    await _say(tg, "П" * (REASON_MAX_LEN + 1))
+    assert _said(tg, f"Причина должна быть непустой и не длиннее {REASON_MAX_LEN} символов.")
     assert await _bans(app) == []
     await _say(tg, "Нормально")
     assert len(await _bans(app)) == 1

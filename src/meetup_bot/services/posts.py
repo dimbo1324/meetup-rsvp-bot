@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.renderer.post import Participant, PostData
 from meetup_bot.repositories import events, registrations
+from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 from meetup_bot.services.names import public_name
-from meetup_bot.services.timing import DEFAULT_TIMEZONE
 
 
 async def load_post_data(

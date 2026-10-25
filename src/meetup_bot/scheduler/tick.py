@@ -13,7 +13,9 @@ from meetup_bot.scheduler.tasks import ScheduledTask
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HEARTBEAT = Path("data/heartbeat")
+# Файл-пульс лежит рядом с БД: его возраст проверяет healthcheck контейнера
+HEARTBEAT_FILENAME = "heartbeat"
+DEFAULT_HEARTBEAT = Path("data") / HEARTBEAT_FILENAME
 # Зависшая задача (например, сеть) не должна останавливать остальные и сам цикл
 DEFAULT_TASK_TIMEOUT = 120.0
 

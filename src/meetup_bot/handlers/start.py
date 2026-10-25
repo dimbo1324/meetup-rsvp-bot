@@ -16,7 +16,7 @@ from meetup_bot.config import Settings
 from meetup_bot.container import Services
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.telegram.commands import set_admin_commands
-from meetup_bot.telegram.common import check_admin
+from meetup_bot.telegram.common import START_ABOUT, START_REMIND, check_admin
 from meetup_bot.texts.render import format_moment
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,6 @@ async def cmd_start(
     user_info: UserInfo,
     services: Services,
     sessions: async_sessionmaker[AsyncSession],
-    clock: Clock,
     bot_username: str,
     app_config: Settings,
 ) -> None:
@@ -71,15 +70,15 @@ async def cmd_start(
         await set_admin_commands(message.bot, user_info.id, is_admin=True)
 
     param = (command.args or "").strip()
-    if param == "remind":
+    if param == START_REMIND:
         text = REMIND_ON
-    elif param == "about":
+    elif param == START_ABOUT:
         text = ABOUT_TEXT
     else:
         text = WELCOME_USER.format(name=html.escape(user_info.first_name, quote=False))
         if is_admin:
             text += WELCOME_ADMIN_EXTRA.format(bot=bot_username)
-    if app_config.env == "dev":
+    if app_config.is_dev:
         text += f"\n\nID пользователя: <code>{user_info.id}</code>"
     await message.answer(text)
 
@@ -108,7 +107,7 @@ async def cmd_dev_shift(
     app_config: Settings,
 ) -> None:
     # В бою команда молчит: пользователь не должен узнать, что она вообще существует
-    if app_config.env != "dev" or not await check_admin(sessions, user_info.id):
+    if not app_config.is_dev or not await check_admin(sessions, user_info.id):
         return
     if not isinstance(clock, ShiftableClock):
         await message.answer("Часы не поддерживают сдвиг.")
@@ -135,5 +134,5 @@ async def on_my_chat_member(
         return
     if status in ("member", "administrator"):
         logger.info("бот добавлен в чат: chat_id=%s", event.chat.id)
-        if app_config.env == "dev":
+        if app_config.is_dev:
             await event.answer(f"ID этого чата: <code>{event.chat.id}</code>")

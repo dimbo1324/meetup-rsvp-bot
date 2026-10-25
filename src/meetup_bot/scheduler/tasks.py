@@ -14,7 +14,14 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus, User
+from meetup_bot.db.models import (
+    UNFINISHED_EVENT_STATUSES,
+    Event,
+    EventStatus,
+    Registration,
+    RegistrationStatus,
+    User,
+)
 from meetup_bot.repositories import admins
 from meetup_bot.services.admin_support import (
     Provided,
@@ -31,11 +38,11 @@ from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.safe import safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.service import ATTENDANCE_NOT_MARKED_TEXT
 
 logger = logging.getLogger(__name__)
 
 ATTENDANCE_REMINDER_AFTER = timedelta(hours=14)
-_ACTIVE_STATUSES = (EventStatus.OPEN.value, EventStatus.CLOSED.value)
 
 
 class ScheduledTask(Protocol):
@@ -115,7 +122,7 @@ class ReminderTask:
             due = await session.scalars(
                 select(Event)
                 .where(
-                    Event.status.in_(_ACTIVE_STATUSES),
+                    Event.status.in_(UNFINISHED_EVENT_STATUSES),
                     Event.reminder_at <= now,
                     Event.reminder_sent_at.is_(None),
                 )
@@ -242,7 +249,7 @@ class AttendanceReminderTask:
                     )
                     continue
                 when = format_moment(event.starts_at, timezone)
-                texts.append(f"Никто ещё не отметил явку на встрече ({when}).")
+                texts.append(ATTENDANCE_NOT_MARKED_TEXT.format(when=when))
         for text in texts:
             await safe_send_service(self._notifier, text)
         return len(texts)

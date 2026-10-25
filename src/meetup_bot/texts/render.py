@@ -59,6 +59,17 @@ MONTHS_NOMINATIVE = (
 # Короткое тире между началом и концом встречи: «16:30–18:30»
 TIME_RANGE_DASH = "–"
 
+# Пометка участника, записавшегося с гостем
+GUEST_SUFFIX = " (+1)"
+
+TIME_FORMAT = "%H:%M"
+# Дата так, как её вводит и видит админ: «15.11.2026»
+DATE_INPUT_FORMAT = "%d.%m.%Y"
+SHORT_DATETIME = f"{DATE_INPUT_FORMAT} {TIME_FORMAT}"
+# Машиночитаемые форматы: имена файлов и CSV
+ISO_DATE = "%Y-%m-%d"
+ISO_MINUTE = f"{ISO_DATE} {TIME_FORMAT}"
+
 # Значение подстановки {reason}: префикс добавляется только при непустой причине
 REASON_PREFIX = "Причина: "
 
@@ -97,23 +108,29 @@ def clip(text: str, limit: int, ellipsis: str = "…") -> str:
 
 
 def date_parts(moment: datetime, tz: ZoneInfo) -> tuple[str, str, str]:
-    """(«суббота», «1 ноября», «17:00») в заданном часовом поясе."""
+    """(«пятница», «30 октября», «16:30») в заданном часовом поясе."""
     local = moment.astimezone(tz)
-    return WEEKDAYS[local.weekday()], f"{local.day} {MONTHS[local.month - 1]}", f"{local:%H:%M}"
+    weekday = WEEKDAYS[local.weekday()]
+    return weekday, f"{local.day} {MONTHS[local.month - 1]}", local.strftime(TIME_FORMAT)
 
 
 def _zone(tz: ZoneInfo | str) -> ZoneInfo:
     return tz if isinstance(tz, ZoneInfo) else ZoneInfo(tz)
 
 
+def format_local(moment: datetime, tz: ZoneInfo | str, fmt: str) -> str:
+    """Момент в часовом поясе клуба по strftime-формату (`SHORT_DATETIME`, `ISO_DATE`…)."""
+    return moment.astimezone(_zone(tz)).strftime(fmt)
+
+
 def format_moment(moment: datetime, tz: ZoneInfo | str) -> str:
-    """«суббота, 1 ноября, 17:00»."""
+    """«пятница, 30 октября, 16:30»."""
     weekday, date, time_ = date_parts(moment, _zone(tz))
     return f"{weekday}, {date}, {time_}"
 
 
 def end_time_label(starts_at: datetime, ends_at: datetime, tz: ZoneInfo | str) -> str:
-    """Время конца: «18:30»; если встреча идёт через полночь — «01:30 (1 ноября)»."""
+    """Время конца: «18:30»; если встреча идёт через полночь — «01:30 (31 октября)»."""
     zone = _zone(tz)
     _, start_date, _ = date_parts(starts_at, zone)
     _, end_date, end_time = date_parts(ends_at, zone)
@@ -153,7 +170,7 @@ def text_variables(params: Mapping[str, Any], tz: ZoneInfo | str) -> dict[str, s
 
 
 def tidy(text: str) -> str:
-    """Убирает следы пустых подстановок: «17:00, .» → «17:00.», двойные пробелы, хвосты."""
+    """Убирает следы пустых подстановок: «16:30, .» → «16:30.», двойные пробелы, хвосты."""
     text = _DANGLING_COMMA.sub("", text)
     text = _SPACE_BEFORE_PUNCT.sub("", text)
     text = _SPACES.sub(" ", text)

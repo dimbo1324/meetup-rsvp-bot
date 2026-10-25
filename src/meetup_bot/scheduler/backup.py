@@ -12,12 +12,18 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from meetup_bot.services.admin_support import Provided, resolve
-from meetup_bot.services.timing import DEFAULT_TIMEZONE
+from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
 RETRY_AFTER_FAILURE = timedelta(minutes=15)
 BACKUP_GLOB = "bot-????-??-??.db"
+# Каталог копий рядом с БД
+BACKUPS_DIRNAME = "backups"
+# Сколько последних ежедневных копий хранить
+BACKUP_KEEP = 14
+# Локальное время ежедневного бэкапа: ночью, когда бот почти не нагружен
+BACKUP_AT = time(4, 0)
 
 SendDocument = Callable[[Path], Awaitable[None]]
 
@@ -74,7 +80,7 @@ async def backup_database(
     db_path: Path,
     backups_dir: Path,
     now: datetime,
-    keep: int = 14,
+    keep: int = BACKUP_KEEP,
     *,
     timezone: str = DEFAULT_TIMEZONE,
 ) -> Path | None:
@@ -99,8 +105,8 @@ class BackupTask:
         backups_dir: Path,
         *,
         timezone: Provided[str] = DEFAULT_TIMEZONE,
-        at: time = time(4, 0),
-        keep: int = 14,
+        at: time = BACKUP_AT,
+        keep: int = BACKUP_KEEP,
         send_document: SendDocument | None = None,
     ) -> None:
         self._db_path = db_path

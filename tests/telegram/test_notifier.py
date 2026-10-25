@@ -21,11 +21,11 @@ from meetup_bot.repositories.users import UserInfo
 from meetup_bot.telegram import notifier as notifier_module
 from meetup_bot.telegram.attendance_ui import SheetStatus
 from meetup_bot.telegram.notifier import (
-    BACKUP_CAPTION,
     CHUNK_LIMIT,
     TelegramNotifier,
     split_text,
 )
+from meetup_bot.texts.service import BACKUP_CAPTION
 from tests.helpers import App
 from tests.tg_fake import Harness
 

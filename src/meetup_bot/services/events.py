@@ -17,7 +17,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.db.models import Event, EventStatus
+from meetup_bot.db.models import (
+    LIVE_REGISTRATION_STATUSES,
+    UNFINISHED_EVENT_STATUSES,
+    Event,
+    EventStatus,
+)
 from meetup_bot.repositories import audit, events, events_admin
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
@@ -28,10 +33,10 @@ from meetup_bot.services.admin_support import (
     resolve,
     send_dms,
 )
-from meetup_bot.services.errors import InvalidOperation, NotFound
+from meetup_bot.services.defaults import DEFAULT_CAPACITY
+from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.event_template import EventTemplate
 from meetup_bot.services.event_validation import (
-    MAX_CAPACITY,
     validate_capacity,
     validate_description,
     validate_photo,
@@ -54,12 +59,9 @@ from meetup_bot.services.waitlist import Promotion, promote_waitlist
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CAPACITY = 10
 RECENT_DAYS = 14
 
 __all__ = [
-    "DEFAULT_CAPACITY",
-    "MAX_CAPACITY",
     "UNSET",
     "CreatedEvent",
     "EventListItem",
@@ -223,7 +225,7 @@ class EventService:
                 times = compute_times(starts_at or next_event_start(now, schedule), schedule)
                 validate_times(times, now)
             except ValueError as exc:  # включая InvalidEventTimes
-                raise InvalidOperation("invalid_times", str(exc)) from exc
+                raise InvalidOperation(ErrorCode.INVALID_TIMES, str(exc)) from exc
             event = Event(
                 status=EventStatus.OPEN.value,
                 starts_at=times.starts_at,
@@ -352,9 +354,9 @@ class EventService:
         try:
             computed = compute_times(new_starts_at, schedule)
         except ValueError as exc:
-            raise InvalidOperation("invalid_times", str(exc)) from exc
+            raise InvalidOperation(ErrorCode.INVALID_TIMES, str(exc)) from exc
         if computed.starts_at <= now:
-            raise InvalidOperation("invalid_times", "Новое время встречи уже прошло.")
+            raise InvalidOperation(ErrorCode.INVALID_TIMES, "Новое время встречи уже прошло.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
             times = replace(
@@ -365,11 +367,13 @@ class EventService:
                 # иначе нельзя было бы перенести встречу на близкую дату
                 validate_times(times, event.created_at)
             except InvalidEventTimes as exc:
-                raise InvalidOperation("invalid_times", str(exc)) from exc
+                raise InvalidOperation(ErrorCode.INVALID_TIMES, str(exc)) from exc
             old_starts_at = event.starts_at
             self._apply_times(event, times)
             event.updated_at = now
-            recipients = await events_admin.dm_recipients(session, event_id, events_admin.LIVE)
+            recipients = await events_admin.dm_recipients(
+                session, event_id, LIVE_REGISTRATION_STATUSES
+            )
             reopen = event.status == EventStatus.CLOSED.value and times.registration_closes_at > now
             promotions: list[Promotion] = []
             if reopen:
@@ -403,7 +407,7 @@ class EventService:
             event = await self._load_editable(session, actor_id, event_id)
             taken = await events.seats_taken(session, event_id)
             if new_capacity < taken:
-                raise InvalidOperation("capacity_below_taken")
+                raise InvalidOperation(ErrorCode.CAPACITY_BELOW_TAKEN)
             old_capacity = event.capacity
             event.capacity = new_capacity
             event.updated_at = now
@@ -442,14 +446,14 @@ class EventService:
             if event is None:
                 raise NotFound(f"встреча {event_id} не найдена")
             current = event.status
-            if current not in (EventStatus.OPEN.value, EventStatus.CLOSED.value):
-                raise InvalidOperation("bad_status")
+            if current not in UNFINISHED_EVENT_STATUSES:
+                raise InvalidOperation(ErrorCode.BAD_STATUS)
             if open == (current == EventStatus.OPEN.value):
                 return
             if open:
                 if now >= event.registration_closes_at:
                     raise InvalidOperation(
-                        "registration_time_passed",
+                        ErrorCode.REGISTRATION_TIME_PASSED,
                         "Время записи вышло: сначала перенесите закрытие записи.",
                     )
                 promotions = await self._reopen(session, event, now)
@@ -514,7 +518,7 @@ class EventService:
             attendance_prompt_at,
         )
         if any(value is not None and value.tzinfo is None for value in given):
-            raise InvalidOperation("invalid_times", "Время должно быть с часовым поясом.")
+            raise InvalidOperation(ErrorCode.INVALID_TIMES, "Время должно быть с часовым поясом.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
             new = EventTimes(
@@ -530,7 +534,7 @@ class EventService:
                 # поправить напоминание у встречи, дедлайн отмены которой уже прошёл
                 validate_times(new, event.created_at)
             except InvalidEventTimes as exc:
-                raise InvalidOperation("invalid_times", str(exc)) from exc
+                raise InvalidOperation(ErrorCode.INVALID_TIMES, str(exc)) from exc
             changed: dict[str, Any] = {}
             if new.reminder_at != event.reminder_at:
                 event.reminder_sent_at = None
@@ -588,6 +592,6 @@ class EventService:
         event = await events.get(session, event_id)
         if event is None:
             raise NotFound(f"встреча {event_id} не найдена")
-        if event.status not in (EventStatus.OPEN.value, EventStatus.CLOSED.value):
-            raise InvalidOperation("bad_status")
+        if event.status not in UNFINISHED_EVENT_STATUSES:
+            raise InvalidOperation(ErrorCode.BAD_STATUS)
         return event

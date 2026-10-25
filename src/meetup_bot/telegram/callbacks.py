@@ -1,14 +1,12 @@
-"""Данные кнопок поста. Формат `r:<event_id>:<action>` совпадает с renderer.post.signup_callback."""
+"""Данные кнопок поста. Формат задаёт renderer.post (`signup_callback`), здесь — разбор."""
 
 from __future__ import annotations
 
 from aiogram.filters.callback_data import CallbackData
 
-ACTION_JOIN = "j"
-ACTION_JOIN_PLUS_ONE = "j1"
-ACTION_CANCEL = "c"
+from meetup_bot.renderer.post import SIGNUP_PREFIX, SIGNUP_SEP
 
 
-class SignupCallback(CallbackData, prefix="r", sep=":"):
+class SignupCallback(CallbackData, prefix=SIGNUP_PREFIX, sep=SIGNUP_SEP):
     event_id: int
     action: str

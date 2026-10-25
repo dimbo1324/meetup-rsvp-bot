@@ -44,6 +44,7 @@ from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.registration import RegistrationService
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.services.users import UserService
+from meetup_bot.texts.defaults import TEXT_PREFIX
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ def make_text_renderer(settings: SettingsService) -> RenderText:
     """Адаптер «ключ уведомления → настраиваемый текст `text.*`» (часовой пояс из настроек)."""
 
     def render(key: str, params: dict[str, Any]) -> str:
-        return settings.render_message(f"text.{key}", params)
+        return settings.render_message(TEXT_PREFIX + key, params)
 
     return render
 

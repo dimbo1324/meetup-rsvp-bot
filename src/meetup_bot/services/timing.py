@@ -10,7 +10,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-DEFAULT_TIMEZONE = "America/Montevideo"
+from meetup_bot.services.defaults import (
+    DEFAULT_ATTENDANCE_PROMPT_MINUTES_AFTER,
+    DEFAULT_CANCEL_DEADLINE_DAYS_BEFORE,
+    DEFAULT_CANCEL_DEADLINE_TIME,
+    DEFAULT_EVENT_DURATION_MINUTES,
+    DEFAULT_EVENT_TIME,
+    DEFAULT_EVENT_WEEKDAY,
+    DEFAULT_REGISTRATION_CLOSE_MINUTES_AFTER_START,
+    DEFAULT_REMINDER_HOURS_BEFORE,
+    DEFAULT_TIMEZONE,
+)
+
+DAYS_IN_WEEK = 7
 
 
 class InvalidEventTimes(ValueError):
@@ -19,17 +31,15 @@ class InvalidEventTimes(ValueError):
 
 @dataclass(frozen=True)
 class ScheduleSettings:
-    """Настройки расписания; значения по умолчанию — из раздела 7 спецификации."""
-
     timezone: str = DEFAULT_TIMEZONE
-    event_weekday: int = 4
-    event_time: time = time(16, 30)
-    event_duration_minutes: int = 120
-    cancel_deadline_days_before: int = 1
-    cancel_deadline_time: time = time(20, 0)
-    registration_close_minutes_after_start: int = 60
-    reminder_hours_before: int = 24
-    attendance_prompt_minutes_after: int = 90
+    event_weekday: int = DEFAULT_EVENT_WEEKDAY
+    event_time: time = DEFAULT_EVENT_TIME
+    event_duration_minutes: int = DEFAULT_EVENT_DURATION_MINUTES
+    cancel_deadline_days_before: int = DEFAULT_CANCEL_DEADLINE_DAYS_BEFORE
+    cancel_deadline_time: time = DEFAULT_CANCEL_DEADLINE_TIME
+    registration_close_minutes_after_start: int = DEFAULT_REGISTRATION_CLOSE_MINUTES_AFTER_START
+    reminder_hours_before: int = DEFAULT_REMINDER_HOURS_BEFORE
+    attendance_prompt_minutes_after: int = DEFAULT_ATTENDANCE_PROMPT_MINUTES_AFTER
 
 
 @dataclass(frozen=True)
@@ -46,12 +56,12 @@ def next_event_start(now: datetime, settings: ScheduleSettings) -> datetime:
     """Ближайшее будущее начало встречи (UTC) по дню недели и времени из настроек."""
     tz = ZoneInfo(settings.timezone)
     local_now = now.astimezone(tz)
-    days_ahead = (settings.event_weekday - local_now.weekday()) % 7
+    days_ahead = (settings.event_weekday - local_now.weekday()) % DAYS_IN_WEEK
     candidate = datetime.combine(
         local_now.date() + timedelta(days=days_ahead), settings.event_time, tzinfo=tz
     )
     if candidate <= local_now:
-        candidate += timedelta(days=7)
+        candidate += timedelta(days=DAYS_IN_WEEK)
     return candidate.astimezone(UTC)
 
 

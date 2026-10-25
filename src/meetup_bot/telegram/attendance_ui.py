@@ -31,7 +31,8 @@ from meetup_bot.telegram.attendance_callbacks import (
     TARGET_NOOP,
     AttendanceCallback,
 )
-from meetup_bot.texts.render import format_interval, format_moment
+from meetup_bot.telegram.common import page_count
+from meetup_bot.texts.render import GUEST_SUFFIX, clip, format_interval, format_moment
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +62,12 @@ def _callback(event_id: int, target: str) -> str:
 
 
 def row_button(event_id: int, row: SheetRow, no_show: bool) -> InlineKeyboardButton:
-    name = row.name
-    if len(name) > MAX_BUTTON_NAME:
-        name = name[: MAX_BUTTON_NAME - 1] + "…"
-    guest = " (+1)" if row.guests else ""
+    name = clip(row.name, MAX_BUTTON_NAME)
+    guest = GUEST_SUFFIX if row.guests else ""
     mark = MARK_NO_SHOW if no_show else MARK_ATTENDED
     return InlineKeyboardButton(
         text=f"{mark} {name}{guest}", callback_data=_callback(event_id, str(row.registration_id))
     )
-
-
-def page_count(rows: Sequence[SheetRow]) -> int:
-    return max(1, -(-len(rows) // PAGE_SIZE))
 
 
 def _nav_row(event_id: int, page: int, pages: int) -> list[InlineKeyboardButton]:
@@ -105,7 +100,7 @@ def build_keyboard(
     with_done: bool,
     page: int = 0,
 ) -> InlineKeyboardMarkup:
-    pages = page_count(rows)
+    pages = page_count(len(rows), PAGE_SIZE)
     page = min(max(page, 0), pages - 1)
     chunk = rows[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
     keyboard = [[row_button(event_id, row, row.registration_id in no_show_ids)] for row in chunk]
@@ -222,7 +217,7 @@ class AttendanceUI:
             lines.append(f"Исправление отметок возможно до {until}.")
         else:
             lines.append("Нажмите на имя, чтобы отметить неявку (🚫), затем «Готово».")
-        if page_count(rows) > 1:
+        if page_count(len(rows), PAGE_SIZE) > 1:
             lines.append(f"Участников: {len(rows)}; листайте страницы кнопками ◀ ▶.")
         marked = _db_no_shows(rows) if correction else set()
         markup = build_keyboard(event_id, rows, marked, with_done=not correction)

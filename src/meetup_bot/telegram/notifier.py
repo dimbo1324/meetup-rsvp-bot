@@ -14,13 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock
 from meetup_bot.repositories import users
 from meetup_bot.telegram.attendance_ui import AttendanceUI, SheetStatus
+from meetup_bot.telegram.common import MAX_RETRY_AFTER
+from meetup_bot.texts.service import BACKUP_CAPTION
 
 logger = logging.getLogger(__name__)
 
 CHUNK_LIMIT = 4000
 # Предел Bot API для файлов, которые бот отправляет сам
 UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024
-BACKUP_CAPTION = "Резервная копия базы: {name}"
 
 
 def split_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
@@ -72,7 +73,7 @@ class TelegramNotifier:
                 if attempt == 1:
                     logger.warning("лимит Telegram при отправке личного сообщения (%s)", user_id)
                     return False
-                await asyncio.sleep(min(exc.retry_after, 30.0))
+                await asyncio.sleep(min(exc.retry_after, MAX_RETRY_AFTER))
             except TelegramAPIError as exc:
                 logger.warning("личное сообщение не доставлено (%s): %s", user_id, exc.message)
                 return False
@@ -85,7 +86,7 @@ class TelegramNotifier:
             try:
                 await self._bot.send_message(self._service_chat_id, chunk)
             except TelegramRetryAfter as exc:
-                await asyncio.sleep(min(exc.retry_after, 30.0))
+                await asyncio.sleep(min(exc.retry_after, MAX_RETRY_AFTER))
                 try:
                     await self._bot.send_message(self._service_chat_id, chunk)
                 except TelegramAPIError as retry_exc:

@@ -6,9 +6,9 @@ import inspect
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
+from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 from meetup_bot.services.ports import Notifier
 from meetup_bot.services.safe import safe_send_dm
-from meetup_bot.services.timing import DEFAULT_TIMEZONE
 from meetup_bot.services.waitlist import Promotion
 from meetup_bot.texts.defaults import DEFAULT_TEXTS, TEXT_PREFIX
 from meetup_bot.texts.render import fill, text_variables

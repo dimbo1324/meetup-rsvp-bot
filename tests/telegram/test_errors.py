@@ -73,7 +73,7 @@ async def test_ошибка_в_callback_получает_общий_ответ(
         raise BrokenError
 
     # Падает сама запись «устаревшей кнопки»: исключение выходит из обработчика
-    monkeypatch.setattr("meetup_bot.handlers.signup._answer", boom)
+    monkeypatch.setattr("meetup_bot.handlers.signup.safe_answer", boom)
     await tg.feed(callback_update(USER, "r:abc"))
     (answer,) = tg.session.of("AnswerCallbackQuery")
     assert answer["text"] == GENERIC_ERROR_TEXT
@@ -127,7 +127,7 @@ async def test_ответ_на_callback_не_ломает_обработчик_�
     async def boom(*_a: Any, **_k: Any) -> None:
         raise BrokenError
 
-    monkeypatch.setattr("meetup_bot.handlers.signup._answer", boom)
+    monkeypatch.setattr("meetup_bot.handlers.signup.safe_answer", boom)
     tg.session.fail = lambda name, _d: (
         ConnectionError("нет сети") if name == "AnswerCallbackQuery" else None
     )
@@ -151,7 +151,7 @@ async def test_устаревший_диалог_отвечает_подсказ
     async def boom(*_a: Any, **_k: Any) -> None:
         raise error
 
-    monkeypatch.setattr("meetup_bot.handlers.signup._answer", boom)
+    monkeypatch.setattr("meetup_bot.handlers.signup.safe_answer", boom)
     await tg.feed(callback_update(USER, "r:abc"))
     (answer,) = tg.session.of("AnswerCallbackQuery")
     assert answer["text"] == STALE_DIALOG_TEXT
@@ -174,7 +174,7 @@ async def test_сбой_ответа_на_устаревшую_кнопку_иг
     async def boom(*_a: Any, **_k: Any) -> None:
         raise UnknownIntent("нет интента")
 
-    monkeypatch.setattr("meetup_bot.handlers.signup._answer", boom)
+    monkeypatch.setattr("meetup_bot.handlers.signup.safe_answer", boom)
     tg.session.fail = lambda name, _d: (
         ConnectionError("нет сети") if name == "AnswerCallbackQuery" else None
     )

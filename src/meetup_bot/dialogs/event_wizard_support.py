@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from meetup_bot.dialogs._buttons import BACK
 from meetup_bot.renderer.post import (
     CAPTION_LIMIT,
     TEXT_LIMIT,
@@ -13,6 +14,7 @@ from meetup_bot.renderer.post import (
 )
 from meetup_bot.services.event_template import EventTemplate
 from meetup_bot.services.settings import SettingsService
+from meetup_bot.texts.render import TIME_FORMAT
 
 TEMPLATE_SOURCE = " (как на прошлой встрече)"
 
@@ -20,11 +22,11 @@ TEMPLATE_SOURCE = " (как на прошлой встрече)"
 _LENGTH_PROBE = "x"
 _TOO_LONG_WITH_PHOTO = (
     "С фото пост не помещается в подпись (лимит {limit}): лишних символов: {extra}. "
-    "Сократите текст (⬅️ Назад) или пропустите фото, иначе описание будет обрезано."
+    f"Сократите текст ({BACK}) или пропустите фото, иначе описание будет обрезано."
 )
 _TOO_LONG_WITHOUT_PHOTO = (
     "Без фото пост не помещается в сообщение (лимит {limit}): лишних символов: {extra}. "
-    "Сократите текст (⬅️ Назад), иначе описание будет обрезано."
+    f"Сократите текст ({BACK}), иначе описание будет обрезано."
 )
 
 
@@ -50,7 +52,7 @@ def suggestions(settings: SettingsService, template: EventTemplate | None) -> Su
     """Поля прошлой встречи целиком (как в прошлый раз), а без неё — общие настройки."""
     if template is not None:
         return Suggestions(
-            time=f"{template.start_time:%H:%M}",
+            time=template.start_time.strftime(TIME_FORMAT),
             place=template.place,
             place_url=template.place_url,
             description_html=template.description_html,
@@ -60,7 +62,7 @@ def suggestions(settings: SettingsService, template: EventTemplate | None) -> Su
         )
     defaults = settings.defaults_now()
     return Suggestions(
-        time=f"{settings.schedule_now().event_time:%H:%M}",
+        time=settings.schedule_now().event_time.strftime(TIME_FORMAT),
         place=defaults.place,
         place_url=defaults.place_url,
         description_html=defaults.description_html,

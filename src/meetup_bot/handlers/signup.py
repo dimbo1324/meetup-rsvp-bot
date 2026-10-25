@@ -6,27 +6,32 @@ import logging
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.clock import Clock
 from meetup_bot.container import Services
+from meetup_bot.renderer.post import (
+    ACTION_CANCEL,
+    ACTION_JOIN,
+    ACTION_JOIN_PLUS_ONE,
+    SIGNUP_PREFIX,
+    SIGNUP_SEP,
+)
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.services.errors import DomainError, InvalidOperation
+from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation
 from meetup_bot.services.registration import (
     CancelResult,
     CancelStatus,
     RegisterResult,
     RegisterStatus,
 )
-from meetup_bot.telegram.callbacks import (
-    ACTION_CANCEL,
-    ACTION_JOIN,
-    ACTION_JOIN_PLUS_ONE,
-    SignupCallback,
+from meetup_bot.telegram.callbacks import SignupCallback
+from meetup_bot.telegram.common import (
+    ALERT_LIMIT,
+    GENERIC_ERROR_TEXT,
+    START_REMIND,
+    safe_answer,
+    telegram_length,
 )
-from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT, fit_alert, telegram_length
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.texts.render import text_variables
 
@@ -58,10 +63,8 @@ async def on_signup_callback(
     callback_data: SignupCallback,
     user_info: UserInfo,
     services: Services,
-    sessions: async_sessionmaker[AsyncSession],
     post_updater: PostUpdater,
     bot_username: str,
-    clock: Clock,
 ) -> None:
     """Всегда отвечает на callback: иначе у пользователя бесконечно крутятся «часики»."""
     text = GENERIC_ERROR_TEXT
@@ -82,7 +85,7 @@ async def on_signup_callback(
                 combined = f"{text}\n{hint}"
                 if telegram_length(combined) <= ALERT_LIMIT:
                     text = combined
-                    url = f"https://t.me/{bot_username}?start=remind"
+                    url = f"https://t.me/{bot_username}?start={START_REMIND}"
             known_event = register_result.status is not RegisterStatus.NOT_FOUND
         elif action == ACTION_CANCEL:
             cancel_result = await services.registration.cancel(event_id, user_info.id)
@@ -98,7 +101,7 @@ async def on_signup_callback(
             post_updater.schedule(event_id)
     except InvalidOperation as error:
         # Кнопка «+1» осталась под старым постом, а настройку уже выключили
-        text = NO_GUESTS_TEXT if error.code == "plus_one_disabled" else GENERIC_ERROR_TEXT
+        text = NO_GUESTS_TEXT if error.code == ErrorCode.PLUS_ONE_DISABLED else GENERIC_ERROR_TEXT
         logger.info("отказ сервиса записи для встречи %s: %s", event_id, error.code)
     except DomainError:
         logger.warning("отказ при обработке кнопки, встреча %s", event_id, exc_info=True)
@@ -106,15 +109,7 @@ async def on_signup_callback(
     except Exception:
         logger.exception("ошибка при обработке кнопки, встреча %s", event_id)
         text = GENERIC_ERROR_TEXT
-    await _answer(callback, fit_alert(text), url)
-
-
-async def _answer(callback: CallbackQuery, text: str, url: str | None) -> None:
-    try:
-        await callback.answer(text=text, show_alert=True, url=url)
-    except TelegramAPIError:
-        # Например, «query is too old»: пользователь уже увидел результат на посте
-        logger.warning("не удалось ответить на callback", exc_info=True)
+    await safe_answer(callback, text, url=url)
 
 
 async def _register_inline_post(callback: CallbackQuery, event_id: int, services: Services) -> None:
@@ -157,7 +152,7 @@ def _cancel_text(services: Services, result: CancelResult) -> str:
     )
 
 
-@router.callback_query(F.data.startswith("r:"))
+@router.callback_query(F.data.startswith(SIGNUP_PREFIX + SIGNUP_SEP))
 async def on_stale_callback(callback: CallbackQuery) -> None:
     """Кнопка старого или неизвестного формата: без ответа у пользователя крутятся часики."""
-    await _answer(callback, "Эта кнопка устарела. Откройте свежий пост встречи.", None)
+    await safe_answer(callback, "Эта кнопка устарела. Откройте свежий пост встречи.")

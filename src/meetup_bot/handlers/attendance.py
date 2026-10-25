@@ -10,7 +10,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.container import Services
-from meetup_bot.dialogs._common import NO_ACCESS, describe_error
 from meetup_bot.services.attendance import AlreadyMarked
 from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.attendance_callbacks import (
@@ -20,7 +19,8 @@ from meetup_bot.telegram.attendance_callbacks import (
     AttendanceCallback,
 )
 from meetup_bot.telegram.attendance_ui import AttendanceUI, has_done
-from meetup_bot.telegram.common import check_admin, fit_alert
+from meetup_bot.telegram.common import check_admin, safe_answer
+from meetup_bot.telegram.errors_text import ANOTHER_ADMIN, NO_ACCESS, describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,8 @@ STALE_TEXT = "Список устарел. Откройте актуальный
 
 
 async def _answer(callback: CallbackQuery, text: str | None = None) -> None:
-    try:
-        await callback.answer(text=fit_alert(text) if text else None, show_alert=bool(text))
-    except TelegramAPIError, ValueError:
-        # ValueError — симулированный callback (ответ на текстовое сообщение): ответить нельзя
-        logger.warning("не удалось ответить на callback явки", exc_info=True)
+    # Без текста — просто гасим «часики»; с текстом — всплывающее окно
+    await safe_answer(callback, text, show_alert=bool(text))
 
 
 async def _edit(message: Message, text: str) -> None:
@@ -130,7 +127,7 @@ async def _on_done(
     except AlreadyMarked as exc:
         # Имя сырое: экранирование делает render_text_now
         text = services.settings.render_text_now(
-            "text.attendance_marked_by", name=exc.marked_by_name or "другой админ"
+            "text.attendance_marked_by", name=exc.marked_by_name or ANOTHER_ADMIN
         )
         attendance_ui.forget(message.chat.id, message.message_id)
         await _edit(message, text)

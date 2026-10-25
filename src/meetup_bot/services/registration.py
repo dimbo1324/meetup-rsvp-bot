@@ -32,7 +32,7 @@ from meetup_bot.services.admin_support import (
     notify_promotions,
     resolve,
 )
-from meetup_bot.services.errors import InvalidOperation
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import public_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
@@ -41,6 +41,7 @@ from meetup_bot.services.safe import safe_schedule, safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
 from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.service import EVENT_FULL_TEXT, USER_CANCELLED_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +154,9 @@ class RegistrationService:
     async def register(self, event_id: int, user: UserInfo, guests: int = 0) -> RegisterResult:
         options = self._current_options()
         if guests not in (0, 1):
-            raise InvalidOperation("invalid_guests", "гостей может быть 0 или 1")
+            raise InvalidOperation(ErrorCode.INVALID_GUESTS, "гостей может быть 0 или 1")
         if guests and not options.plus_one_enabled:
-            raise InvalidOperation("plus_one_disabled", "запись с гостем выключена")
+            raise InvalidOperation(ErrorCode.PLUS_ONE_DISABLED, "запись с гостем выключена")
 
         # Блокировка + BEGIN IMMEDIATE (в движке) + уникальный частичный индекс: три линии защиты
         async with (
@@ -171,10 +172,10 @@ class RegistrationService:
         notify_full = self._rules_provider().notify_admins_on_full
         if result.filled_event and result.starts_at and notify_full:
             when = format_moment(result.starts_at, self._timezone())
-            await safe_send_service(
-                self._notifier,
-                f"Встреча {when} заполнена: занято {result.seats_taken} из {result.capacity}.",
+            text = EVENT_FULL_TEXT.format(
+                when=when, taken=result.seats_taken, capacity=result.capacity
             )
+            await safe_send_service(self._notifier, text)
         return result
 
     async def cancel(self, event_id: int, user_id: int) -> CancelResult:
@@ -194,11 +195,10 @@ class RegistrationService:
         if rules.notify_admins_on_cancel and not result.was_waitlist and result.starts_at:
             when = format_moment(result.starts_at, self._timezone())
             name = html.escape(result.user_name, quote=False)
-            await safe_send_service(
-                self._notifier,
-                f"{name} отменил(а) запись на встречу {when}. "
-                f"Занято {result.seats_taken} из {result.capacity}.",
+            text = USER_CANCELLED_TEXT.format(
+                name=name, when=when, taken=result.seats_taken, capacity=result.capacity
             )
+            await safe_send_service(self._notifier, text)
         return result
 
     async def _register(

@@ -5,15 +5,15 @@ from __future__ import annotations
 import html
 from typing import Any
 
+from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 from meetup_bot.services.settings_schema import SCHEMA, Kind, SettingSpec
-from meetup_bot.texts.render import WEEKDAYS
+from meetup_bot.texts.render import WEEKDAYS, clip
 
-WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 WEEKDAY_KEYS = frozenset({"event_weekday"})
 PHOTO_KEY = "default_photo_file_id"
 
 POPULAR_TIMEZONES = (
-    "America/Montevideo",
+    DEFAULT_TIMEZONE,
     "America/Argentina/Buenos_Aires",
     "Europe/Moscow",
     "Europe/Madrid",
@@ -183,7 +183,7 @@ def display_value(key: str, value: Any, *, limit: int = 40) -> str:
     text = " ".join(str(value).split()) if value is not None else ""
     if not text:
         return "не задано"
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return clip(text, limit)
 
 
 def button_label(key: str, value: Any, is_default: bool) -> str:

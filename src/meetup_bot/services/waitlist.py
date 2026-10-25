@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from meetup_bot.db.models import Event, EventStatus, RegistrationStatus, User
 from meetup_bot.repositories import audit, bans, events, registrations
+from meetup_bot.services.defaults import DEFAULT_LATE_PROMOTION_HOURS
 
 __all__ = ["Promotion", "promote_waitlist"]
 
@@ -30,7 +31,7 @@ async def promote_waitlist(
     event: Event,
     now: datetime,
     *,
-    late_promotion_hours: int = 24,
+    late_promotion_hours: int = DEFAULT_LATE_PROMOTION_HOURS,
 ) -> list[Promotion]:
     """Переводит людей из очереди в активные, пока хватает мест. Вызывать под блокировкой встречи
     и внутри уже открытой транзакции `session`; сама ничего не коммитит.

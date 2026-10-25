@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import html
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -24,12 +23,15 @@ from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.handlers import ALLOWED_UPDATES, build_router
 from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories import event_posts
+from meetup_bot.scheduler.backup import BACKUPS_DIRNAME
+from meetup_bot.scheduler.tick import HEARTBEAT_FILENAME
 from meetup_bot.services.ports import PostRefresher
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.telegram.attendance_ui import AttendanceUI
 from meetup_bot.telegram.commands import sync_commands
 from meetup_bot.telegram.notifier import TelegramNotifier
 from meetup_bot.telegram.post_updater import PostUpdater
+from meetup_bot.texts.service import BOT_STARTED_TEXT, SCHEDULER_STOPPED_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,7 @@ def _watch_scheduler(task: asyncio.Task[None], notifier: TelegramNotifier) -> No
         if error is not None:
             logger.error("планировщик остановился", exc_info=error)
             asyncio.get_running_loop().create_task(
-                notifier.send_service(f"⚠️ Планировщик остановился: {type(error).__name__}")
+                notifier.send_service(SCHEDULER_STOPPED_TEXT.format(error=type(error).__name__))
             )
 
     task.add_done_callback(_done)
@@ -103,7 +105,7 @@ async def run(config: Settings) -> None:
     sessions = create_session_factory(engine)
 
     # Сдвиг времени нужен только для dev-команды /dev_shift; в бою часы системные
-    clock: Clock = ShiftableClock(SystemClock()) if config.env == "dev" else SystemClock()
+    clock: Clock = ShiftableClock(SystemClock()) if config.is_dev else SystemClock()
 
     bot = Bot(
         token=config.bot_token.get_secret_value(),
@@ -121,8 +123,8 @@ async def run(config: Settings) -> None:
             sessions,
             clock,
             db_path=db_path,
-            backups_dir=db_path.parent / "backups",
-            heartbeat_path=db_path.parent / "heartbeat",
+            backups_dir=db_path.parent / BACKUPS_DIRNAME,
+            heartbeat_path=db_path.parent / HEARTBEAT_FILENAME,
             notifier=notifier,
             post_refresher_factory=make_updater,
             send_backup=notifier.send_service_document,
@@ -155,9 +157,8 @@ async def run(config: Settings) -> None:
             for event_id in await event_posts.list_live_event_ids(session):
                 services.post_refresher.schedule(event_id)
 
-        # Пустая переменная (сборка без версии) не должна давать «версия » без номера
-        version = html.escape(os.environ.get("APP_VERSION") or __version__, quote=False)
-        await notifier.send_service(f"Бот запущен, версия {version}")
+        version = html.escape(config.app_version, quote=False)
+        await notifier.send_service(BOT_STARTED_TEXT.format(version=version))
 
         scheduler_task = asyncio.create_task(services.scheduler.run_forever(), name="scheduler")
         _watch_scheduler(scheduler_task, notifier)

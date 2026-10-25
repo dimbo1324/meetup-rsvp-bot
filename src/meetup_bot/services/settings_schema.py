@@ -10,10 +10,12 @@ import enum
 import re
 import string
 from dataclasses import dataclass
+from datetime import time
 from html.parser import HTMLParser
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from meetup_bot.services import defaults as d
 from meetup_bot.services.errors import DomainError
 from meetup_bot.texts.defaults import (
     ALLOWED_PLACEHOLDERS,
@@ -21,8 +23,10 @@ from meetup_bot.texts.defaults import (
     MESSAGE_TEXT_KEYS,
     TEXT_PREFIX,
 )
-from meetup_bot.texts.render import telegram_length
+from meetup_bot.texts.render import TIME_FORMAT, telegram_length
 
+MIN_CAPACITY = 1
+MAX_CAPACITY = 200
 POPUP_MAX_LEN = 200
 # Текст-сообщение: шаблон до 3500 символов, а с худшими подстановками — в лимит Telegram 4096
 MESSAGE_MAX_LEN = 3500
@@ -33,7 +37,8 @@ DESCRIPTION_WARN_LEN = 700
 DESCRIPTION_MAX_LEN = 3500
 URL_MAX_LEN = 2000
 FILE_ID_MAX_LEN = 256
-# Пределы значений, которые потребители подставляют в тексты (имя пользователя, причина)
+# Пределы значений, которые подставляются в тексты: имя (64 — предел имени в Telegram, он же
+# для имени, введённого админом вручную) и причина (отмены встречи, бана)
 NAME_MAX_LEN = 64
 REASON_MAX_LEN = 200
 
@@ -110,6 +115,11 @@ def _bool(key: str, default: bool, description: str) -> SettingSpec:
     return SettingSpec(key, Kind.BOOL, default, description)
 
 
+def _time(key: str, default: time, description: str) -> SettingSpec:
+    # В БД время хранится строкой "HH:MM"
+    return SettingSpec(key, Kind.TIME, default.strftime(TIME_FORMAT), description)
+
+
 _TEXT_DESCRIPTIONS: dict[str, str] = {
     "text.registered": "Успешная запись",
     "text.registered_late": "Запись после дедлайна отмены",
@@ -133,10 +143,16 @@ _TEXT_DESCRIPTIONS: dict[str, str] = {
 }
 
 _SPECS: tuple[SettingSpec, ...] = (
-    _int("capacity", 10, 1, 200, "Лимит мест для новых встреч"),
-    _int("event_weekday", 4, 0, 6, "День встречи (пн = 0, пт = 4)"),
-    SettingSpec("event_time", Kind.TIME, "16:30", "Время начала встречи"),
-    _int("event_duration_minutes", 120, 15, 720, "Длительность встречи, минут"),
+    _int("capacity", d.DEFAULT_CAPACITY, MIN_CAPACITY, MAX_CAPACITY, "Лимит мест для новых встреч"),
+    _int("event_weekday", d.DEFAULT_EVENT_WEEKDAY, 0, 6, "День встречи (пн = 0, пт = 4)"),
+    _time("event_time", d.DEFAULT_EVENT_TIME, "Время начала встречи"),
+    _int(
+        "event_duration_minutes",
+        d.DEFAULT_EVENT_DURATION_MINUTES,
+        15,
+        720,
+        "Длительность встречи, минут",
+    ),
     SettingSpec("default_place", Kind.STR, "", "Место по умолчанию", max_len=PLACE_MAX_LEN),
     SettingSpec(
         "default_place_url", Kind.URL, "", "Ссылка на карту (https://)", max_len=URL_MAX_LEN
@@ -149,45 +165,89 @@ _SPECS: tuple[SettingSpec, ...] = (
         "Фото по умолчанию (file_id)",
         max_len=FILE_ID_MAX_LEN,
     ),
-    _bool("auto_create_enabled", True, "Автосоздание встреч"),
-    _int("auto_create_days_after", 1, 0, 6, "Через сколько дней после встречи создавать следующую"),
-    SettingSpec("auto_create_time", Kind.TIME, "10:00", "Время автосоздания"),
-    _int("cancel_deadline_days_before", 1, 0, 7, "Дедлайн отмены: за сколько дней"),
-    SettingSpec("cancel_deadline_time", Kind.TIME, "20:00", "Дедлайн отмены: во сколько"),
+    _bool("auto_create_enabled", d.DEFAULT_AUTO_CREATE_ENABLED, "Автосоздание встреч"),
+    _int(
+        "auto_create_days_after",
+        d.DEFAULT_AUTO_CREATE_DAYS_AFTER,
+        0,
+        6,
+        "Через сколько дней после встречи создавать следующую",
+    ),
+    _time("auto_create_time", d.DEFAULT_AUTO_CREATE_TIME, "Время автосоздания"),
+    _int(
+        "cancel_deadline_days_before",
+        d.DEFAULT_CANCEL_DEADLINE_DAYS_BEFORE,
+        0,
+        7,
+        "Дедлайн отмены: за сколько дней",
+    ),
+    _time("cancel_deadline_time", d.DEFAULT_CANCEL_DEADLINE_TIME, "Дедлайн отмены: во сколько"),
     _int(
         "registration_close_minutes_after_start",
-        60,
+        d.DEFAULT_REGISTRATION_CLOSE_MINUTES_AFTER_START,
         0,
         240,
         "Закрытие записи, минут после начала (0 = в момент начала)",
     ),
-    _bool("reminder_enabled", True, "Напоминания в личку"),
-    _int("reminder_hours_before", 24, 1, 72, "За сколько часов напоминать"),
+    _bool("reminder_enabled", d.DEFAULT_REMINDER_ENABLED, "Напоминания в личку"),
+    _int(
+        "reminder_hours_before",
+        d.DEFAULT_REMINDER_HOURS_BEFORE,
+        1,
+        72,
+        "За сколько часов напоминать",
+    ),
     _int(
         "attendance_prompt_minutes_after",
-        90,
+        d.DEFAULT_ATTENDANCE_PROMPT_MINUTES_AFTER,
         30,
         2880,
         "Через сколько минут после начала просить отметить явку",
     ),
     _int(
         "post_reminder_days_before",
-        2,
+        d.DEFAULT_POST_REMINDER_DAYS_BEFORE,
         0,
         14,
         "Напомнить админам разослать пост за N дней до встречи, 0 = выключено",
     ),
-    SettingSpec("post_reminder_time", Kind.TIME, "10:00", "Время напоминания о рассылке поста"),
-    _int("ban_after_no_shows", 1, 0, 10, "Порог автобана по неявкам, 0 = выключен"),
-    _bool("remove_banned_from_future_events", True, "Снимать забаненного с будущих встреч"),
-    _bool("notify_user_on_ban", False, "Сообщать человеку о бане"),
-    _bool("show_names_in_post", False, "Имена в посте (иначе только счётчик)"),
-    _bool("plus_one_enabled", False, "Кнопка «+1»"),
-    _bool("waitlist_enabled", True, "Лист ожидания"),
-    _int("late_promotion_hours", 24, 0, 72, "Порог «поздней» подвижки из листа ожидания, часов"),
-    _bool("notify_admins_on_full", True, "Уведомлять админов о заполнении встречи"),
-    _bool("notify_admins_on_cancel", True, "Уведомлять админов об отменах"),
-    SettingSpec("timezone", Kind.TIMEZONE, "America/Montevideo", "Часовой пояс (IANA)"),
+    _time("post_reminder_time", d.DEFAULT_POST_REMINDER_TIME, "Время напоминания о рассылке поста"),
+    _int(
+        "ban_after_no_shows",
+        d.DEFAULT_BAN_AFTER_NO_SHOWS,
+        0,
+        10,
+        "Порог автобана по неявкам, 0 = выключен",
+    ),
+    _bool(
+        "remove_banned_from_future_events",
+        d.DEFAULT_REMOVE_BANNED_FROM_FUTURE_EVENTS,
+        "Снимать забаненного с будущих встреч",
+    ),
+    _bool("notify_user_on_ban", d.DEFAULT_NOTIFY_USER_ON_BAN, "Сообщать человеку о бане"),
+    _bool(
+        "show_names_in_post", d.DEFAULT_SHOW_NAMES_IN_POST, "Имена в посте (иначе только счётчик)"
+    ),
+    _bool("plus_one_enabled", d.DEFAULT_PLUS_ONE_ENABLED, "Кнопка «+1»"),
+    _bool("waitlist_enabled", d.DEFAULT_WAITLIST_ENABLED, "Лист ожидания"),
+    _int(
+        "late_promotion_hours",
+        d.DEFAULT_LATE_PROMOTION_HOURS,
+        0,
+        72,
+        "Порог «поздней» подвижки из листа ожидания, часов",
+    ),
+    _bool(
+        "notify_admins_on_full",
+        d.DEFAULT_NOTIFY_ADMINS_ON_FULL,
+        "Уведомлять админов о заполнении встречи",
+    ),
+    _bool(
+        "notify_admins_on_cancel",
+        d.DEFAULT_NOTIFY_ADMINS_ON_CANCEL,
+        "Уведомлять админов об отменах",
+    ),
+    SettingSpec("timezone", Kind.TIMEZONE, d.DEFAULT_TIMEZONE, "Часовой пояс (IANA)"),
     *(
         SettingSpec(
             key,
@@ -443,30 +503,9 @@ def validate(spec: SettingSpec, value: Any) -> tuple[Any, list[str]]:
     return value, warnings
 
 
-def validate_place(value: Any) -> str:
-    """Проверка места встречи по схеме `default_place`; возвращает нормализованное значение."""
-    normalized, _ = validate(get_spec("default_place"), value)
-    return str(normalized)
-
-
-def validate_url(value: Any) -> str:
-    """Проверка ссылки на карту; пустая строка допустима и значит «без ссылки»."""
-    normalized, _ = validate(get_spec("default_place_url"), value)
-    return str(normalized)
-
-
-def validate_capacity(value: Any) -> int:
-    normalized, _ = validate(get_spec("capacity"), value)
-    return int(normalized)
-
-
-def validate_description(value: Any) -> list[str]:
-    """Проверка HTML-описания; ошибки — SettingsValidationError, предупреждения — списком."""
-    _, warnings = validate(get_spec("default_description"), value)
-    return warnings
-
-
 __all__ = [
+    "MAX_CAPACITY",
+    "MIN_CAPACITY",
     "NAME_MAX_LEN",
     "REASON_MAX_LEN",
     "SAMPLE_VARS",
@@ -481,8 +520,4 @@ __all__ = [
     "get_spec",
     "parse_hhmm",
     "validate",
-    "validate_capacity",
-    "validate_description",
-    "validate_place",
-    "validate_url",
 ]

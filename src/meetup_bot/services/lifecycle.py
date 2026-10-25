@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import enum
-import html
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -23,7 +22,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.db.models import Event, EventStatus
+from meetup_bot.db.models import UNFINISHED_EVENT_STATUSES, Event, EventStatus
+from meetup_bot.renderer.post import participant_line
 from meetup_bot.repositories import audit
 from meetup_bot.services.admin_support import (
     Provided,
@@ -31,27 +31,31 @@ from meetup_bot.services.admin_support import (
     resolve,
     resolve_any,
 )
+from meetup_bot.services.defaults import DEFAULT_CAPACITY
 from meetup_bot.services.errors import InvalidOperation
-from meetup_bot.services.events import DEFAULT_CAPACITY, EventService
+from meetup_bot.services.events import EventService
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, PostRefresher
 from meetup_bot.services.posts import load_post_data
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule, safe_send_service
 from meetup_bot.services.timing import (
+    DAYS_IN_WEEK,
     InvalidEventTimes,
     ScheduleSettings,
     next_event_start,
 )
 from meetup_bot.texts.render import format_moment
-from meetup_bot.texts.service import AUTO_CREATED_TEXT
+from meetup_bot.texts.service import (
+    AUTO_CREATED_TEXT,
+    CLOSED_SUMMARY_FILLED,
+    CLOSED_SUMMARY_HEAD,
+)
 
 logger = logging.getLogger(__name__)
 
 # Сколько после закрытия записи итог ещё актуален, даже если запрос явки совпал с закрытием
 CLOSED_SUMMARY_GRACE = timedelta(minutes=30)
-
-# Подсказка «как разослать пост»: бот сам в чаты не публикует, это делает админ
 
 # Провайдер может быть и синхронным, и асинхронным
 RulesProvider = Callable[[], RulesSettings | Awaitable[RulesSettings]]
@@ -88,12 +92,9 @@ class AutoCreateResult:
     event_id: int | None = None
 
 
-_UNFINISHED = (EventStatus.OPEN.value, EventStatus.CLOSED.value)
-
-
 def _finish_due(event: Event, now: datetime) -> bool:
     return (
-        event.status in _UNFINISHED
+        event.status in UNFINISHED_EVENT_STATUSES
         and event.starts_at <= now
         and event.registration_closes_at <= now
     )
@@ -210,7 +211,7 @@ class LifecycleService:
         found_existing: str | None = None
         for starts_at in (nearest, next_event_start(nearest, schedule)):
             target_date = starts_at.astimezone(tz).date()
-            offset = rules.auto_create_days_after - 7
+            offset = rules.auto_create_days_after - DAYS_IN_WEEK
             due_date = target_date + timedelta(days=offset)
             # Локальное время: «10:00» не должно плыть вместе со сдвигом UTC
             if now < datetime.combine(due_date, rules.auto_create_time, tzinfo=tz):
@@ -267,7 +268,7 @@ class LifecycleService:
     async def _finish_due_ids(self, now: datetime) -> list[int]:
         async with self._sessions() as session:
             stmt = select(Event.id).where(
-                Event.status.in_(_UNFINISHED),
+                Event.status.in_(UNFINISHED_EVENT_STATUSES),
                 Event.starts_at <= now,
                 Event.registration_closes_at <= now,
             )
@@ -285,12 +286,13 @@ class LifecycleService:
             return
         when = format_moment(data.starts_at, timezone)
         lines = [
-            f"Запись на встречу ({when}) закрыта.",
-            f"Заполнено {data.seats_taken} из {data.capacity}.",
+            CLOSED_SUMMARY_HEAD.format(when=when),
+            CLOSED_SUMMARY_FILLED.format(taken=data.seats_taken, capacity=data.capacity),
         ]
-        for index, participant in enumerate(data.participants, start=1):
-            suffix = " (+1)" if participant.guests else ""
-            lines.append(f"{index}. {html.escape(participant.name, quote=False)}{suffix}")
+        lines.extend(
+            participant_line(index, participant)
+            for index, participant in enumerate(data.participants, start=1)
+        )
         # Длинный список не помещается в одно сообщение Telegram
         for chunk in chunk_lines(lines):
             await safe_send_service(self._notifier, chunk)

@@ -18,10 +18,9 @@ from aiogram_dialog.widgets.kbd.scrolling_group import ScrollingGroup
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.db.models import BanReason, RegistrationSource, RegistrationStatus
+from meetup_bot.dialogs._buttons import BACK, NO_REASON, TO_EVENT, TO_LIST
 from meetup_bot.dialogs._common import (
-    NO_ACCESS,
     actor_id,
-    describe_error,
     get_services,
     get_sessions,
     is_admin,
@@ -30,12 +29,13 @@ from meetup_bot.dialogs._common import (
 from meetup_bot.dialogs.states import ParticipantsSG, PickerSG
 from meetup_bot.repositories import events as events_repo
 from meetup_bot.repositories.users import UserInfo
-from meetup_bot.services.errors import InvalidOperation
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
+from meetup_bot.services.names import FALLBACK_NAME
 from meetup_bot.services.participants import ParticipantRow
-from meetup_bot.texts.render import format_moment
+from meetup_bot.services.settings_schema import NAME_MAX_LEN, REASON_MAX_LEN
+from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
+from meetup_bot.texts.render import GUEST_SUFFIX, clip, format_moment, telegram_length
 
-MAX_MANUAL_NAME = 100
-MAX_BAN_COMMENT = 200
 _BUTTON_LIMIT = 60
 NO_DM_MARK = "📵"
 NO_DM_HINT = f"{NO_DM_MARK} — не нажимал(а) «Старт» у бота, личные сообщения не дойдут"
@@ -84,19 +84,15 @@ async def _clear_notice(_: Any, __: Any, manager: DialogManager) -> None:
 
 def _back_to_list(suffix: str) -> SwitchTo:
     return SwitchTo(
-        Const("⬅️ К списку"),
+        Const(TO_LIST),
         id=f"to_list_{suffix}",
         state=ParticipantsSG.list,
         on_click=_clear_notice,
     )
 
 
-def _short(text: str, limit: int = _BUTTON_LIMIT) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
 def _plain_name(row: ParticipantRow) -> str:
-    return row.name + (" (+1)" if row.guests else "")
+    return row.name + (GUEST_SUFFIX if row.guests else "")
 
 
 def _dm_unreachable(row: ParticipantRow) -> bool:
@@ -110,10 +106,10 @@ def _row_label(row: ParticipantRow, index: int) -> str:
     else:
         label = f"{index}. {_plain_name(row)}"
     if not _dm_unreachable(row):
-        return _short(label)
+        return clip(label, _BUTTON_LIMIT)
     suffix = f" {NO_DM_MARK}"
     # Обрезается имя, а не пометка: иначе у длинного имени она пропала бы
-    return _short(label, _BUTTON_LIMIT - len(suffix)) + suffix
+    return clip(label, _BUTTON_LIMIT - telegram_length(suffix)) + suffix
 
 
 async def _load_rows(manager: DialogManager) -> tuple[list[ParticipantRow], Any]:
@@ -204,7 +200,7 @@ async def _item_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     else:
         lines.append("Статус: записан(а)")
     if row.guests:
-        lines.append("С гостем (+1)")
+        lines.append(f"С гостем{GUEST_SUFFIX}")
     source = "добавлен админом" if row.source == RegistrationSource.ADMIN.value else "сам записался"
     lines.append(f"Запись: {format_moment(row.created_at, tz)}, {source}")
     is_active = row.status == RegistrationStatus.ACTIVE.value
@@ -300,7 +296,7 @@ async def _ban_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]
     who = html.escape(row.name) if row else "участника"
     return {
         "text": f"<b>🚫 Забанить: {who}?</b>\n{_notice(dialog_manager)}\n"
-        f"Пришлите причину (до {MAX_BAN_COMMENT} символов) или нажмите «Без причины». "
+        f"Пришлите причину (до {REASON_MAX_LEN} символов) или нажмите «{NO_REASON}». "
         "Бан сразу вступит в силу."
     }
 
@@ -330,10 +326,10 @@ async def _on_ban_text(message: Message, _: Any, manager: DialogManager) -> None
         return
     comment = (message.text or "").strip()
     if not comment:
-        _set_notice(manager, "⚠️ Пришлите причину текстом или нажмите «Без причины».")
+        _set_notice(manager, f"⚠️ Пришлите причину текстом или нажмите «{NO_REASON}».")
         return
-    if len(comment) > MAX_BAN_COMMENT:
-        _set_notice(manager, f"⚠️ Слишком длинно: {len(comment)} из {MAX_BAN_COMMENT} символов.")
+    if len(comment) > REASON_MAX_LEN:
+        _set_notice(manager, f"⚠️ Слишком длинно: {len(comment)} из {REASON_MAX_LEN} символов.")
         return
     await _do_ban(manager, comment)
 
@@ -397,7 +393,7 @@ async def _do_add(
             force=force,
         )
     except InvalidOperation as exc:
-        if exc.code == "over_capacity" and not force:
+        if exc.code == ErrorCode.OVER_CAPACITY and not force:
             manager.dialog_data[_ADD] = {"user": user, "manual_name": manual_name}
             _set_notice(manager, None)
             await manager.switch_to(ParticipantsSG.confirm_over_capacity)
@@ -407,7 +403,7 @@ async def _do_add(
     except Exception as exc:
         await _to_list(manager, f"⚠️ {describe_error(exc)}")
         return
-    label = manual_name or (user or {}).get("first_name") or "Участник"
+    label = manual_name or (user or {}).get("first_name") or FALLBACK_NAME
     await _to_list(manager, f"✅ Добавлен(а): {label}.")
 
 
@@ -418,8 +414,8 @@ async def _on_manual_name(message: Message, _: Any, manager: DialogManager) -> N
     if not name:
         _set_notice(manager, "⚠️ Имя не может быть пустым. Пример: Анна Петрова.")
         return
-    if len(name) > MAX_MANUAL_NAME:
-        _set_notice(manager, f"⚠️ Слишком длинно: {len(name)} из {MAX_MANUAL_NAME} символов.")
+    if len(name) > NAME_MAX_LEN:
+        _set_notice(manager, f"⚠️ Слишком длинно: {len(name)} из {NAME_MAX_LEN} символов.")
         return
     await _do_add(manager, user=None, manual_name=name, force=False)
 
@@ -427,7 +423,7 @@ async def _on_manual_name(message: Message, _: Any, manager: DialogManager) -> N
 async def _manual_name_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     return {
         "text": f"<b>✍️ Имя участника</b>\n{_notice(dialog_manager)}\n"
-        f"Пришлите имя (до {MAX_MANUAL_NAME} символов), например: Анна Петрова."
+        f"Пришлите имя (до {NAME_MAX_LEN} символов), например: Анна Петрова."
     }
 
 
@@ -477,7 +473,7 @@ _list_window = Window(
         hide_on_single_page=True,
     ),
     Button(Const("➕ Добавить участника"), id="add_participant", on_click=_on_add),
-    Button(Const("⬅️ К встрече"), id="close_participants", on_click=_on_close),
+    Button(Const(TO_EVENT), id="close_participants", on_click=_on_close),
     state=ParticipantsSG.list,
     getter=_list_getter,
 )
@@ -525,7 +521,7 @@ _manual_window = Window(
     _BODY,
     MessageInput(_on_manual_name, content_types=ContentType.TEXT),
     SwitchTo(
-        Const("⬅️ Назад"),
+        Const(BACK),
         id="back_manual",
         state=ParticipantsSG.add_choose,
         on_click=_clear_notice,
@@ -560,8 +556,8 @@ _confirm_window = Window(
 _ban_window = Window(
     _BODY,
     MessageInput(_on_ban_text, content_types=ContentType.TEXT),
-    Button(Const("Без причины"), id="ban_no_reason", on_click=_on_ban_no_reason),
-    SwitchTo(Const("⬅️ Назад"), id="back_ban", state=ParticipantsSG.item, on_click=_clear_notice),
+    Button(Const(NO_REASON), id="ban_no_reason", on_click=_on_ban_no_reason),
+    SwitchTo(Const(BACK), id="back_ban", state=ParticipantsSG.item, on_click=_clear_notice),
     state=ParticipantsSG.ban_comment,
     getter=_ban_getter,
 )

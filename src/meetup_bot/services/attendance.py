@@ -22,7 +22,7 @@ from meetup_bot.db.models import (
 from meetup_bot.repositories import audit, events, registrations
 from meetup_bot.services import access
 from meetup_bot.services.bans import BanOutcome, BanService
-from meetup_bot.services.errors import DomainError, InvalidOperation, NotFound
+from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import display_name
 from meetup_bot.services.rules import RulesSettings
@@ -56,7 +56,7 @@ class MarkResult:
     marked_by: int
     no_shows: tuple[int, ...]  # id записей, отмеченных как неявка
     new_bans: tuple[int, ...]  # id пользователей, получивших автобан
-    # Пользователи, для которых пересчёт бана упал: дожать через `reevaluate_bans`
+    # Пользователи, для которых пересчёт бана упал: дожмёт BanRecheckTask (`retry_pending_bans`)
     failed_ban_user_ids: tuple[int, ...] = ()
 
 
@@ -115,7 +115,9 @@ class AttendanceService:
 
             active = await self._active_registrations(session, event_id)
             if not no_show_registration_ids <= {reg.id for reg in active}:
-                raise InvalidOperation("unknown_registration", "запись не найдена среди участников")
+                raise InvalidOperation(
+                    ErrorCode.UNKNOWN_REGISTRATION, "запись не найдена среди участников"
+                )
             for reg in active:
                 reg.attendance = (
                     Attendance.NO_SHOW.value
@@ -236,13 +238,15 @@ class AttendanceService:
     ) -> BanOutcome:
         """Исправляет отметку после «Готово»; результат говорит, выдан ли или снят бан."""
         if new_attendance is Attendance.UNKNOWN:
-            raise InvalidOperation("invalid_attendance", "можно выбрать только пришёл или неявка")
+            raise InvalidOperation(
+                ErrorCode.INVALID_ATTENDANCE, "можно выбрать только пришёл или неявка"
+            )
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             await access.require_admin(session, actor_id)
             now = self._clock.now()
             event = await self._require_event(session, event_id)
             if event.attendance_marked_at is None:
-                raise InvalidOperation("not_marked", "явка ещё не отмечена")
+                raise InvalidOperation(ErrorCode.NOT_MARKED, "явка ещё не отмечена")
             self._require_window(event, now)
             reg = await session.get(Registration, registration_id)
             # Отменённую админом «как неявка» запись можно исправить: так снимается ошибочный штраф
@@ -325,15 +329,15 @@ class AttendanceService:
             raise NotFound(f"встреча {event_id} не найдена")
         if event.status == EventStatus.CANCELLED.value:
             # Неявки по отменённой встрече не засчитываются, отмечать нечего
-            raise InvalidOperation("event_cancelled", "встреча отменена")
+            raise InvalidOperation(ErrorCode.EVENT_CANCELLED, "встреча отменена")
         return event
 
     @staticmethod
     def _require_started(event: Event, now: datetime) -> None:
         if event.status != EventStatus.FINISHED.value and event.starts_at > now:
-            raise InvalidOperation("event_not_started", "встреча ещё не началась")
+            raise InvalidOperation(ErrorCode.EVENT_NOT_STARTED, "встреча ещё не началась")
 
     @staticmethod
     def _require_window(event: Event, now: datetime) -> None:
         if now > event.starts_at + ATTENDANCE_WINDOW:
-            raise InvalidOperation("attendance_window_closed", "срок отметки явки истёк")
+            raise InvalidOperation(ErrorCode.ATTENDANCE_WINDOW_CLOSED, "срок отметки явки истёк")

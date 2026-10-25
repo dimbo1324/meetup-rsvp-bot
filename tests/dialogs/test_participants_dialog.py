@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.settings_schema import NAME_MAX_LEN, REASON_MAX_LEN
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
@@ -231,8 +232,8 @@ async def test_пустое_и_слишком_длинное_имя_отклон
     await _open(tg)
     await _press(tg, "Добавить участника")
     await _press(tg, "Ввести имя вручную")
-    await _say(tg, "Я" * 101)
-    assert "Слишком длинно: 101 из 100 символов." in _screen(tg)
+    await _say(tg, "Я" * (NAME_MAX_LEN + 1))
+    assert f"Слишком длинно: {NAME_MAX_LEN + 1} из {NAME_MAX_LEN} символов." in _screen(tg)
     assert await _registrations(app, event_id) == []
     # Окно ввода осталось: корректное имя принимается
     await _say(tg, "Борис")
@@ -490,8 +491,8 @@ async def test_слишком_длинная_причина_бана_откло�
     await _open(tg)
     await _press(tg, "1. Участник1")
     await _press(tg, "Забанить")
-    await _say(tg, "П" * 201)
-    assert "Слишком длинно: 201 из 200 символов." in _screen(tg)
+    await _say(tg, "П" * (REASON_MAX_LEN + 1))
+    assert f"Слишком длинно: {REASON_MAX_LEN + 1} из {REASON_MAX_LEN} символов." in _screen(tg)
     assert await _banned_ids(app) == set()
     await _say(tg, "Коротко")
     assert person(1).id in await _banned_ids(app)

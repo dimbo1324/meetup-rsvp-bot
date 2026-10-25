@@ -7,15 +7,21 @@ from datetime import datetime
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus, User
+from meetup_bot.db.models import (
+    UNFINISHED_EVENT_STATUSES,
+    Event,
+    EventStatus,
+    Registration,
+    RegistrationStatus,
+    User,
+)
 
-LIVE = (RegistrationStatus.ACTIVE.value, RegistrationStatus.WAITLIST.value)
 ACTIVE_ONLY = (RegistrationStatus.ACTIVE.value,)
 
 
 async def list_events(session: AsyncSession, *, recent_since: datetime | None) -> list[Event]:
     """Открытые и закрытые встречи; с `recent_since` — ещё и любые начавшиеся не раньше него."""
-    live = Event.status.in_((EventStatus.OPEN.value, EventStatus.CLOSED.value))
+    live = Event.status.in_(UNFINISHED_EVENT_STATUSES)
     condition = live if recent_since is None else or_(live, Event.starts_at >= recent_since)
     found = await session.scalars(select(Event).where(condition).order_by(Event.starts_at.desc()))
     return list(found.all())
@@ -64,13 +70,3 @@ async def dm_recipients(
         .order_by(Registration.id)
     )
     return list(dict.fromkeys(rows.all()))
-
-
-async def filter_dm_available(session: AsyncSession, user_ids: list[int]) -> list[int]:
-    if not user_ids:
-        return []
-    rows = await session.scalars(
-        select(User.id).where(User.id.in_(user_ids), User.dm_available.is_(True))
-    )
-    allowed = set(rows.all())
-    return [user_id for user_id in user_ids if user_id in allowed]

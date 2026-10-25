@@ -7,6 +7,7 @@ import pytest
 from aiogram.types import Message, PhotoSize, Update
 
 from meetup_bot.db.models import Event, EventStatus, User
+from meetup_bot.services.settings_schema import REASON_MAX_LEN
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
@@ -329,15 +330,15 @@ async def test_после_отмены_карточка_не_предлагае�
     assert "Закрыть запись" not in labels
 
 
-async def test_причина_отмены_обрезается_до_300_символов(
+async def test_причина_отмены_обрезается_до_лимита_причины(
     app: App, tg: Harness, event_id: int
 ) -> None:
     await _open_card(tg)
     await _press(tg, "Отменить встречу")
-    await _say(tg, "П" * 500)
+    await _say(tg, "П" * (REASON_MAX_LEN + 100))
     await _press(tg, "Да, отменить")
     event = await _event(app, event_id)
-    assert event.cancel_reason == "П" * 300
+    assert event.cancel_reason == "П" * REASON_MAX_LEN
 
 
 async def test_назад_из_подтверждения_возвращает_к_причине(
