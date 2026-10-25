@@ -49,8 +49,9 @@ class PostData:
     cancel_reason: str | None = None
     has_photo: bool = False
     photo_file_id: str | None = None
-    show_names: bool = True
+    show_names: bool = False
     plus_one_enabled: bool = False
+    waiting: int = 0
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,8 @@ def _compose(data: PostData, description: str, shown: int) -> str:
     blocks.append("\n".join(info))
 
     counter = [f"Записались: {data.seats_taken} из {data.capacity}"]
+    if data.status == EventStatus.OPEN.value and data.waiting > 0:
+        counter.append(f"В очереди: {data.waiting}")
     if data.show_names and data.participants:
         counter.extend(
             _participant_line(i, p) for i, p in enumerate(data.participants[:shown], start=1)

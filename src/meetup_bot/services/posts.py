@@ -15,7 +15,7 @@ async def load_post_data(
     event_id: int,
     *,
     timezone: str = DEFAULT_TIMEZONE,
-    show_names: bool = True,
+    show_names: bool = False,
     plus_one_enabled: bool = False,
 ) -> PostData | None:
     async with sessions() as session:
@@ -24,6 +24,7 @@ async def load_post_data(
             return None
         rows = await registrations.list_active_with_users(session, event_id)
         taken = await events.seats_taken(session, event_id)
+        waiting = await registrations.count_waitlist(session, event_id)
         participants = [
             Participant(name=public_name(user, reg.manual_name), guests=reg.guests)
             for reg, user in rows
@@ -44,4 +45,5 @@ async def load_post_data(
             photo_file_id=event.photo_file_id,
             show_names=show_names,
             plus_one_enabled=plus_one_enabled,
+            waiting=waiting,
         )

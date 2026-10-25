@@ -2,8 +2,9 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
@@ -15,7 +16,6 @@ from meetup_bot.services.lifecycle import (
     AutoCreateStatus,
     EventDefaults,
     LifecycleService,
-    last_auto_create_moment,
 )
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.registration import RegisterStatus
@@ -28,6 +28,8 @@ CLOSES_AT = datetime(2026, 10, 24, 17, 0, tzinfo=UTC)
 
 
 async def create_event(app: App, capacity: int = 10) -> int:
+    # По умолчанию запись закрывается в момент начала; здесь проверяется закрытие заранее
+    await app.services.settings.set("registration_close_hours_before", 3, ADMIN_ID)
     return (await app.services.events.create_event_as_admin(OWNER_ID, capacity=capacity)).event_id
 
 
@@ -362,34 +364,6 @@ async def test_finish_due_пропускает_устаревшую_выборк
     assert (await get_event(app, event_id)).status == EventStatus.OPEN.value
 
 
-# ---- last_auto_create_moment ----------------------------------------------------------
-
-
-def test_последний_момент_автосоздания_в_пятницу_это_прошлое_воскресенье() -> None:
-    now = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
-    moment = last_auto_create_moment(now, RulesSettings(), "America/Montevideo")
-    assert moment.astimezone(UTC) == datetime(2026, 10, 18, 13, 0, tzinfo=UTC)
-
-
-def test_последний_момент_ровно_в_момент_автосоздания_это_он_сам() -> None:
-    now = datetime(2026, 10, 25, 13, 0, tzinfo=UTC)  # воскресенье 10:00 по Монтевидео
-    moment = last_auto_create_moment(now, RulesSettings(), "America/Montevideo")
-    assert moment.astimezone(UTC) == now
-
-
-def test_последний_момент_за_минуту_до_это_прошлая_неделя() -> None:
-    now = datetime(2026, 10, 25, 12, 59, tzinfo=UTC)
-    moment = last_auto_create_moment(now, RulesSettings(), "America/Montevideo")
-    assert moment.astimezone(UTC) == datetime(2026, 10, 18, 13, 0, tzinfo=UTC)
-
-
-def test_последний_момент_учитывает_настроенные_день_и_время() -> None:
-    rules = RulesSettings(auto_create_weekday=0, auto_create_time=time(8, 30))
-    now = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)  # пятница
-    moment = last_auto_create_moment(now, rules, "UTC")
-    assert moment == datetime(2026, 10, 19, 8, 30, tzinfo=UTC)
-
-
 # ---- create_weekly_event --------------------------------------------------------------
 
 
@@ -481,27 +455,26 @@ async def test_автосоздание_выключено(app: App) -> None:
     assert await count_events(app) == 0
 
 
-async def test_автосоздание_после_встречи_не_создаёт_задним_числом(app: App) -> None:
-    # Суббота 18:00 по Монтевидео: целевая суббота 17:00 уже прошла
+async def test_автосоздание_после_встречи_до_момента_создания_ждёт(app: App) -> None:
+    # Суббота 18:00 по Монтевидео: следующая встреча 31.10, её создадут в воскресенье 10:00
     app.clock.advance(timedelta(hours=33))
     result = await app.services.lifecycle.create_weekly_event(
         app.services.settings.rules_now(), app.clock.now()
     )
-    assert result.status is AutoCreateStatus.SKIPPED_PAST
+    assert result.status is AutoCreateStatus.NOT_DUE
     assert await count_events(app) == 0
 
 
-async def test_автосоздание_до_момента_автосоздания_цель_прошлой_недели_в_прошлом(
-    app: App,
-) -> None:
-    app.clock.advance(timedelta(days=2))  # воскресенье 09:00 по Монтевидео, до 10:00
+async def test_автосоздание_в_воскресенье_до_10_00_ждёт(app: App) -> None:
+    app.clock.advance(timedelta(days=2))  # воскресенье 09:00 по Монтевидео
     result = await app.services.lifecycle.create_weekly_event(
         app.services.settings.rules_now(), app.clock.now()
     )
-    assert result.status is AutoCreateStatus.SKIPPED_PAST
+    assert result.status is AutoCreateStatus.NOT_DUE
+    assert await count_events(app) == 0
 
 
-async def test_автосоздание_в_момент_автосоздания_создаёт_встречу_на_следующую_субботу(
+async def test_автосоздание_в_момент_создания_делает_встречу_на_следующую_субботу(
     app: App,
 ) -> None:
     app.clock.advance(timedelta(days=2, hours=1))  # воскресенье 10:00 по Монтевидео
@@ -509,6 +482,101 @@ async def test_автосоздание_в_момент_автосоздания
         app.services.settings.rules_now(), app.clock.now()
     )
     assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2026-10-31")
+
+
+async def create_at(app: App, local: datetime) -> AutoCreateStatus:
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), local.astimezone(UTC)
+    )
+    return result.status
+
+
+def montevideo(*args: int) -> datetime:
+    return datetime(*args, tzinfo=ZoneInfo("America/Montevideo"))
+
+
+async def test_смена_дня_встречи_на_среду_сдвигает_создание_на_четверг_10_00(app: App) -> None:
+    await app.services.settings.set("event_weekday", 2, ADMIN_ID)  # среда; auto_create_* не трогаем
+    assert await create_at(app, montevideo(2026, 10, 29, 9, 59)) is AutoCreateStatus.NOT_DUE
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), montevideo(2026, 10, 29, 10, 0).astimezone(UTC)
+    )
+    assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2026-11-04")
+
+
+async def test_автосоздание_в_среду_до_встречи_не_создаёт_лишнего(app: App) -> None:
+    await app.services.settings.set("event_weekday", 2, ADMIN_ID)
+    # Среда 16:59 перед встречей в 17:00: цель — эта же среда, момент создания давно прошёл
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), montevideo(2026, 10, 28, 16, 59).astimezone(UTC)
+    )
+    assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2026-10-28")
+
+
+async def test_ноль_дней_после_встречи_создаёт_следующую_в_день_встречи_в_10_00(app: App) -> None:
+    await app.services.settings.set("auto_create_days_after", 0, ADMIN_ID)
+    rules = app.services.settings.rules_now()
+    day = montevideo(2026, 10, 24, 10, 0).astimezone(UTC)
+    # В день встречи 24.10 в 10:00 создаётся сама встреча (если её ещё нет), затем следующая
+    first = await app.services.lifecycle.create_weekly_event(rules, day)
+    second = await app.services.lifecycle.create_weekly_event(rules, day)
+    third = await app.services.lifecycle.create_weekly_event(rules, day)
+    assert [r.recurrence_key for r in (first, second)] == ["weekly:2026-10-24", "weekly:2026-10-31"]
+    assert (first.status, second.status) == (AutoCreateStatus.CREATED, AutoCreateStatus.CREATED)
+    assert third.status is AutoCreateStatus.ALREADY_EXISTS
+    # До 10:00 дня встречи следующую неделю ещё не создают
+    early = montevideo(2026, 10, 24, 9, 59).astimezone(UTC)
+    assert (await app.services.lifecycle.create_weekly_event(rules, early)).status is (
+        AutoCreateStatus.ALREADY_EXISTS
+    )
+
+
+async def test_создание_через_смену_месяца(app: App) -> None:
+    await app.services.settings.set("auto_create_days_after", 3, ADMIN_ID)
+    # Встреча 31.10, +3 дня = 3 ноября 10:00; следующая — 7 ноября
+    assert await create_at(app, montevideo(2026, 11, 3, 9, 59)) is AutoCreateStatus.NOT_DUE
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), montevideo(2026, 11, 3, 10, 0).astimezone(UTC)
+    )
+    assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2026-11-07")
+
+
+async def test_создание_через_смену_года(app: App) -> None:
+    await app.services.settings.set("auto_create_days_after", 6, ADMIN_ID)
+    # Встреча 26.12.2026 (сб), +6 дней = 1 января 2027 10:00; следующая — 2 января
+    assert await create_at(app, montevideo(2027, 1, 1, 9, 59)) is AutoCreateStatus.NOT_DUE
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), montevideo(2027, 1, 1, 10, 0).astimezone(UTC)
+    )
+    assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2027-01-02")
+
+
+async def test_время_автосоздания_локальное_а_не_UTC(app: App) -> None:
+    await app.services.settings.set("auto_create_time", "23:30", ADMIN_ID)
+    assert await create_at(app, montevideo(2026, 10, 25, 23, 29)) is AutoCreateStatus.NOT_DUE
+    assert await create_at(app, montevideo(2026, 10, 25, 23, 30)) is AutoCreateStatus.CREATED
+
+
+async def test_после_долгого_простоя_создаётся_ближайшая_будущая_встреча(app: App) -> None:
+    # Бот лежал с пятницы до вторника: встречу 24.10 уже не создать, берём 31.10
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), montevideo(2026, 10, 27, 12, 0).astimezone(UTC)
+    )
+    assert (result.status, result.recurrence_key) == (AutoCreateStatus.CREATED, "weekly:2026-10-31")
+    assert await count_events(app) == 1
+
+
+async def test_повторные_тики_после_создания_не_плодят_встречи(app: App) -> None:
+    moment = montevideo(2026, 10, 25, 10, 0)
+    rules = app.services.settings.rules_now()
+    statuses = [
+        (
+            await app.services.lifecycle.create_weekly_event(rules, moment.astimezone(UTC) + step)
+        ).status
+        for step in (timedelta(0), timedelta(minutes=1), timedelta(hours=5), timedelta(days=3))
+    ]
+    assert statuses == [AutoCreateStatus.CREATED] + [AutoCreateStatus.ALREADY_EXISTS] * 3
+    assert await count_events(app) == 1
 
 
 async def test_ключ_считается_по_локальной_дате_а_не_по_UTC(app: App) -> None:

@@ -21,6 +21,15 @@ async def list_events(session: AsyncSession, *, recent_since: datetime | None) -
     return list(found.all())
 
 
+async def latest_not_cancelled(session: AsyncSession) -> Event | None:
+    return await session.scalar(
+        select(Event)
+        .where(Event.status != EventStatus.CANCELLED.value)
+        .order_by(Event.starts_at.desc(), Event.id.desc())
+        .limit(1)
+    )
+
+
 async def get_registration(session: AsyncSession, registration_id: int) -> Registration | None:
     return await session.get(Registration, registration_id)
 

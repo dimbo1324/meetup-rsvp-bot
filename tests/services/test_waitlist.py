@@ -75,6 +75,7 @@ async def test_лимит_ниже_занятых_мест_отклоняетс�
 
 
 async def test_лимит_равный_занятым_местам_допустим(app: App) -> None:
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     event_id = await make_event(app, 5)
     for n in range(4):
         await app.services.registration.register(event_id, person(n))
@@ -325,6 +326,7 @@ async def test_нулевой_порог_никогда_не_даёт_поздн
 
 async def test_плюс_один_при_одном_свободном_месте_без_очереди(app: App) -> None:  # кейс 13
     await enable(app, "plus_one_enabled")
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     event_id = await make_event(app, 3)
     reg = app.services.registration
     await reg.register(event_id, person(0))
@@ -347,6 +349,7 @@ async def test_плюс_один_при_одном_месте_с_очередь�
 
 async def test_плюс_один_при_полной_встрече_без_очереди_даёт_full(app: App) -> None:
     await enable(app, "plus_one_enabled")
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     event_id = await make_event(app, 1)
     await app.services.registration.register(event_id, person(0))
     result = await app.services.registration.register(event_id, person(1), guests=1)
@@ -399,3 +402,39 @@ async def test_продвинутому_без_старта_у_бота_лс_н�
     result = await app.services.registration.cancel(event_id, 1000)
     assert [p.user_id for p in result.promoted] == [1001]
     assert app.notifier.dms_to(1001) == []
+
+
+async def test_продвинутому_с_личкой_сообщение_уходит(app: App) -> None:
+    await enable(app, "waitlist_enabled")
+    event_id = await make_event(app, 1)
+    await fill_and_queue(app, event_id, 1, 1)
+    await enable_dm(app, 1001)
+    await app.services.registration.cancel(event_id, 1000)
+    assert len(app.notifier.dms_to(1001)) == 1
+
+
+async def test_отказ_доставки_не_отнимает_место_у_продвинутого(app: App) -> None:
+    """R7: порт вернул «написать нельзя» — человек всё равно остаётся активным."""
+    await enable(app, "waitlist_enabled")
+    event_id = await make_event(app, 1)
+    await fill_and_queue(app, event_id, 1, 1)
+    await enable_dm(app, 1001)
+    app.notifier.blocked.add(1001)
+    await app.services.registration.cancel(event_id, 1000)
+    assert (await statuses(app, event_id))[1001] == "active"
+
+
+async def test_исключение_отправки_не_откатывает_продвижение(
+    app: App, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await enable(app, "waitlist_enabled")
+    event_id = await make_event(app, 1)
+    await fill_and_queue(app, event_id, 1, 1)
+    await enable_dm(app, 1001)
+
+    async def boom(user_id: int, text: str) -> bool:
+        raise RuntimeError("сеть")
+
+    monkeypatch.setattr(app.notifier, "send_dm", boom)
+    await app.services.registration.cancel(event_id, 1000)
+    assert (await statuses(app, event_id))[1001] == "active"

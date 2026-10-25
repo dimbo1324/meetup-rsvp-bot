@@ -109,6 +109,7 @@ async def test_запись_после_дедлайна_отмены_преду�
 
 
 async def test_нет_мест_без_листа_ожидания(app: App, tg: Harness) -> None:
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     event_id = await make_event(app, capacity=1)
     await press(tg, event_id, user=OTHER)
     answer = await press(tg, event_id)
@@ -156,6 +157,7 @@ async def test_запись_с_гостем_при_включённой_наст
 
 
 async def test_гость_при_одном_свободном_месте(app: App, tg: Harness) -> None:
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     await app.services.settings.set("plus_one_enabled", True, OWNER_ID)
     event_id = await make_event(app, capacity=2)
     await press(tg, event_id, user=OTHER)

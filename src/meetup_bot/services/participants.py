@@ -72,6 +72,8 @@ class ParticipantRow:
     attendance: str
     created_at: datetime
     position: int | None  # место в очереди для waitlist
+    # Дойдут ли личные сообщения; у ручной записи без аккаунта писать некому
+    dm_available: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,6 +212,7 @@ class ParticipantService:
                     attendance=registration.attendance,
                     created_at=registration.created_at,
                     position=len(waitlist) + 1 if is_waiting else None,
+                    dm_available=user is not None and user.dm_available,
                 )
                 (waitlist if is_waiting else active).append(row)
             taken = await events.seats_taken(session, event_id)

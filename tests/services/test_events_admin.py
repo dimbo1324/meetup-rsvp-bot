@@ -69,7 +69,7 @@ async def test_создание_админом_сохраняет_поля_и_м
     assert event.created_by == ADMIN_ID
     assert event.starts_at == now + timedelta(hours=32)
     assert event.cancel_deadline_at == now + timedelta(hours=11)
-    assert event.registration_closes_at == now + timedelta(hours=29)
+    assert event.registration_closes_at == now + timedelta(hours=32)  # закрытие в начале встречи
     assert event.reminder_at == now + timedelta(hours=8)
     assert event.attendance_prompt_at == now + timedelta(hours=37)
     assert created.warnings == []
@@ -276,7 +276,7 @@ async def test_перенос_пересчитывает_все_моменты(a
     event = await load(app, event_id)
     assert event.starts_at == NEXT_SATURDAY
     assert event.cancel_deadline_at == NEXT_SATURDAY - timedelta(hours=21)
-    assert event.registration_closes_at == NEXT_SATURDAY - timedelta(hours=3)
+    assert event.registration_closes_at == NEXT_SATURDAY
     assert event.reminder_at == NEXT_SATURDAY - timedelta(hours=24)
     assert event.attendance_prompt_at == NEXT_SATURDAY + timedelta(hours=5)
 
@@ -369,6 +369,8 @@ async def test_перенос_открытой_встречи_ничего_не_
 
 
 async def test_перенос_закрытой_встречи_на_близкое_время_оставляет_её_закрытой(app: App) -> None:
+    # Механизм «момент закрытия записи уже прошёл» возможен только при закрытии до начала
+    await app.services.settings.set("registration_close_hours_before", 3, OWNER_ID)
     event_id = await make_event(app)
     await app.services.events.set_registration_open(OWNER_ID, event_id, False)
     app.clock.advance(timedelta(hours=30))  # суббота 18:00 UTC, закрытие записи уже прошло
@@ -770,3 +772,63 @@ async def test_продвинутый_без_доступного_лс_не_по
     await app.services.events.set_capacity(OWNER_ID, event_id, 2)
     assert app.notifier.dms == []
     assert (await statuses(app, event_id))[1001] == "active"
+
+
+# ---- шаблон новой встречи по прошлой (R5) ----
+
+
+async def test_шаблон_без_встреч_это_None(app: App) -> None:
+    assert await app.services.events.last_event_template(OWNER_ID) is None
+
+
+async def test_шаблон_берёт_последнюю_по_времени_начала(app: App) -> None:
+    await app.services.events.create_event_as_admin(
+        OWNER_ID, starts_at=NEXT_SATURDAY + timedelta(days=7), capacity=5, place="Поздняя"
+    )
+    await app.services.events.create_event_as_admin(
+        OWNER_ID, starts_at=NEXT_SATURDAY, capacity=8, place="Ранняя"
+    )
+    template = await app.services.events.last_event_template(ADMIN_ID)
+    assert template is not None
+    assert (template.place, template.capacity) == ("Поздняя", 5)
+
+
+async def test_шаблон_пропускает_отменённую_встречу(app: App) -> None:
+    await app.services.events.create_event_as_admin(
+        OWNER_ID,
+        starts_at=NEXT_SATURDAY,
+        place="Живая",
+        description_html="<b>x</b>",
+        place_url="https://example.com/m",
+        photo_file_id="ph",
+    )
+    late = await app.services.events.create_event_as_admin(
+        OWNER_ID, starts_at=NEXT_SATURDAY + timedelta(days=7), place="Отменённая"
+    )
+    await app.services.events.cancel_event(OWNER_ID, late.event_id)
+    template = await app.services.events.last_event_template(OWNER_ID)
+    assert template is not None
+    assert template.place == "Живая"
+    assert template.description_html == "<b>x</b>"
+    assert template.place_url == "https://example.com/m"
+    assert template.photo_file_id == "ph"
+
+
+async def test_шаблон_только_из_отменённых_это_None(app: App) -> None:
+    created = await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_SATURDAY)
+    await app.services.events.cancel_event(OWNER_ID, created.event_id)
+    assert await app.services.events.last_event_template(OWNER_ID) is None
+
+
+async def test_шаблон_время_начала_в_поясе_настроек(app: App) -> None:
+    from datetime import time
+
+    await app.services.events.create_event_as_admin(OWNER_ID, starts_at=NEXT_SATURDAY)
+    template = await app.services.events.last_event_template(OWNER_ID)
+    assert template is not None
+    assert template.start_time == time(17, 0)  # а не 20:00 UTC
+
+
+async def test_шаблон_недоступен_не_админу(app: App) -> None:
+    with pytest.raises(PermissionDenied):
+        await app.services.events.last_event_template(STRANGER)

@@ -590,6 +590,7 @@ async def test_автосоздание_принимает_асинхронны�
 
 
 async def test_задача_закрытия_записи_возвращает_число_закрытых(app: App) -> None:
+    await app.services.settings.set("registration_close_hours_before", 3, ADMIN_ID)
     await create_event(app)
     task = CloseRegistrationTask(app.services.lifecycle)
     assert await task.run(app.clock.now()) == 0

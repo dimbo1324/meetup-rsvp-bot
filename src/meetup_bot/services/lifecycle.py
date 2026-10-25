@@ -67,8 +67,8 @@ class AutoCreateStatus(enum.StrEnum):
     CREATED = "created"
     ALREADY_EXISTS = "already_exists"
     DISABLED = "disabled"
-    # Целевая дата уже прошла (бот долго лежал): создавать задним числом бессмысленно
-    SKIPPED_PAST = "skipped_past"
+    # Момент создания ближайшей встречи ещё не наступил
+    NOT_DUE = "not_due"
     # Настройки дают недопустимые моменты или поля встречи: создать нечего, ждём правки настроек
     INVALID = "invalid"
 
@@ -78,19 +78,6 @@ class AutoCreateResult:
     status: AutoCreateStatus
     recurrence_key: str | None = None
     event_id: int | None = None
-
-
-def last_auto_create_moment(now: datetime, rules: RulesSettings, timezone: str) -> datetime:
-    """Последний момент `auto_create_weekday` + `auto_create_time`, не позже `now` (локальный)."""
-    tz = ZoneInfo(timezone)
-    local_now = now.astimezone(tz)
-    days_back = (local_now.weekday() - rules.auto_create_weekday) % 7
-    candidate = datetime.combine(
-        local_now.date() - timedelta(days=days_back), rules.auto_create_time, tzinfo=tz
-    )
-    if candidate > local_now:
-        candidate -= timedelta(days=7)
-    return candidate
 
 
 class LifecycleService:
@@ -195,17 +182,31 @@ class LifecycleService:
         """Автосоздание встречи (5.9); повторный вызов дубль не создаёт."""
         if not rules.auto_create_enabled:
             return AutoCreateResult(AutoCreateStatus.DISABLED)
-        # Цель считаем от последнего момента автосоздания, а не от «сейчас»: иначе сразу после
-        # субботней встречи создалась бы встреча на неделю вперёд раньше положенного срока
+        # Цели — две ближайшие будущие встречи: пропущенную за простой задним числом не создаём;
+        # вторая нужна, когда момент создания наступает до начала текущей встречи (0 дней после)
         schedule = self._schedule
-        last_moment = last_auto_create_moment(now, rules, schedule.timezone)
-        starts_at = next_event_start(last_moment, schedule)
-        if starts_at <= now:
-            return AutoCreateResult(AutoCreateStatus.SKIPPED_PAST)
-        key = f"weekly:{starts_at.astimezone(ZoneInfo(schedule.timezone)).date().isoformat()}"
-        if await self._key_exists(key):
-            return AutoCreateResult(AutoCreateStatus.ALREADY_EXISTS, key)
+        tz = ZoneInfo(schedule.timezone)
+        nearest = next_event_start(now, schedule)
+        found_existing: str | None = None
+        for starts_at in (nearest, next_event_start(nearest, schedule)):
+            target_date = starts_at.astimezone(tz).date()
+            offset = rules.auto_create_days_after - 7
+            due_date = target_date + timedelta(days=offset)
+            # Локальное время: «10:00» не должно плыть вместе со сдвигом UTC
+            if now < datetime.combine(due_date, rules.auto_create_time, tzinfo=tz):
+                continue
+            key = f"weekly:{target_date.isoformat()}"
+            if await self._key_exists(key):
+                found_existing = found_existing or key
+                continue
+            return await self._create_for(starts_at, key, schedule)
+        if found_existing is not None:
+            return AutoCreateResult(AutoCreateStatus.ALREADY_EXISTS, found_existing)
+        return AutoCreateResult(AutoCreateStatus.NOT_DUE)
 
+    async def _create_for(
+        self, starts_at: datetime, key: str, schedule: ScheduleSettings
+    ) -> AutoCreateResult:
         defaults = EventDefaults()
         if self._defaults_provider is not None:
             defaults = await resolve_any(self._defaults_provider)

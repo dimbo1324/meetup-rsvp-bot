@@ -92,6 +92,7 @@ async def test_состояние_меняют_только_ok_и_waitlisted(app
 
 
 async def test_запись_пересобирает_пост_а_отказ_нет(app: App) -> None:
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)  # отказ = FULL
     event_id = await make_event(app, 1)
     await app.services.registration.register(event_id, person(1))
     assert app.refresher.scheduled.count(event_id) == 1
@@ -157,6 +158,8 @@ async def test_из_очереди_можно_выйти_после_дедлай
 
 async def test_после_закрытия_записи_из_очереди_выйти_нельзя(app: App) -> None:
     await enable(app, "waitlist_enabled")
+    # закрытие за 3 часа до начала: иначе оно совпадает с началом и окно не отделить от дедлайна
+    await app.services.settings.set("registration_close_hours_before", 3, OWNER_ID)
     event_id = await make_event(app, 1)
     reg = app.services.registration
     await reg.register(event_id, person(1))
@@ -331,6 +334,7 @@ async def test_закрытие_записи_статусом_closed_не_мен
 
 
 async def test_30_параллельных_записей_на_10_мест_через_приложение(app: App) -> None:
+    await app.services.settings.set("waitlist_enabled", False, OWNER_ID)
     event_id = await make_event(app, 10)
     reg = app.services.registration
     results = await asyncio.gather(*(reg.register(event_id, person(n)) for n in range(30)))

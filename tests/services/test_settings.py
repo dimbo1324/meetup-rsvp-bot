@@ -370,16 +370,18 @@ async def test_rules_now_отражает_изменения(settings: SettingsS
     assert rules.ban_after_no_shows == 3
     assert rules.reminder_enabled is False
     assert rules.auto_create_time == time(9, 15)
-    assert rules.auto_create_weekday == 6
+    assert rules.auto_create_days_after == 1
+    assert rules.show_names_in_post is False
     assert await settings.rules_settings() == rules
 
 
 async def test_options_now_отражает_изменения(settings: SettingsService) -> None:
-    assert not settings.options_now().waitlist_enabled
-    await settings.set("waitlist_enabled", True, ADMIN_ID)
+    assert settings.options_now().waitlist_enabled
+    assert not settings.options_now().plus_one_enabled
+    await settings.set("waitlist_enabled", False, ADMIN_ID)
     await settings.set("plus_one_enabled", True, ADMIN_ID)
     options = settings.options_now()
-    assert (options.waitlist_enabled, options.plus_one_enabled) == (True, True)
+    assert (options.waitlist_enabled, options.plus_one_enabled) == (False, True)
     assert await settings.registration_options() == options
 
 

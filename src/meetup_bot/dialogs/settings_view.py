@@ -17,7 +17,7 @@ WEEKDAYS_FULL = (
     "суббота",
     "воскресенье",
 )
-WEEKDAY_KEYS = frozenset({"event_weekday", "auto_create_weekday"})
+WEEKDAY_KEYS = frozenset({"event_weekday"})
 PHOTO_KEY = "default_photo_file_id"
 
 POPULAR_TIMEZONES = (
@@ -48,7 +48,7 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
         "Изменения влияют на НОВЫЕ встречи; уже созданные остаются как были.",
         (
             "auto_create_enabled",
-            "auto_create_weekday",
+            "auto_create_days_after",
             "auto_create_time",
             "cancel_deadline_days_before",
             "cancel_deadline_time",
@@ -84,7 +84,7 @@ LABELS: dict[str, str] = {
     "default_description": "Описание в посте",
     "default_photo_file_id": "Фото в посте",
     "auto_create_enabled": "Автосоздание встреч",
-    "auto_create_weekday": "День автосоздания",
+    "auto_create_days_after": "Автосоздание: дней после встречи",
     "auto_create_time": "Время автосоздания",
     "cancel_deadline_days_before": "Дедлайн отмены: дней до встречи",
     "cancel_deadline_time": "Дедлайн отмены: время",
@@ -111,14 +111,21 @@ EXTRA_HELP: dict[str, str] = {
         "Если место освободилось позже чем за столько часов до встречи, "
         "человека из листа ожидания записывают как «поздно»."
     ),
-    "registration_close_hours_before": "За сколько часов до начала запись закрывается.",
+    "registration_close_hours_before": (
+        "За сколько часов до начала запись закрывается. 0 — запись идёт до самого начала."
+    ),
+    "auto_create_days_after": (
+        "Через сколько дней после встречи создавать следующую: "
+        "0 — в день встречи, 1 — на следующий день."
+    ),
     "cancel_deadline_days_before": "За сколько дней до встречи заканчивается приём отмен.",
-    "show_names_in_post": "Выкл — в посте будет только счётчик без имён.",
+    "show_names_in_post": "Выкл (по умолчанию) — в посте только счётчик и очередь, без имён.",
 }
 
 _UNITS: dict[str, str] = {
     "capacity": " мест",
     "cancel_deadline_days_before": " дн.",
+    "auto_create_days_after": " дн. после встречи",
     "registration_close_hours_before": " ч до начала",
     "reminder_hours_before": " ч до встречи",
     "attendance_prompt_hours_after": " ч после начала",

@@ -10,8 +10,9 @@ from __future__ import annotations
 import enum
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,6 +29,7 @@ from meetup_bot.services.admin_support import (
     send_dms,
 )
 from meetup_bot.services.errors import InvalidOperation, NotFound
+from meetup_bot.services.event_template import EventTemplate
 from meetup_bot.services.event_validation import (
     MAX_CAPACITY,
     validate_capacity,
@@ -62,6 +64,7 @@ __all__ = [
     "CreatedEvent",
     "EventListItem",
     "EventService",
+    "EventTemplate",
     "RescheduleResult",
 ]
 
@@ -273,6 +276,24 @@ class EventService:
                 )
                 for event in found
             ]
+
+    async def last_event_template(self, actor_id: int) -> EventTemplate | None:
+        """Поля самой поздней по началу неотменённой встречи; None, если таких нет."""
+        tz = ZoneInfo(self._schedule_settings().timezone)
+        async with self._sessions() as session:
+            await access.require_admin(session, actor_id)
+            event = await events_admin.latest_not_cancelled(session)
+            if event is None:
+                return None
+            local = event.starts_at.astimezone(tz)
+            return EventTemplate(
+                place=event.place,
+                place_url=event.place_url,
+                description_html=event.description_html,
+                photo_file_id=event.photo_file_id,
+                capacity=event.capacity,
+                start_time=time(local.hour, local.minute),
+            )
 
     async def update_details(
         self,

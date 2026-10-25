@@ -268,6 +268,7 @@ async def test_двойной_тик_не_шлёт_напоминание_два
 
 
 async def test_двойной_тик_закрывает_запись_один_раз(app: App) -> None:  # кейс 15
+    await app.services.settings.set("registration_close_hours_before", 3, ADMIN_ID)
     await app.services.scheduler.tick()
     event = await only_event(app)
     await join(app, event.id, 1)
@@ -304,6 +305,20 @@ async def test_двойной_тик_закрывает_окно_явки_оди
     first = await app.services.scheduler.tick()
     second = await app.services.scheduler.tick()
     assert (first["attendance_expire"], second["attendance_expire"]) == (1, 0)
+
+
+async def test_без_автозакрытия_один_тик_в_момент_начала_закрывает_и_завершает(
+    app: App,
+) -> None:
+    await app.services.scheduler.tick()
+    event = await only_event(app)
+    await join(app, event.id, 1)
+    go_to(app, event.starts_at)
+    first = await app.services.scheduler.tick()
+    second = await app.services.scheduler.tick()
+    assert (first["close_registration"], first["finish_events"]) == (1, 1)
+    assert (second["close_registration"], second["finish_events"]) == (0, 0)
+    assert (await only_event(app)).status == EventStatus.FINISHED.value
 
 
 async def test_тик_после_простоя_в_2_суток_догоняет_закрытие_и_завершение(

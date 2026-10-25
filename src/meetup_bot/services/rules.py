@@ -11,9 +11,9 @@ from datetime import time
 
 @dataclass(frozen=True)
 class RegistrationOptions:
-    """Включаемые настройки правил записи; по умолчанию выключены (раздел 7)."""
+    """Включаемые настройки правил записи (раздел 7): лист ожидания включён, «+1» выключен."""
 
-    waitlist_enabled: bool = False
+    waitlist_enabled: bool = True
     plus_one_enabled: bool = False
 
 
@@ -26,7 +26,7 @@ class RulesSettings:
     notify_admins_on_full: bool = True
     notify_admins_on_cancel: bool = True
     reminder_enabled: bool = True
-    show_names_in_post: bool = True
+    show_names_in_post: bool = False
     auto_create_enabled: bool = True
-    auto_create_weekday: int = 6
+    auto_create_days_after: int = 1
     auto_create_time: time = time(10, 0)

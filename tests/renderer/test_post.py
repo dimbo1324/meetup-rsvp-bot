@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from meetup_bot.db.models import EventStatus
 from meetup_bot.renderer.post import (
     CAPTION_LIMIT,
+    TEXT_LIMIT,
     Participant,
     PostData,
     render_post,
@@ -26,6 +27,7 @@ def make(**overrides: object) -> PostData:
         "description_html": "<b>Встреча</b> сообщества",
         "place": "Кафе",
         "place_url": "https://maps.example/cafe?a=1&b=2",
+        "show_names": True,
     }
     base.update(overrides)
     return PostData(**base)  # type: ignore[arg-type]
@@ -82,6 +84,20 @@ def test_обрезка_html_не_ломает_сущности() -> None:
     assert "&amp" not in cut.replace("&amp;", "")
 
 
+def test_имена_по_умолчанию_скрыты() -> None:
+    data = PostData(
+        event_id=1,
+        status=EventStatus.OPEN.value,
+        starts_at=STARTS,
+        timezone="America/Montevideo",
+        capacity=10,
+        seats_taken=1,
+        participants=[Participant("Света")],
+    )
+    assert data.show_names is False
+    assert "Света" not in render_post(data).text
+
+
 def test_счётчик_без_имён() -> None:
     post = render_post(make(show_names=False))
     assert "1. Света" not in post.text
@@ -116,3 +132,59 @@ def test_кнопка_плюс_один_и_лимит_callback_data() -> None:
 def test_хеш_стабилен_и_меняется_с_содержимым() -> None:
     assert render_post(make()).content_hash == render_post(make()).content_hash
     assert render_post(make()).content_hash != render_post(make(seats_taken=3)).content_hash
+
+
+def test_очередь_показывается_числом_после_счётчика() -> None:
+    post = render_post(make(waiting=3, seats_taken=10))
+    assert "Записались: 10 из 10\nВ очереди: 3" in post.text
+
+
+def test_очередь_без_имён_даже_при_показе_имён() -> None:
+    post = render_post(make(waiting=2, participants=[Participant("Света")]))
+    assert "В очереди: 2" in post.text
+    assert post.text.count("1. ") == 1
+
+
+def test_пустая_очередь_и_неоткрытый_статус_строки_не_дают() -> None:
+    assert "В очереди" not in render_post(make(waiting=0)).text
+    for status in (EventStatus.CLOSED, EventStatus.FINISHED, EventStatus.CANCELLED):
+        assert "В очереди" not in render_post(make(waiting=4, status=status.value)).text
+
+
+def test_хеш_меняется_с_размером_очереди() -> None:
+    assert render_post(make(waiting=1)).content_hash != render_post(make(waiting=2)).content_hash
+    assert render_post(make(waiting=0)).content_hash != render_post(make(waiting=1)).content_hash
+
+
+def test_строка_очереди_не_режется_раньше_имён_на_границе_подписи() -> None:
+    names = [Participant("🎉" * 20 + f" {i}") for i in range(10)]
+    post = render_post(
+        make(
+            has_photo=True,
+            participants=names,
+            seats_taken=10,
+            waiting=12,
+            description_html="🌟 " * 400,
+        )
+    )
+    assert visible_length(post.text) <= CAPTION_LIMIT
+    assert "В очереди: 12" in post.text
+    assert "Записались: 10 из 10\nВ очереди: 12" in post.text
+
+
+def test_очередь_и_длинный_список_имён_укладываются_в_4096() -> None:
+    names = [Participant("Ж" * 120 + str(i)) for i in range(60)]
+    post = render_post(make(participants=names, seats_taken=60, capacity=60, waiting=5))
+    assert visible_length(post.text) <= TEXT_LIMIT
+    assert "В очереди: 5" in post.text
+    assert re.search(r"… и ещё \d+", post.text)
+
+
+def test_пост_без_имён_и_с_очередью_точно_на_лимите_подписи() -> None:
+    base = render_post(make(has_photo=True, show_names=False, waiting=1, description_html=""))
+    free = CAPTION_LIMIT - visible_length(base.text) - 2
+    post = render_post(
+        make(has_photo=True, show_names=False, waiting=1, description_html="я" * (free + 50))
+    )
+    assert visible_length(post.text) <= CAPTION_LIMIT
+    assert "В очереди: 1" in post.text

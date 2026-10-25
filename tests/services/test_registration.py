@@ -31,6 +31,12 @@ def service(sessions: Sessions, clock: FakeClock) -> RegistrationService:
 
 
 @pytest.fixture
+def service_no_queue(sessions: Sessions, clock: FakeClock) -> RegistrationService:
+    """Лист ожидания выключен: переполнение даёт FULL, а не очередь."""
+    return RegistrationService(sessions, clock, RegistrationOptions(waitlist_enabled=False))
+
+
+@pytest.fixture
 async def event_id(event_service: EventService) -> int:
     return await event_service.create_event(capacity=10, created_by=1)
 
@@ -41,11 +47,11 @@ async def taken(sessions: Sessions, event_id: int) -> int:
 
 
 async def test_одиннадцатый_получает_full(  # кейс 1
-    service: RegistrationService, sessions: Sessions, event_id: int
+    service_no_queue: RegistrationService, sessions: Sessions, event_id: int
 ) -> None:
     for n in range(10):
-        assert (await service.register(event_id, person(n))).status is RegisterStatus.OK
-    last = await service.register(event_id, person(10))
+        assert (await service_no_queue.register(event_id, person(n))).status is RegisterStatus.OK
+    last = await service_no_queue.register(event_id, person(10))
     assert last.status is RegisterStatus.FULL
     assert (last.seats_taken, last.capacity) == (10, 10)
     assert await taken(sessions, event_id) == 10
@@ -59,9 +65,11 @@ async def test_последняя_запись_помечает_заполнен
 
 
 async def test_30_параллельных_записей_на_10_мест(  # кейс 2
-    service: RegistrationService, sessions: Sessions, event_id: int
+    service_no_queue: RegistrationService, sessions: Sessions, event_id: int
 ) -> None:
-    results = await asyncio.gather(*(service.register(event_id, person(n)) for n in range(30)))
+    results = await asyncio.gather(
+        *(service_no_queue.register(event_id, person(n)) for n in range(30))
+    )
     statuses = [r.status for r in results]
     assert statuses.count(RegisterStatus.OK) == 10
     assert statuses.count(RegisterStatus.FULL) == 20
@@ -109,14 +117,14 @@ async def test_отмена_за_минуту_до_дедлайна_и_чере�
 
 
 async def test_отмена_освобождает_место_и_позволяет_записаться_снова(
-    service: RegistrationService, event_id: int
+    service_no_queue: RegistrationService, event_id: int
 ) -> None:
     for n in range(10):
-        await service.register(event_id, person(n))
-    assert (await service.register(event_id, person(10))).status is RegisterStatus.FULL
-    assert (await service.cancel(event_id, 1000)).status is CancelStatus.OK
-    assert (await service.register(event_id, person(10))).status is RegisterStatus.OK
-    assert (await service.register(event_id, person(0))).status is RegisterStatus.FULL
+        await service_no_queue.register(event_id, person(n))
+    assert (await service_no_queue.register(event_id, person(10))).status is RegisterStatus.FULL
+    assert (await service_no_queue.cancel(event_id, 1000)).status is CancelStatus.OK
+    assert (await service_no_queue.register(event_id, person(10))).status is RegisterStatus.OK
+    assert (await service_no_queue.register(event_id, person(0))).status is RegisterStatus.FULL
 
 
 async def test_отмена_без_записи(service: RegistrationService, event_id: int) -> None:
@@ -205,7 +213,9 @@ async def test_гость_выключен_по_умолчанию(service: Regi
 async def test_плюс_один_занимает_два_места_и_одно_место_не_хватает(
     sessions: Sessions, clock: FakeClock, event_id: int
 ) -> None:
-    service = RegistrationService(sessions, clock, RegistrationOptions(plus_one_enabled=True))
+    service = RegistrationService(
+        sessions, clock, RegistrationOptions(plus_one_enabled=True, waitlist_enabled=False)
+    )
     for n in range(9):
         await service.register(event_id, person(n))
     result = await service.register(event_id, person(20), guests=1)

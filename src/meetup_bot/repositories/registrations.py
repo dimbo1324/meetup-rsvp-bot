@@ -50,6 +50,17 @@ async def list_waitlist(session: AsyncSession, event_id: int) -> list[Registrati
     return list(rows.all())
 
 
+async def count_waitlist(session: AsyncSession, event_id: int) -> int:
+    """Сколько человек стоит в очереди встречи."""
+    count = await session.scalar(
+        select(func.count()).where(
+            Registration.event_id == event_id,
+            Registration.status == RegistrationStatus.WAITLIST.value,
+        )
+    )
+    return int(count or 0)
+
+
 async def list_active_with_users(
     session: AsyncSession, event_id: int
 ) -> list[tuple[Registration, User | None]]:

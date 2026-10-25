@@ -158,7 +158,7 @@ class SettingsService:
             reminder_enabled=v["reminder_enabled"],
             show_names_in_post=v["show_names_in_post"],
             auto_create_enabled=v["auto_create_enabled"],
-            auto_create_weekday=v["auto_create_weekday"],
+            auto_create_days_after=v["auto_create_days_after"],
             auto_create_time=_to_time(v["auto_create_time"]),
         )
 

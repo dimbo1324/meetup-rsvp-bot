@@ -89,7 +89,7 @@ async def test_меню_настроек_показывает_разделы(tg:
 
 async def test_группа_правила_показывает_значения_и_пометку_по_умолчанию(tg: Harness) -> None:
     await _open(tg, "Правила")
-    assert "Имена в посте: включено · по умолч." in _labels(tg)
+    assert "Имена в посте: выключено · по умолч." in _labels(tg)
     assert "Автобан по неявкам: порог 1 · по умолч." in _labels(tg)
 
 
@@ -112,20 +112,20 @@ async def test_назад_из_редактирования_возвращает
 
 async def test_переключение_флага_видно_в_сервисе_настроек(app: App, tg: Harness) -> None:
     await _open(tg, "Правила", "Имена в посте")
-    assert app.services.settings.get_now("show_names_in_post") is True
-    await _press(tg, "Выключить")
     assert app.services.settings.get_now("show_names_in_post") is False
-    assert "✅ Сохранено." in _screen(tg)
-    assert "Сейчас: <b>выключено</b>" in _screen(tg)
     await _press(tg, "Включить")
     assert app.services.settings.get_now("show_names_in_post") is True
+    assert "✅ Сохранено." in _screen(tg)
+    assert "Сейчас: <b>включено</b>" in _screen(tg)
+    await _press(tg, "Выключить")
+    assert app.services.settings.get_now("show_names_in_post") is False
 
 
 async def test_сброс_флага_возвращает_значение_по_умолчанию(app: App, tg: Harness) -> None:
     await _open(tg, "Правила", "Имена в посте")
-    await _press(tg, "Выключить")
+    await _press(tg, "Включить")
     await _press(tg, "Сбросить по умолчанию")
-    assert app.services.settings.get_now("show_names_in_post") is True
+    assert app.services.settings.get_now("show_names_in_post") is False
     assert "Возвращено значение по умолчанию." in _screen(tg)
     assert "(по умолчанию)" in _screen(tg)
 
@@ -134,7 +134,7 @@ async def test_текст_в_настройке_с_кнопками_не_при�
     await _open(tg, "Правила", "Имена в посте")
     await _say(tg, "да")
     assert "Для этой настройки используйте кнопки." in _screen(tg)
-    assert app.services.settings.get_now("show_names_in_post") is True
+    assert app.services.settings.get_now("show_names_in_post") is False
 
 
 async def test_выбор_дня_недели_кнопкой(app: App, tg: Harness) -> None:
@@ -360,8 +360,8 @@ async def test_смена_пояса_меняет_время_в_списке_в�
 async def test_админ_потерявший_права_не_меняет_настройку(app: App, tg: Harness) -> None:
     await _open(tg, "Правила", "Имена в посте", user=ADMIN_ID)
     await app.services.admins.remove_admin(OWNER_ID, ADMIN_ID)
-    await _press(tg, "Выключить", user=ADMIN_ID)
-    assert app.services.settings.get_now("show_names_in_post") is True
+    await _press(tg, "Включить", user=ADMIN_ID)
+    assert app.services.settings.get_now("show_names_in_post") is False
 
 
 async def test_админ_потерявший_права_не_пишет_числа(app: App, tg: Harness) -> None:

@@ -26,7 +26,7 @@ class ScheduleSettings:
     event_time: time = time(17, 0)
     cancel_deadline_days_before: int = 1
     cancel_deadline_time: time = time(20, 0)
-    registration_close_hours_before: int = 3
+    registration_close_hours_before: int = 0
     reminder_hours_before: int = 24
     attendance_prompt_hours_after: int = 5
 

@@ -27,7 +27,7 @@ def test_моменты_по_умолчанию() -> None:
     times = compute_times(datetime(2026, 10, 24, 20, 0, tzinfo=UTC), SETTINGS)
     # пятница 20:00 по Монтевидео
     assert times.cancel_deadline_at == datetime(2026, 10, 23, 23, 0, tzinfo=UTC)
-    assert times.registration_closes_at == datetime(2026, 10, 24, 17, 0, tzinfo=UTC)
+    assert times.registration_closes_at == datetime(2026, 10, 24, 20, 0, tzinfo=UTC)
     assert times.reminder_at == datetime(2026, 10, 23, 20, 0, tzinfo=UTC)
     assert times.attendance_prompt_at == datetime(2026, 10, 25, 1, 0, tzinfo=UTC)
 
@@ -48,3 +48,26 @@ def test_инварианты_порядка() -> None:
 def test_naive_datetime_отвергается() -> None:
     with pytest.raises(ValueError):
         compute_times(datetime(2026, 10, 24, 20, 0), SETTINGS)
+
+
+def test_по_умолчанию_запись_закрывается_в_момент_начала() -> None:
+    assert ScheduleSettings().registration_close_hours_before == 0
+    times = compute_times(datetime(2026, 10, 24, 20, 0, tzinfo=UTC), SETTINGS)
+    assert times.registration_closes_at == times.starts_at
+
+
+def test_без_автозакрытия_дедлайн_отмены_остаётся_днём_до_в_20_00() -> None:
+    times = compute_times(datetime(2026, 10, 24, 20, 0, tzinfo=UTC), SETTINGS)
+    assert times.cancel_deadline_at == datetime(2026, 10, 23, 23, 0, tzinfo=UTC)
+
+
+def test_инварианты_выдерживают_равенство_закрытия_и_начала() -> None:
+    times = compute_times(datetime(2026, 10, 24, 20, 0, tzinfo=UTC), SETTINGS)
+    validate_times(times, datetime(2026, 10, 23, 12, 0, tzinfo=UTC))
+
+
+def test_дедлайн_отмены_в_день_встречи_без_автозакрытия_ограничен_началом() -> None:
+    settings = ScheduleSettings(cancel_deadline_days_before=0, cancel_deadline_time=time(23, 0))
+    times = compute_times(datetime(2026, 10, 24, 20, 0, tzinfo=UTC), settings)
+    assert times.cancel_deadline_at == times.registration_closes_at == times.starts_at
+    validate_times(times, datetime(2026, 10, 23, 12, 0, tzinfo=UTC))

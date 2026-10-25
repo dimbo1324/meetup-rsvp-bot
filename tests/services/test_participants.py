@@ -575,3 +575,23 @@ async def test_все_методы_участников_запрещены_не_
 async def test_права_проверяются_раньше_существования_встречи(app: App) -> None:
     with pytest.raises(PermissionDenied):
         await app.services.participants.admin_add(STRANGER, 404, manual_name="X")
+
+
+async def test_список_показывает_доступность_личных_сообщений(app: App) -> None:
+    event_id = await make_event(app)
+    await app.services.participants.admin_add(OWNER_ID, event_id, user=info(1))
+    await app.services.participants.admin_add(OWNER_ID, event_id, user=info(2))
+    await allow_dm(app, info(2).id)
+    listing = await app.services.participants.list_participants(OWNER_ID, event_id)
+    assert {row.user_id: row.dm_available for row in listing.active} == {
+        info(1).id: False,
+        info(2).id: True,
+    }
+
+
+async def test_у_ручной_записи_без_аккаунта_личка_недоступна(app: App) -> None:
+    event_id = await make_event(app)
+    await app.services.participants.admin_add(OWNER_ID, event_id, manual_name="Гость")
+    listing = await app.services.participants.list_participants(OWNER_ID, event_id)
+    assert listing.active[0].user_id is None
+    assert listing.active[0].dm_available is False
