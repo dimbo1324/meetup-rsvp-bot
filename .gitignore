@@ -10,6 +10,7 @@ venv/
 *.db-shm
 *.sqlite3
 data/
+data-*/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -1,7 +1,12 @@
+# Одна локация — один сервис: свой бот в @BotFather, свой .env, свой каталог с БД.
+# Запуск и обновление на сервере: docker compose up -d --build (подробно — README.md).
 services:
   bot:
     image: ghcr.io/dimbo1324/meetup-rsvp-bot:${IMAGE_TAG:-latest}
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -14,3 +19,26 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+  # Шаблон второй локации. Чтобы включить: раскомментируйте блок, замените <локация>
+  # на короткое латинское имя (например, punta), создайте .env.<локация> по образцу
+  # .env.example с ТОКЕНОМ ДРУГОГО БОТА, своими OWNER_IDS и SERVICE_CHAT_ID, затем
+  # создайте каталог data-<локация> с владельцем 10001 (как для ./data, см. README.md).
+  # Образ общий: код один, данные и бот у каждой локации свои. Один токен нельзя
+  # использовать в двух сервисах — они будут перехватывать друг у друга обновления.
+  #
+  # bot-<локация>:
+  #   image: ghcr.io/dimbo1324/meetup-rsvp-bot:${IMAGE_TAG:-latest}
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env.<локация>
+  #   environment:
+  #     DATABASE_URL: sqlite+aiosqlite:////app/data/bot.db
+  #   volumes:
+  #     - ./data-<локация>:/app/data
+  #   mem_limit: 300m
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: 10m
+  #       max-file: "3"

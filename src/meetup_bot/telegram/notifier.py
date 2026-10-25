@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.types import FSInputFile
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
@@ -16,6 +18,9 @@ from meetup_bot.telegram.attendance_ui import AttendanceUI, SheetStatus
 logger = logging.getLogger(__name__)
 
 CHUNK_LIMIT = 4000
+# Предел Bot API для файлов, которые бот отправляет сам
+UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024
+BACKUP_CAPTION = "Резервная копия базы: {name}"
 
 
 def split_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
@@ -87,6 +92,18 @@ class TelegramNotifier:
                     logger.warning("служебное сообщение не доставлено: %s", retry_exc.message)
             except TelegramAPIError as exc:
                 logger.warning("служебное сообщение не доставлено: %s", exc.message)
+
+    async def send_service_document(self, path: Path) -> None:
+        """Отправляет файл в служебный чат; ошибки Telegram пробрасываются вызывающему."""
+        size = (await asyncio.to_thread(path.stat)).st_size
+        if size > UPLOAD_LIMIT_BYTES:
+            logger.warning("файл %s (%s байт) больше лимита Telegram, не отправлен", path, size)
+            return
+        await self._bot.send_document(
+            self._service_chat_id,
+            FSInputFile(path),
+            caption=BACKUP_CAPTION.format(name=path.name),
+        )
 
     def attach_attendance_ui(self, ui: AttendanceUI) -> None:
         """Привязка поздняя: интерфейсу явки нужны сервисы, а сервисам — уведомитель."""

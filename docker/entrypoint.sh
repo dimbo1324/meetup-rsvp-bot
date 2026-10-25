@@ -1,0 +1,16 @@
+#!/bin/sh
+# Точка входа контейнера: проверка каталога данных, миграции, запуск бота.
+set -eu
+
+DATA_DIR=/app/data
+
+# Каталог монтируется с сервера; если его создал Docker, владелец — root, и бот (UID 10001)
+# не сможет создать базу. Сообщаем понятно, а не трассировкой SQLite.
+if [ ! -w "$DATA_DIR" ]; then
+    echo "Каталог $DATA_DIR недоступен для записи пользователю бота (UID $(id -u))." >&2
+    echo "На сервере выполните: sudo chown -R 10001:10001 data && docker compose up -d" >&2
+    exit 2
+fi
+
+alembic upgrade head
+exec python -m meetup_bot

@@ -125,6 +125,7 @@ async def run(config: Settings) -> None:
             heartbeat_path=db_path.parent / "heartbeat",
             notifier=notifier,
             post_refresher_factory=make_updater,
+            send_backup=notifier.send_service_document,
         )
         post_refresher = services.post_refresher
         attendance_ui = AttendanceUI(bot, sessions, clock, services)
@@ -154,7 +155,8 @@ async def run(config: Settings) -> None:
             for event_id in await event_posts.list_live_event_ids(session):
                 services.post_refresher.schedule(event_id)
 
-        version = html.escape(os.environ.get("APP_VERSION", __version__), quote=False)
+        # Пустая переменная (сборка без версии) не должна давать «версия » без номера
+        version = html.escape(os.environ.get("APP_VERSION") or __version__, quote=False)
         await notifier.send_service(f"Бот запущен, версия {version}")
 
         scheduler_task = asyncio.create_task(services.scheduler.run_forever(), name="scheduler")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,8 +18,14 @@ from aiogram.methods import SendMessage
 from meetup_bot.db.models import User
 from meetup_bot.repositories import users
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.telegram import notifier as notifier_module
 from meetup_bot.telegram.attendance_ui import SheetStatus
-from meetup_bot.telegram.notifier import CHUNK_LIMIT, TelegramNotifier, split_text
+from meetup_bot.telegram.notifier import (
+    BACKUP_CAPTION,
+    CHUNK_LIMIT,
+    TelegramNotifier,
+    split_text,
+)
 from tests.helpers import App
 from tests.tg_fake import Harness
 
@@ -248,3 +255,36 @@ async def test_запрос_явки_false_если_список_не_отпра
     notifier = TelegramNotifier(tg.bot, app.sessions, app.clock, SERVICE_CHAT)
     notifier.attach_attendance_ui(StubSheetUI(status))  # type: ignore[arg-type]
     assert await notifier.send_attendance_prompt(2, 5) is False
+
+
+# ---- документы в служебный чат (бэкапы) ----
+
+
+async def test_бэкап_уходит_документом_в_служебный_чат(tg: Harness, tmp_path: Path) -> None:
+    backup = tmp_path / "bot-2026-10-30.db"
+    backup.write_bytes(b"sqlite")
+    await tg.notifier.send_service_document(backup)
+    (call,) = tg.session.of("SendDocument")
+    assert call["chat_id"] == SERVICE_CHAT
+    assert call["caption"] == BACKUP_CAPTION.format(name=backup.name)
+
+
+async def test_файл_больше_лимита_не_отправляется(
+    tg: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backup = tmp_path / "bot-2026-10-30.db"
+    backup.write_bytes(b"0123456789")
+    monkeypatch.setattr(notifier_module, "UPLOAD_LIMIT_BYTES", 5)
+    await tg.notifier.send_service_document(backup)
+    assert tg.session.of("SendDocument") == []
+
+
+async def test_ошибка_отправки_документа_пробрасывается(tg: Harness, tmp_path: Path) -> None:
+    backup = tmp_path / "bot-2026-10-30.db"
+    backup.write_bytes(b"sqlite")
+    tg.session.fail = lambda name, _data: (
+        TelegramAPIError(_METHOD, "chat not found") if name == "SendDocument" else None
+    )
+    # Обработку и лог берёт на себя задача бэкапа: локальная копия уже есть
+    with pytest.raises(TelegramAPIError):
+        await tg.notifier.send_service_document(backup)

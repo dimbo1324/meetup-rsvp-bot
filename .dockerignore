@@ -5,6 +5,7 @@
 .env.*
 !.env.example
 data
+data-*
 tests
 docs
 .ai
