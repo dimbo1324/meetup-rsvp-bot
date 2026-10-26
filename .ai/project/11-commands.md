@@ -5,16 +5,16 @@
 
 | Команда | Что делает |
 |---|---|
-| `doctor` | Проверяет окружение: Python 3.14, uv, git, `.env`, зависимости, хуки |
+| `doctor` | Проверяет окружение: Python 3.14, uv, git, `.env`, `.venv`, pre-commit-хук |
 | `setup` | `uv sync`, копия `.env.example` → `.env` (если нет), установка pre-commit-хуков |
 | `sync-agents` | Перегенерирует `AGENTS.md` из `.ai/`; `--check` только проверяет синхронизацию |
 | `format` | `ruff format` + `ruff check --fix` |
 | `lint` | `ruff check` + `ruff format --check` |
-| `typecheck` | `mypy` (строгий режим для `services/`, `repositories/`, `renderer/`) |
+| `typecheck` | `mypy` по `src`, `scripts`, `dev.py` (строгий режим для `services/`, `repositories/`, `renderer/`, `telegram/`, `db/`, `clock`, `config`; тесты не проверяются) |
 | `test` | `pytest`, аргументы передаются дальше |
-| `quality-gate` | Полный шлюз: `sync-agents --check`, lint, typecheck, test. Обязателен перед слиянием |
+| `quality-gate` | Полный шлюз: `sync-agents --check`, паритет зеркал `.claude`/`.codex`, lint, typecheck, test. Обязателен перед слиянием |
 | `migrate` | `alembic upgrade head` |
-| `run` | Запуск бота: `python -m meetup_bot` |
+| `run` | Применяет миграции (`migrate`) и запускает бота: `python -m meetup_bot` |
 
 Запуск: `uv run python dev.py <команда>`. Прямые вызовы `uv run ruff|mypy|pytest` тоже
 допустимы, но шлюз качества запускается только через `dev.py quality-gate`.

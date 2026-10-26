@@ -216,7 +216,7 @@ XSS/CSRF там, где применимо, небезопасные редир�
 
 # Проект: meetup-rsvp-bot
 
-Telegram-бот для записи на субботние встречи русскоязычного сообщества в Монтевидео:
+Telegram-бот для записи на еженедельные встречи русскоязычного сообщества в Монтевидео:
 ограниченное число мест (по умолчанию 10), поимённая запись, бан за неявку, управление
 из Telegram без правки кода. Пост рассылается админом через inline-режим (`@имябота`),
 счётчик общий для всех постов встречи. Полное описание — `docs/spec/`.
@@ -236,7 +236,8 @@ Telegram-бот для записи на субботние встречи ру�
 - `docs/spec/` — продуктовая спецификация, разбитая по разделам (индекс — `docs/spec/README.md`).
 - `docs/ROADMAP.md` — вехи и статус; `docs/open-questions.md` — решения владельца и открытые
   вопросы; `docs/architecture/` — текущее состояние и инварианты.
-- `dev.py` — единая точка входа для рутинных задач (`uv run python dev.py list`).
+- `dev.py` — единая точка входа для рутинных задач (`uv run python dev.py list`); `scripts/` — генерация `AGENTS.md`.
+- `docker/entrypoint.sh` — точка входа контейнера (проверка прав на `data`, миграции, запуск).
 - `.ai/`, `.claude/`, `.codex/`, `CLAUDE.md`, `AGENTS.md` — система правил для ассистентов.
 - `Dockerfile`, `compose.yaml`, `.github/workflows/` — контейнер и CI/CD.
 
@@ -275,16 +276,16 @@ Telegram-бот для записи на субботние встречи ру�
 
 | Команда | Что делает |
 |---|---|
-| `doctor` | Проверяет окружение: Python 3.14, uv, git, `.env`, зависимости, хуки |
+| `doctor` | Проверяет окружение: Python 3.14, uv, git, `.env`, `.venv`, pre-commit-хук |
 | `setup` | `uv sync`, копия `.env.example` → `.env` (если нет), установка pre-commit-хуков |
 | `sync-agents` | Перегенерирует `AGENTS.md` из `.ai/`; `--check` только проверяет синхронизацию |
 | `format` | `ruff format` + `ruff check --fix` |
 | `lint` | `ruff check` + `ruff format --check` |
-| `typecheck` | `mypy` (строгий режим для `services/`, `repositories/`, `renderer/`) |
+| `typecheck` | `mypy` по `src`, `scripts`, `dev.py` (строгий режим для `services/`, `repositories/`, `renderer/`, `telegram/`, `db/`, `clock`, `config`; тесты не проверяются) |
 | `test` | `pytest`, аргументы передаются дальше |
-| `quality-gate` | Полный шлюз: `sync-agents --check`, lint, typecheck, test. Обязателен перед слиянием |
+| `quality-gate` | Полный шлюз: `sync-agents --check`, паритет зеркал `.claude`/`.codex`, lint, typecheck, test. Обязателен перед слиянием |
 | `migrate` | `alembic upgrade head` |
-| `run` | Запуск бота: `python -m meetup_bot` |
+| `run` | Применяет миграции (`migrate`) и запускает бота: `python -m meetup_bot` |
 
 Запуск: `uv run python dev.py <команда>`. Прямые вызовы `uv run ruff|mypy|pytest` тоже
 допустимы, но шлюз качества запускается только через `dev.py quality-gate`.

@@ -301,7 +301,7 @@ async def test_перенос_встречи_сообщает_новое_вре�
     await app.services.events.reschedule(OWNER_ID, created.event_id, new_start)
 
     [text] = app.notifier.dms_to(person(1).id)
-    assert text == "Встреча перенесена: теперь пятница, 30 октября, 16:30, Кафе «Луна»."
+    assert text == "Встреча перенесена: теперь пятница, 30 октября, 16:30–18:30, Кафе «Луна»."
 
 
 async def test_список_неявок_в_базе_совпадает_с_отметкой(app: App) -> None:

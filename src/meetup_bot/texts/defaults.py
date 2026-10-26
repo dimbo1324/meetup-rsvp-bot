@@ -61,7 +61,7 @@ DEFAULT_TEXTS: dict[str, str] = {
         "Освободилось место — вы записаны на встречу: {weekday}, {date}, {time}–{end_time}!"
     ),
     "text.event_cancelled": "Встреча {date} отменена. {reason}",
-    "text.event_moved": "Встреча перенесена: теперь {weekday}, {date}, {time}, {place}.",
+    "text.event_moved": "Встреча перенесена: теперь {weekday}, {date}, {time}–{end_time}, {place}.",
     "text.attendance_marked_by": "Явку отметил(а) {name}",
     "text.ban_notice": (
         "Вы больше не можете записываться на встречи. Если это ошибка, напишите администратору."

@@ -30,6 +30,7 @@ erDiagram
         int id PK
         text status "open | closed | finished | cancelled"
         datetime starts_at
+        datetime ends_at
         int capacity
         text description_html
         text photo_file_id
@@ -58,6 +59,8 @@ erDiagram
         text inline_message_id UK
         text last_render_hash
         bool is_dead
+        bool has_photo
+        text last_photo_file_id
     }
     bans {
         int id PK
@@ -97,6 +100,7 @@ erDiagram
 | `description_html`, `photo_file_id`, `place`, `place_url` | TEXT | |
 | `cancel_deadline_at`, `registration_closes_at`, `reminder_at`, `attendance_prompt_at` | DATETIME | Вычисляются при создании (5.2) |
 | `reminder_sent_at`, `post_reminder_sent_at`, `attendance_prompt_sent_at`, `attendance_reminder_sent_at` | DATETIME NULL | Отметки о выполнении для планировщика |
+| `bans_evaluated_at` | DATETIME NULL | Баны по отмеченной явке пересчитаны полностью; `NULL` у отмеченной встречи — нужен повтор (задача `ban_recheck`) |
 | `attendance_marked_at`, `attendance_marked_by` | NULL | |
 | `closed_at`, `cancelled_at`, `cancel_reason` | NULL | |
 | `recurrence_key` | TEXT NULL, UNIQUE | `weekly:2026-10-31` для автосозданных |
@@ -131,7 +135,7 @@ erDiagram
 
 **`event_posts`**: `id`, `event_id` FK, `inline_message_id` UNIQUE, `posted_by` (user ID админа), `created_at`, `last_render_hash`, `last_edited_at`, `is_dead`, `has_photo` (пост разослан как фото-результат: подпись ≤ 1024, иначе текст ≤ 4096; рендер идёт под вид конкретного поста), `last_photo_file_id` (какое фото сейчас в посте, чтобы отличить смену фото от правки счётчика). Колонки `chat_id`/`message_id` (NULL) зарезервированы на будущее, для публикации постов от имени бота.
 
-**`bans`**: `id`, `user_id` FK, `active` BOOL, `reason` (`no_show` / `manual`), `comment`, `event_id` NULL FK, `banned_by`, `banned_at`, `unbanned_by`, `unbanned_at`. Частичный уникальный индекс `(user_id) WHERE active`: активный бан у человека максимум один.
+**`bans`**: `id`, `user_id` FK, `active` BOOL, `reason` (`no_show` / `manual`), `comment`, `event_id` NULL FK, `banned_by`, `banned_at`, `unbanned_by`, `unbanned_at`, `auto_removed` (бан снят автоматически при исправлении явки: такой «разбан» не обнуляет счётчик неявок). Частичный уникальный индекс `(user_id) WHERE active`: активный бан у человека максимум один.
 
 **`settings`**: `key` TEXT PK, `value` JSON, `updated_by`, `updated_at`.
 
@@ -141,4 +145,16 @@ erDiagram
 
 - Alembic с `render_as_batch=True` (SQLite не умеет многие `ALTER TABLE`).
 - Миграции применяются автоматически при старте контейнера (`alembic upgrade head`, затем запуск бота).
-- Каждая миграция проверяется на копии боевой базы перед мержем, если она меняет существующие таблицы.
+- Каждая миграция проверяется на копии боевой базы перед мержем, если она меняет существующие таблицы. Автотесты (`tests/test_alembic.py`) применяют миграции к чистой базе и к базе с дочерними строками и проверяют откаты.
+- Применённая миграция не правится. История:
+
+| Миграция | Что делает |
+|---|---|
+| `0001` | Начальная схема: 8 таблиц, индексы и ограничения |
+| `0002` | `bans.auto_removed`, индекс `registrations(user_id)` |
+| `0003` | `events.bans_evaluated_at` (пересчёт банов по явке завершён) |
+| `0004` | Удаляет ключ настройки `auto_create_weekday` |
+| `0005` | `events.ends_at` (для старых встреч — начало + 120 минут), `events.post_reminder_sent_at`; удаляет ключи `registration_close_hours_before`, `attendance_prompt_hours_after`. Колонки добавляются прямым `ALTER TABLE`, откат — `DROP COLUMN` |
+| `0006` | `event_posts.has_photo`, `event_posts.last_photo_file_id` (вид уже разосланных постов берётся по фото встречи) |
+
+Моменты старых встреч (закрытие записи, запрос явки) миграция `0005` не пересчитывает.

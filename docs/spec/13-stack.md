@@ -1,11 +1,11 @@
 # 13. Стек и версии
 
-Версии актуальны на 23 октября 2026 года. Совместимость с Python 3.14 и наличие готовых сборок для **x86_64 и aarch64** проверены через PyPI: весь набор зависимостей ставится без компиляции.
+Версии актуальны на 26 октября 2026 года (точные — в `uv.lock`). Совместимость с Python 3.14 и наличие готовых сборок для **x86_64 и aarch64** проверены через PyPI: весь набор зависимостей ставится без компиляции.
 
 | Назначение | Пакет | Версия |
 |---|---|---|
 | Язык | CPython | **3.14** (обычная сборка, не free-threaded) |
-| Менеджер проекта | uv | 0.13 |
+| Менеджер проекта | uv | 0.12 (локально проверено 0.12.13) |
 | Telegram | aiogram | 3.31 |
 | Меню админа | aiogram-dialog | 2.6 |
 | ORM | SQLAlchemy (`[asyncio]`) | 2.1 |
@@ -15,11 +15,11 @@
 | Валидация | pydantic | 2.13 (подтягивается aiogram, см. ниже) |
 | Часовые пояса | zoneinfo (stdlib) + tzdata | 2026.5 |
 | Цикл событий | uvloop | 0.23 (опционально) |
-| Логи | structlog | 26.1 (или stdlib `logging`) |
-| Ошибки | sentry-sdk | 2.73 (опционально) |
-| Тесты | pytest, pytest-asyncio | 9.1, 1.4 |
+| Логи | stdlib `logging` | — (structlog не используется и не установлен) |
+| Ошибки | sentry-sdk | 2.73 (в зависимостях; включается, только если задан `SENTRY_DSN`) |
+| Тесты | pytest, pytest-asyncio, pytest-cov | 9.1, 1.4, последняя |
 | Линтер и форматтер | ruff | 0.17 |
-| Типы | mypy или pyright | последняя |
+| Типы | mypy (`strict` для `services`, `repositories`, `renderer`, `telegram`, `db`, `clock`, `config`; тесты не проверяются) | 2.4 |
 | Контейнер | Docker, образ `python:3.14-slim` | — |
 | CI/CD | GitHub Actions, GHCR | — |
 | Хостинг | Oracle Cloud Always Free | — |
@@ -30,7 +30,7 @@
 - **Не фиксировать pydantic 2.14 вручную.** aiogram 3.31 требует `pydantic<2.14` и `aiohttp<3.15`. uv сам выберет совместимые версии (pydantic 2.13.5).
 - Точные версии всех пакетов фиксируются в `uv.lock`, который коммитится в репозиторий. Обновлять зависимости — отдельным PR.
 
-Пример `pyproject.toml`:
+Ключевые части `pyproject.toml` (полный файл — в корне репозитория):
 
 ```toml
 [project]
@@ -46,12 +46,11 @@ dependencies = [
     "pydantic-settings>=2.16",
     "tzdata>=2026.5",
     "uvloop>=0.23; sys_platform == 'linux'",
-    "structlog>=26.1",
     "sentry-sdk>=2.73",
 ]
 
 [dependency-groups]
-dev = ["pytest>=9.1", "pytest-asyncio>=1.4", "ruff>=0.17", "mypy", "pre-commit"]
+dev = ["pytest>=9.1", "pytest-asyncio>=1.4", "pytest-cov", "ruff>=0.17", "mypy", "pre-commit"]
 
 [tool.ruff]
 line-length = 100
@@ -59,6 +58,9 @@ target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF", "DTZ"]   # DTZ ловит naive datetime
+
+[tool.mypy]
+files = ["src", "scripts", "dev.py"]   # тесты mypy не проверяет
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

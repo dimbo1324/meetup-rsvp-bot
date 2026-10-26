@@ -435,7 +435,9 @@ class EventService:
                 },
             )
         safe_schedule(self._refresher, event_id)
-        text = self._render("event_moved", {"starts_at": times.starts_at, "place": place})
+        text = self._render(
+            "event_moved", {"starts_at": times.starts_at, "ends_at": times.ends_at, "place": place}
+        )
         # Продвинутые из очереди получают только «место освободилось» с уже новым временем
         promoted_ids = {p.user_id for p in promotions}
         await send_dms(self._notifier, [u for u in recipients if u not in promoted_ids], text)
