@@ -321,7 +321,7 @@ class Harness:
         self.updater = PostUpdater(
             self.bot, app.sessions, app.clock, app.services.settings, debounce=0.05, pause=0
         )
-        self.attendance_ui = AttendanceUI(self.bot, app.sessions, app.clock, app.services)
+        self.attendance_ui = AttendanceUI(self.bot, app.services)
         self.notifier.attach_attendance_ui(self.attendance_ui)
         self.config = Settings(
             _env_file=None,  # type: ignore[call-arg]

@@ -17,12 +17,10 @@ from meetup_bot.db.models import Attendance, Event, EventStatus, RegistrationSta
 from meetup_bot.repositories import audit, events, registrations
 from meetup_bot.repositories import users as users_repo
 from meetup_bot.services import access
-from meetup_bot.services.admin_support import Provided
 from meetup_bot.services.bans import BanOutcome, BanService
 from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import display_name
-from meetup_bot.services.rules import RulesSettings
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +81,11 @@ class AttendanceService:
         clock: Clock,
         locks: EventLocks,
         ban_service: BanService,
-        rules_provider: Provided[RulesSettings] | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
         self._locks = locks
         self._bans = ban_service
-        # Правила читает BanService; параметр оставлен ради совместимости сборки
-        self._rules = rules_provider
 
     async def sheet_info(self, actor_id: int, event_id: int) -> SheetInfo:
         """Данные листа явки либо код ошибки: нет прав, нет встречи, отменена, рано, поздно."""

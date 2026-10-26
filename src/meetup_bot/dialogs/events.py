@@ -27,7 +27,7 @@ from meetup_bot.dialogs._common import (
 from meetup_bot.dialogs.event_edit import EDIT_WINDOWS, EVENT_ID_KEY, current_event_id
 from meetup_bot.dialogs.states import CreateEventSG, EventsSG, ParticipantsSG
 from meetup_bot.services.errors import DomainError, ErrorCode, NotFound
-from meetup_bot.services.events import EventCard
+from meetup_bot.services.event_results import EventCard
 from meetup_bot.services.settings_schema import REASON_MAX_LEN
 from meetup_bot.telegram.attendance_ui import SheetStatus
 from meetup_bot.telegram.common import fit_alert

@@ -22,7 +22,7 @@ from meetup_bot.container import Services
 from meetup_bot.db.models import EventStatus
 from meetup_bot.services.errors import DomainError
 from meetup_bot.services.posts import register_post
-from meetup_bot.telegram.common import START_ABOUT, check_admin
+from meetup_bot.telegram.common import START_ABOUT
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.telegram.posts import build_post
@@ -54,7 +54,7 @@ async def on_inline_query(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
     # Права проверяем на каждый запрос: список встреч показываем только админам
-    if not await check_admin(sessions, user_info.id):
+    if not await services.users.is_admin(user_info.id):
         await query.answer([], cache_time=0, is_personal=True, button=_NOT_ADMIN_BUTTON)
         return
 

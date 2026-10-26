@@ -9,7 +9,6 @@ import pytest
 
 from meetup_bot.telegram.common import (
     ALERT_LIMIT,
-    check_admin,
     fit_alert,
     page_count,
     safe_answer,
@@ -21,7 +20,6 @@ from meetup_bot.texts.render import (
     format_local,
     format_moment,
 )
-from tests.helpers import ADMIN_ID, OWNER_ID, App
 
 MONTEVIDEO = ZoneInfo("America/Montevideo")
 # Суббота, 24 октября 2026, 20:00 UTC = 17:00 в Монтевидео (UTC-3)
@@ -88,20 +86,6 @@ def test_пробелы_перед_многоточием_убираются() -
 
 def test_лимит_окна_равен_200() -> None:
     assert ALERT_LIMIT == 200
-
-
-@pytest.mark.parametrize("user_id", [OWNER_ID, ADMIN_ID])
-async def test_check_admin_для_владельца_и_админа(app: App, user_id: int) -> None:
-    assert await check_admin(app.sessions, user_id) is True
-
-
-async def test_check_admin_для_постороннего(app: App) -> None:
-    assert await check_admin(app.sessions, 123456) is False
-
-
-async def test_check_admin_после_снятия_прав(app: App) -> None:
-    await app.services.admins.remove_admin(OWNER_ID, ADMIN_ID)
-    assert await check_admin(app.sessions, ADMIN_ID) is False
 
 
 def test_format_local_по_формату_в_часовом_поясе_клуба() -> None:

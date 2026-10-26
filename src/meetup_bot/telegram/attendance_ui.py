@@ -18,9 +18,7 @@ from collections.abc import Sequence
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.clock import Clock
 from meetup_bot.container import Services
 from meetup_bot.db.models import Attendance
 from meetup_bot.services.attendance import SheetRow
@@ -171,13 +169,9 @@ class AttendanceUI:
     def __init__(
         self,
         bot: Bot,
-        sessions: async_sessionmaker[AsyncSession],
-        clock: Clock,
         services: Services,
     ) -> None:
         self._bot = bot
-        self._sessions = sessions
-        self._clock = clock
         self._services = services
         self._sent: dict[int, list[tuple[int, int]]] = {}
         self._drafts: OrderedDict[MessageKey, set[int]] = OrderedDict()

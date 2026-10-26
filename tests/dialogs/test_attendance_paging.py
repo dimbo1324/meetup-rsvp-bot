@@ -116,9 +116,7 @@ async def test_после_перезапуска_бота_отметки_тек�
     mid = await _sheet(tg, event_id)
     await tg.click(OWNER_ID, mid, "Гость 004")
     # Перезапуск: черновик в памяти пропал, осталась только разметка сообщения
-    tg.dispatcher.workflow_data["attendance_ui"] = AttendanceUI(
-        tg.bot, app.sessions, app.clock, app.services
-    )
+    tg.dispatcher.workflow_data["attendance_ui"] = AttendanceUI(tg.bot, app.services)
     await tg.click(OWNER_ID, mid, "Готово")
 
     assert (await _attendance(app, event_id))["Гость 004"] == "no_show"

@@ -67,9 +67,15 @@ async def list_live(session: AsyncSession, event_id: int) -> list[EventPost]:
     return list(rows.all())
 
 
-async def list_live_event_ids(session: AsyncSession) -> list[int]:
-    """Встречи, у которых есть живые посты: их нужно пересобрать после перезапуска."""
-    rows = await session.scalars(select(EventPost.event_id).where(_is_live()).distinct())
+async def list_live_event_ids(session: AsyncSession, *, starts_after: datetime) -> list[int]:
+    """Встречи с живыми постами, начавшиеся не раньше `starts_after`: их пересобирают после
+    перезапуска. Посты давних встреч не трогаем: список растёт каждую неделю."""
+    rows = await session.scalars(
+        select(EventPost.event_id)
+        .join(Event, EventPost.event_id == Event.id)
+        .where(_is_live(), Event.starts_at >= starts_after)
+        .distinct()
+    )
     return list(rows.all())
 
 

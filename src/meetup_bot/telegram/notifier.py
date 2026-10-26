@@ -146,14 +146,14 @@ class TelegramNotifier:
                 exc.migrate_to_chat_id,
             )
             hint = SERVICE_CHAT_MIGRATED_HINT.format(chat_id=exc.migrate_to_chat_id)
-            await self._duplicate_to_owners(chunk, hint)
+            return await self._duplicate_to_owners(chunk, hint)
         except TelegramForbiddenError as exc:
             logger.error("служебный чат недоступен: %s", exc.message)
-            await self._duplicate_to_owners(chunk)
+            return await self._duplicate_to_owners(chunk)
         except TelegramBadRequest as exc:
             if _CHAT_NOT_FOUND in exc.message.lower():
                 logger.error("служебный чат не найден: проверьте SERVICE_CHAT_ID")
-                await self._duplicate_to_owners(chunk)
+                return await self._duplicate_to_owners(chunk)
             else:
                 logger.warning("служебное сообщение не доставлено: %s", exc.message)
         except TelegramAPIError as exc:
@@ -162,12 +162,18 @@ class TelegramNotifier:
             return True
         return False
 
-    async def _duplicate_to_owners(self, chunk: str, hint: str = "") -> None:
-        """Служебная информация не должна пропадать вместе с недоступным чатом."""
+    async def _duplicate_to_owners(self, chunk: str, hint: str = "") -> bool:
+        """Служебная информация не должна пропадать вместе с недоступным чатом.
+
+        True, если хотя бы один владелец получил сообщение: тогда оно доставлено, и повторять
+        его отправку (например, напоминание о посте каждые полчаса) не нужно.
+        """
         header = f"{SERVICE_CHAT_UNAVAILABLE_TEXT}\n{hint}".rstrip("\n")
+        delivered = False
         for part in split_text(f"{header}\n\n{chunk}"):
             for owner_id in self._owner_ids:
-                await self.send_dm(owner_id, part)
+                delivered = await self.send_dm(owner_id, part) or delivered
+        return delivered
 
     async def send_service_document(self, path: Path) -> None:
         """Отправляет файл в служебный чат; ошибки Telegram пробрасываются вызывающему."""

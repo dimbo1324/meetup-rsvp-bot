@@ -278,3 +278,25 @@ async def test_подтверждение_лимита_проверяет_пра
         await app.services.events.capacity_needs_confirmation(STRANGER, event_id, 5)
     with pytest.raises(InvalidOperation):
         await app.services.events.capacity_needs_confirmation(ADMIN_ID, event_id, 0)
+
+
+async def test_отмена_встречи_снимает_автобан_за_отмену_как_неявку_до_отметки_явки(
+    app: App,
+) -> None:
+    event_id = await create(app)
+    await app.services.registration.register(event_id, person(1))
+    after_deadline(app)
+    async with app.sessions() as session:
+        registration_id = await session.scalar(
+            select(Registration.id).where(Registration.user_id == person(1).id)
+        )
+    assert registration_id is not None
+    await app.services.participants.admin_cancel_after_deadline(
+        ADMIN_ID, event_id, registration_id, as_no_show=True
+    )
+    assert await active_bans(app) == 1
+
+    await events_with_bans(app).cancel_event(OWNER_ID, event_id)
+
+    # Неявки отменённой встречи не считаются, даже если явку по ней не отмечали
+    assert await active_bans(app) == 0

@@ -170,3 +170,29 @@ async def test_предпросмотр_недоступен_не_админу(a
     event_id = (await app.services.events.create_event_as_admin(OWNER_ID)).event_id
     with pytest.raises(PermissionDenied):
         await app.services.posts.preview(999, event_id)
+
+
+async def test_после_перезапуска_пересобираются_только_недавние_встречи(app: App) -> None:
+    from datetime import timedelta
+
+    from meetup_bot.repositories import event_posts
+
+    recent = (await app.services.events.create_event_as_admin(OWNER_ID)).event_id
+    old = (await app.services.events.create_event_as_admin(OWNER_ID)).event_id
+    async with app.sessions() as session, session.begin():
+        for event_id, inline_id in ((recent, "p-recent"), (old, "p-old")):
+            await event_posts.register(
+                session,
+                event_id=event_id,
+                inline_message_id=inline_id,
+                posted_by=OWNER_ID,
+                now=app.clock.now(),
+            )
+        event = await session.get(Event, old)
+        assert event is not None
+        event.starts_at = app.clock.now() - timedelta(days=60)
+    async with app.sessions() as session:
+        found = await event_posts.list_live_event_ids(
+            session, starts_after=app.clock.now() - timedelta(days=14)
+        )
+    assert found == [recent]

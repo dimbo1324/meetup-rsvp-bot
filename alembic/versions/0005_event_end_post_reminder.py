@@ -19,14 +19,26 @@ depends_on: str | Sequence[str] | None = None
 
 # Длительность по умолчанию для уже созданных встреч (раздел 7, event_duration_minutes)
 LEGACY_DURATION_MINUTES = 120
+# Значение только на время добавления NOT NULL-колонки; сразу заменяется расчётным
+PLACEHOLDER_MOMENT = "1970-01-01 00:00:00.000000"
 # Ключи настроек в часах заменены ключами в минутах с другим смыслом: старые значения
 # не переводятся, действует новое умолчание
 OBSOLETE_SETTING_KEYS = ("registration_close_hours_before", "attendance_prompt_hours_after")
 
 
 def upgrade() -> None:
+    # Колонки добавляются прямым ALTER TABLE ADD COLUMN: batch-режим с изменением NOT NULL
+    # пересоздал бы events, а на неё ссылаются записи, посты и баны (внешние ключи включены,
+    # DROP TABLE упал бы на любой базе с данными)
     with op.batch_alter_table("events", schema=None) as batch_op:
-        batch_op.add_column(sa.Column("ends_at", meetup_bot.db.types.UtcDateTime(), nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "ends_at",
+                meetup_bot.db.types.UtcDateTime(),
+                nullable=False,
+                server_default=PLACEHOLDER_MOMENT,
+            )
+        )
         batch_op.add_column(
             sa.Column("post_reminder_sent_at", meetup_bot.db.types.UtcDateTime(), nullable=True)
         )
@@ -38,15 +50,11 @@ def upgrade() -> None:
         f"strftime('%Y-%m-%d %H:%M:%S', starts_at, '+{LEGACY_DURATION_MINUTES} minutes') "
         "|| substr(starts_at, 20)"
     )
-    with op.batch_alter_table("events", schema=None) as batch_op:
-        batch_op.alter_column(
-            "ends_at", existing_type=meetup_bot.db.types.UtcDateTime(), nullable=False
-        )
     keys = ", ".join(f"'{key}'" for key in OBSOLETE_SETTING_KEYS)
     op.execute(f"DELETE FROM settings WHERE key IN ({keys})")
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("events", schema=None) as batch_op:
-        batch_op.drop_column("post_reminder_sent_at")
-        batch_op.drop_column("ends_at")
+    # Нативный DROP COLUMN (SQLite 3.35+) по той же причине, что и в upgrade: без пересоздания events
+    op.execute("ALTER TABLE events DROP COLUMN post_reminder_sent_at")
+    op.execute("ALTER TABLE events DROP COLUMN ends_at")

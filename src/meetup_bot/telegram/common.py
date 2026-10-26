@@ -5,9 +5,7 @@ from __future__ import annotations
 import logging
 
 from aiogram.types import CallbackQuery
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.repositories import admins
 from meetup_bot.texts.render import clip, telegram_length
 
 __all__ = [
@@ -16,7 +14,6 @@ __all__ = [
     "MAX_RETRY_AFTER",
     "START_ABOUT",
     "START_REMIND",
-    "check_admin",
     "fit_alert",
     "page_count",
     "safe_answer",
@@ -66,9 +63,3 @@ async def safe_answer(
 def page_count(total: int, size: int) -> int:
     """Число страниц по `size` элементов; пустой список — одна (пустая) страница."""
     return max(1, -(-total // size))
-
-
-async def check_admin(sessions: async_sessionmaker[AsyncSession], user_id: int) -> bool:
-    """Права проверяются в самом обработчике, на каждом админском действии (раздел 3)."""
-    async with sessions() as session:
-        return await admins.is_admin(session, user_id)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -36,6 +36,12 @@ from meetup_bot.services.attendance import attendance_window_open
 from meetup_bot.services.bans import BanService
 from meetup_bot.services.defaults import DEFAULT_CAPACITY
 from meetup_bot.services.errors import ErrorCode, InvalidOperation
+from meetup_bot.services.event_results import (
+    CreatedEvent,
+    EventCard,
+    EventListItem,
+    RescheduleResult,
+)
 from meetup_bot.services.event_template import EventTemplate
 from meetup_bot.services.event_validation import (
     max_registration_close_delay,
@@ -65,15 +71,7 @@ logger = logging.getLogger(__name__)
 
 RECENT_DAYS = 14
 
-__all__ = [
-    "UNSET",
-    "CreatedEvent",
-    "EventCard",
-    "EventListItem",
-    "EventService",
-    "EventTemplate",
-    "RescheduleResult",
-]
+__all__ = ["UNSET", "EventService"]
 
 
 class _Unset(enum.Enum):
@@ -82,62 +80,6 @@ class _Unset(enum.Enum):
 
 # Отличает «не менять поле» от «обнулить поле» (например, убрать фото)
 UNSET = _Unset.TOKEN
-
-
-@dataclass(frozen=True)
-class EventListItem:
-    id: int
-    status: str
-    starts_at: datetime
-    capacity: int
-    seats_taken: int
-
-
-@dataclass(frozen=True)
-class CreatedEvent:
-    event_id: int
-    # Нефатальные замечания (например, слишком длинное описание) — показать админу
-    warnings: list[str]
-    # Расчётный дедлайн отмены уже прошёл и приравнен к моменту создания: отменить запись
-    # без штрафа нельзя, админа стоит предупредить
-    deadline_clamped: bool = False
-
-
-@dataclass(frozen=True)
-class RescheduleResult:
-    # Закрытая встреча открыта заново автоматически (новые моменты в будущем)
-    registration_reopened: bool
-    # Дедлайн отмены при переносе уже прошёл и приравнен к моменту переноса
-    deadline_clamped: bool = False
-
-
-@dataclass(frozen=True)
-class EventCard:
-    """Всё, что нужно карточке встречи в меню: поля, счётчики и допустимые действия."""
-
-    id: int
-    status: str
-    starts_at: datetime
-    ends_at: datetime
-    place: str
-    place_url: str
-    description_html: str
-    photo_file_id: str | None
-    capacity: int
-    seats_taken: int
-    waitlist_count: int
-    cancel_deadline_at: datetime
-    registration_closes_at: datetime
-    reminder_at: datetime
-    attendance_prompt_at: datetime
-    cancel_reason: str | None
-    attendance_marked: bool
-    editable: bool
-    can_close: bool
-    can_open: bool
-    can_cancel: bool
-    can_reschedule: bool
-    can_mark_attendance: bool
 
 
 class EventService:
@@ -578,7 +520,6 @@ class EventService:
             )
             if event.status == EventStatus.CANCELLED.value:
                 raise InvalidOperation(ErrorCode.BAD_STATUS)
-            attendance_was_marked = event.attendance_marked_at is not None
             was_finished = event.status == EventStatus.FINISHED.value
             event.status = EventStatus.CANCELLED.value
             event.cancelled_at = now
@@ -596,11 +537,7 @@ class EventService:
                 session, event_id, events_admin.ACTIVE_ONLY
             )
             starts_at = event.starts_at
-            no_show_users = (
-                await registrations.no_show_user_ids(session, event_id)
-                if attendance_was_marked
-                else []
-            )
+            no_show_users = await registrations.no_show_user_ids(session, event_id)
         safe_schedule(self._refresher, event_id)
         # Значения передаются сырыми: экранирует рендер текстов (parse_mode=HTML у ЛС)
         params = {"starts_at": starts_at, "reason": reason or ""}

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import html
-from typing import Any
 
 from aiogram import Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import DialogManager
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
@@ -28,11 +26,6 @@ DEADLINE_CLAMPED_WARNING = (
 def get_services(manager: DialogManager) -> Services:
     services: Services = manager.middleware_data["services"]
     return services
-
-
-def get_sessions(manager: DialogManager) -> async_sessionmaker[AsyncSession]:
-    sessions: async_sessionmaker[AsyncSession] = manager.middleware_data["sessions"]
-    return sessions
 
 
 def get_clock(manager: DialogManager) -> Clock:
@@ -76,10 +69,6 @@ async def guard(event: Message | CallbackQuery, manager: DialogManager, *, close
     if close:
         await manager.done()
     return False
-
-
-def middleware_value(manager: DialogManager, key: str) -> Any:
-    return manager.middleware_data[key]
 
 
 # ---- уведомление над текстом окна ----------------------------------------------------

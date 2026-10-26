@@ -14,10 +14,8 @@ from meetup_bot.dialogs._common import (
     get_bot,
     get_clock,
     get_services,
-    get_sessions,
     guard,
     is_admin,
-    middleware_value,
     notice_block,
     picked_user,
     pop_notice,
@@ -60,11 +58,8 @@ async def test_is_admin_проверяет_права_заново_после_с
     assert await is_admin(manager) is False
 
 
-def test_get_services_и_get_sessions_читают_middleware_data(app: App) -> None:
-    manager = _manager(app, OWNER_ID)
-    assert get_services(manager) is app.services
-    assert get_sessions(manager) is app.sessions
-    assert middleware_value(manager, "clock") is app.clock
+def test_get_services_читает_middleware_data(app: App) -> None:
+    assert get_services(_manager(app, OWNER_ID)) is app.services
 
 
 # ---- типизированные getters ----------------------------------------------------------

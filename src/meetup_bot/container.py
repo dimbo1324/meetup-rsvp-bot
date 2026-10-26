@@ -149,7 +149,7 @@ async def build_services(
         schedule=settings.schedule_now,
         background=background,
     )
-    attendance = AttendanceService(sessions, clock, locks, bans, rules_provider=settings.rules_now)
+    attendance = AttendanceService(sessions, clock, locks, bans)
     participants = ParticipantService(
         sessions,
         clock,

@@ -47,7 +47,7 @@ def break_start(monkeypatch: pytest.MonkeyPatch, app: App, error: Exception) -> 
     async def boom(*_a: Any, **_k: Any) -> None:
         raise error
 
-    monkeypatch.setattr("meetup_bot.handlers.start.check_admin", boom)
+    monkeypatch.setattr(app.services.users, "is_admin", boom)
 
 
 async def test_ошибка_в_команде_уходит_в_служебный_чат(

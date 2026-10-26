@@ -338,7 +338,7 @@ async def test_миграция_чата_пишет_в_лог_новый_id_и_�
     notifier = make_notifier(tg, app, (1,))
     fail_with(tg, TelegramMigrateToChat(_METHOD, "Bad Request: group migrated", -100777))
     delivered = await notifier.send_service("текст")
-    assert delivered is False
+    assert delivered is True  # сообщение дошло до владельца
     errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
     assert any("-100777" in m and "SERVICE_CHAT_ID" in m for m in errors)
 
@@ -366,7 +366,8 @@ async def test_недоступный_служебный_чат_дублируе
     notifier = make_notifier(tg, app, (1, 2))
     fail_with(tg, error)
     delivered = await notifier.send_service("бэкап готов")
-    assert delivered is False
+    # Владельцы получили сообщение: повторять отправку (напоминания) не нужно
+    assert delivered is True
     for owner in (1, 2):
         (text,) = sent_to(tg, owner)
         assert text.startswith(SERVICE_CHAT_UNAVAILABLE_TEXT)
@@ -393,3 +394,9 @@ async def test_дублирование_владельцам_не_зацикли
     fail_with(tg, TelegramForbiddenError(_METHOD, "Forbidden: bot was kicked"))
     assert await notifier.send_service("текст") is False
     assert len(tg.session.of("SendMessage")) == 1
+
+
+async def test_без_владельцев_недоступный_чат_это_недоставка(app: App, tg: Harness) -> None:
+    notifier = make_notifier(tg, app, ())
+    fail_with(tg, TelegramForbiddenError(_METHOD, "Forbidden: bot was kicked"))
+    assert await notifier.send_service("текст") is False

@@ -7,6 +7,7 @@ import contextlib
 import html
 import logging
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from aiogram_dialog import setup_dialogs
 from meetup_bot import __version__
 from meetup_bot.clock import Clock, ShiftableClock, SystemClock
 from meetup_bot.config import Settings
-from meetup_bot.container import build_services
+from meetup_bot.container import Services, build_services
 from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.handlers import ALLOWED_UPDATES, build_router
 from meetup_bot.middlewares.rate_limit import install_rate_limit
@@ -37,6 +38,9 @@ from meetup_bot.texts.service import BOT_STARTED_TEXT, DEV_MODE_MARK, SCHEDULER_
 
 logger = logging.getLogger(__name__)
 
+
+# Посты встреч старше этого срока после перезапуска не пересобираются
+POST_REFRESH_WINDOW = timedelta(days=14)
 
 # Токен бота входит в URL запросов Bot API (…/bot<id>:<токен>/метод) и попадает в трейсбеки
 _TOKEN_RE = re.compile(r"bot\d+:[\w-]+")
@@ -84,6 +88,9 @@ def _init_sentry(dsn: str) -> None:
     )
 
 
+_pending_notices: set[asyncio.Task[bool]] = set()
+
+
 def startup_text(config: Settings) -> str:
     """Сообщение о запуске; в режиме dev помечено, чтобы его не спутали с боевым."""
     version = html.escape(config.app_version, quote=False)
@@ -100,9 +107,12 @@ def _watch_scheduler(task: asyncio.Task[None], notifier: TelegramNotifier) -> No
         error = finished.exception()
         if error is not None:
             logger.error("планировщик остановился", exc_info=error)
-            asyncio.get_running_loop().create_task(
+            notice = asyncio.get_running_loop().create_task(
                 notifier.send_service(SCHEDULER_STOPPED_TEXT.format(error=type(error).__name__))
             )
+            # Цикл событий держит задачи слабой ссылкой: без своей ссылки её могут собрать раньше
+            _pending_notices.add(notice)
+            notice.add_done_callback(_pending_notices.discard)
 
     task.add_done_callback(_done)
 
@@ -122,6 +132,7 @@ async def run(config: Settings) -> None:
     )
     scheduler_task: asyncio.Task[None] | None = None
     post_refresher: PostRefresher | None = None
+    services: Services | None = None
     try:
         notifier = TelegramNotifier(
             bot, sessions, clock, config.service_chat_id, owner_ids=config.owner_ids
@@ -141,7 +152,7 @@ async def run(config: Settings) -> None:
             send_backup=notifier.send_service_document,
         )
         post_refresher = services.post_refresher
-        attendance_ui = AttendanceUI(bot, sessions, clock, services)
+        attendance_ui = AttendanceUI(bot, services)
         notifier.attach_attendance_ui(attendance_ui)
         await services.admins.sync_owners(config.owner_ids)
 
@@ -166,7 +177,9 @@ async def run(config: Settings) -> None:
 
         # Очередь пересборки живёт в памяти: после перезапуска догоняем устаревшие посты
         async with sessions() as session:
-            for event_id in await event_posts.list_live_event_ids(session):
+            for event_id in await event_posts.list_live_event_ids(
+                session, starts_after=clock.now() - POST_REFRESH_WINDOW
+            ):
                 services.post_refresher.schedule(event_id)
 
         if config.is_dev:
@@ -185,6 +198,9 @@ async def run(config: Settings) -> None:
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await scheduler_task
+        # Уведомления, начатые перед остановкой, дожидаются до закрытия сессии бота и БД
+        if services is not None:
+            await services.background.aclose()
         closer = getattr(post_refresher, "aclose", None)
         if closer is not None:
             await closer()

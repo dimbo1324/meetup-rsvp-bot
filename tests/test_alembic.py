@@ -216,3 +216,64 @@ def test_миграция_0006_откат_и_повторное_применен
         columns = {row[1] for row in conn.execute("PRAGMA table_info(event_posts)")}
     assert not {"has_photo", "last_photo_file_id"} & columns
     assert _alembic(db, "upgrade", "head").returncode == 0
+
+
+def _fill_children(db: Path, event_id: int) -> None:
+    """Дочерние строки встречи на схеме 0004: на events ссылаются записи, посты и баны."""
+    moment = "2026-10-24 12:00:00.000000"
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(
+            "INSERT INTO users (id, first_name, dm_available, created_at, updated_at) "
+            "VALUES (500, 'Анна', 1, ?, ?)",
+            (moment, moment),
+        )
+        conn.execute(
+            "INSERT INTO registrations (event_id, user_id, guests, status, source, attendance, "
+            "late_promoted, created_at) VALUES (?, 500, 0, 'active', 'button', 'unknown', 0, ?)",
+            (event_id, moment),
+        )
+        conn.execute(
+            "INSERT INTO bans (user_id, active, reason, event_id, banned_at) "
+            "VALUES (500, 1, 'no_show', ?, ?)",
+            (event_id, moment),
+        )
+    _insert_post(db, event_id, "inline-1")
+
+
+def _foreign_key_violations(db: Path) -> list[tuple[object, ...]]:
+    with closing(sqlite3.connect(db)) as conn:
+        return conn.execute("PRAGMA foreign_key_check").fetchall()
+
+
+def test_миграции_на_базе_с_записями_постами_и_банами(tmp_path: Path) -> None:
+    # Регрессия: пересоздание таблицы events в 0005 падало на внешних ключах реальной базы
+    db = tmp_path / "bot.db"
+    assert _alembic(db, "upgrade", "0004").returncode == 0
+    _insert_legacy_event(db, "2026-10-30 19:30:00.000000")
+    _fill_children(db, 1)
+    up = _alembic(db, "upgrade", "head")
+    assert up.returncode == 0, up.stderr
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("SELECT count(*) FROM registrations").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM bans").fetchone() == (1,)
+        assert conn.execute("SELECT count(*), max(has_photo) FROM event_posts").fetchone() == (1, 0)
+        assert conn.execute("SELECT ends_at FROM events").fetchone() == (
+            "2026-10-30 21:30:00.000000",
+        )
+    assert _foreign_key_violations(db) == []
+
+
+def test_откат_миграций_на_базе_с_записями_постами_и_банами(tmp_path: Path) -> None:
+    db = tmp_path / "bot.db"
+    assert _alembic(db, "upgrade", "0004").returncode == 0
+    _insert_legacy_event(db, "2026-10-30 19:30:00.000000")
+    _fill_children(db, 1)
+    assert _alembic(db, "upgrade", "head").returncode == 0
+    down = _alembic(db, "downgrade", "0004")
+    assert down.returncode == 0, down.stderr
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("SELECT count(*) FROM registrations").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM event_posts").fetchone() == (1,)
+    assert "ends_at" not in _event_columns(db)
+    assert _foreign_key_violations(db) == []
+    assert _alembic(db, "upgrade", "head").returncode == 0

@@ -7,7 +7,6 @@ import logging
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.container import Services
 from meetup_bot.services.attendance import AlreadyMarked
@@ -19,7 +18,7 @@ from meetup_bot.telegram.attendance_callbacks import (
     AttendanceCallback,
 )
 from meetup_bot.telegram.attendance_ui import AttendanceUI, has_done
-from meetup_bot.telegram.common import check_admin, safe_answer
+from meetup_bot.telegram.common import safe_answer
 from meetup_bot.telegram.errors_text import ANOTHER_ADMIN, NO_ACCESS, describe_error
 
 logger = logging.getLogger(__name__)
@@ -55,12 +54,11 @@ async def on_attendance_callback(
     callback_data: AttendanceCallback,
     attendance_ui: AttendanceUI,
     services: Services,
-    sessions: async_sessionmaker[AsyncSession],
 ) -> None:
     admin_id = callback.from_user.id
     message = callback.message
     try:
-        if not await check_admin(sessions, admin_id):
+        if not await services.users.is_admin(admin_id):
             await _answer(callback, NO_ACCESS)
             return
         if not isinstance(message, Message) or message.reply_markup is None:

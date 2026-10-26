@@ -15,7 +15,7 @@ from meetup_bot.clock import Clock, ShiftableClock
 from meetup_bot.config import Settings
 from meetup_bot.container import Services
 from meetup_bot.telegram.commands import set_admin_commands
-from meetup_bot.telegram.common import START_ABOUT, START_REMIND, check_admin
+from meetup_bot.telegram.common import START_ABOUT, START_REMIND
 from meetup_bot.texts.render import format_interval, format_moment
 from meetup_bot.user_info import UserInfo
 
@@ -102,7 +102,7 @@ async def cmd_start(
     app_config: Settings,
 ) -> None:
     await services.users.set_dm_available(user_info.id, True)
-    is_admin = await check_admin(sessions, user_info.id)
+    is_admin = await services.users.is_admin(user_info.id)
     if is_admin and message.bot is not None:
         # Если при запуске бота чата с админом ещё не было, меню команд включаем сейчас
         await set_admin_commands(message.bot, user_info.id, is_admin=True)
@@ -131,7 +131,7 @@ async def cmd_help(
 ) -> None:
     await message.answer(
         build_help(
-            is_admin=await check_admin(sessions, user_info.id),
+            is_admin=await services.users.is_admin(user_info.id),
             bot=bot_username,
             plus_one_enabled=services.settings.options_now().plus_one_enabled,
         )
@@ -149,7 +149,7 @@ async def cmd_dev_shift(
     app_config: Settings,
 ) -> None:
     # В бою команда молчит: пользователь не должен узнать, что она вообще существует
-    if not app_config.is_dev or not await check_admin(sessions, user_info.id):
+    if not app_config.is_dev or not await services.users.is_admin(user_info.id):
         return
     if not isinstance(clock, ShiftableClock):
         await message.answer("Часы не поддерживают сдвиг.")
