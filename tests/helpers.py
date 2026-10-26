@@ -67,7 +67,10 @@ class InlineBackgroundTasks(BackgroundTasks):
     """
 
     def spawn(self, effect: Coroutine[Any, Any, object]) -> None:
-        task = asyncio.Task(self._guarded(effect), eager_start=True)
+        # Цикл передаётся явно: в Python 3.14.2 без него eager-задача падает на loop=None
+        task = asyncio.Task(
+            self._guarded(effect), loop=asyncio.get_running_loop(), eager_start=True
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
