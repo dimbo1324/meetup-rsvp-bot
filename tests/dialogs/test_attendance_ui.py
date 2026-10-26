@@ -53,6 +53,7 @@ async def _start_meeting(app: App, event_id: int) -> None:
     """Часы -> через час после начала встречи."""
     starts_at = (await _event(app, event_id)).starts_at
     app.clock.advance(starts_at - app.clock.now() + timedelta(hours=1))
+    await app.services.lifecycle.finish_due(app.clock.now())
 
 
 def _forbidden(name: str, data: dict[str, Any]) -> Exception | None:
@@ -142,6 +143,7 @@ async def test_граница_окна_ровно_семь_суток_ещё_о�
 ) -> None:
     starts_at = (await _event(app, event_id)).starts_at
     app.clock.advance(starts_at - app.clock.now() + timedelta(days=7))
+    await app.services.lifecycle.finish_due(app.clock.now())
     assert await tg.attendance_ui.send_sheet(OWNER_ID, event_id) is SheetStatus.SENT
 
 
@@ -228,7 +230,7 @@ async def test_готово_записывает_явку_и_банит_по_п�
     assert event.attendance_marked_by == OWNER_ID
     edit = tg.session.of("EditMessageText")[-1]
     assert edit["message_id"] == mid
-    assert "Явка отмечена ✔. Неявок: 1" in edit["text"]
+    assert "Явка отмечена ✅. Неявок: 1" in edit["text"]
     assert "Выдано автобанов: 1" in edit["text"]
     assert "reply_markup" not in edit
     bans = await _bans(app)
@@ -238,7 +240,7 @@ async def test_готово_записывает_явку_и_банит_по_п�
 async def test_готово_без_неявок_никого_не_банит(app: App, tg: Harness, started: int) -> None:
     mid = await _sheet(tg, started)
     await tg.click(OWNER_ID, mid, "Готово")
-    assert "Явка отмечена ✔. Неявок: 0" in tg.session.of("EditMessageText")[-1]["text"]
+    assert "Явка отмечена ✅. Неявок: 0" in tg.session.of("EditMessageText")[-1]["text"]
     registrations = await _registrations(app, started)
     assert {r.attendance for r in registrations} == {Attendance.ATTENDED.value}
     assert await _bans(app) == []
@@ -346,8 +348,8 @@ async def test_сбой_пересчёта_банов_честно_предуп�
     await tg.click(OWNER_ID, mid, "Участник1")
     await tg.click(OWNER_ID, mid, "Готово")
     text = tg.session.of("EditMessageText")[-1]["text"]
-    assert "Явка отмечена ✔. Неявок: 1" in text
-    assert "Пересчёт банов для 1 участн. отложен: бот повторит его автоматически." in text
+    assert "Явка отмечена ✅. Неявок: 1" in text
+    assert "Пересчёт банов отложен для участников: 1. Бот повторит его автоматически." in text
     # Отметка при этом сохранена
     assert (await _event(app, started)).attendance_marked_at is not None
 
@@ -499,3 +501,15 @@ async def test_повторная_отправка_тому_же_админу_з
     ui._remember(1, OWNER_ID, 10)
     ui._remember(1, OWNER_ID, 11)
     assert ui._sent[1] == [(OWNER_ID, 11)]
+
+
+async def test_исправление_берёт_целевое_значение_с_кнопки_а_не_переключает_бд(
+    app: App, tg: Harness, started: int
+) -> None:
+    await app.services.attendance.mark(OWNER_ID, started, set())
+    first = await _sheet(tg, started)
+    second = await _sheet(tg, started)
+    # Оба админа видят «✅ Участник3» и жмут одновременно: итог один, а не взаимная отмена
+    await tg.click(OWNER_ID, first, "Участник3")
+    await tg.click(OWNER_ID, second, "Участник3")
+    assert (await _registrations(app, started))[2].attendance == Attendance.NO_SHOW.value

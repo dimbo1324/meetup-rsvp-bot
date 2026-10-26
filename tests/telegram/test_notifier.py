@@ -11,6 +11,7 @@ from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramMigrateToChat,
     TelegramRetryAfter,
 )
 from aiogram.methods import SendMessage
@@ -25,7 +26,8 @@ from meetup_bot.telegram.notifier import (
     TelegramNotifier,
     split_text,
 )
-from meetup_bot.texts.service import BACKUP_CAPTION
+from meetup_bot.texts.render import telegram_length
+from meetup_bot.texts.service import BACKUP_CAPTION, SERVICE_CHAT_UNAVAILABLE_TEXT
 from tests.helpers import App
 from tests.tg_fake import Harness
 
@@ -288,3 +290,106 @@ async def test_ошибка_отправки_документа_пробрасы
     # Обработку и лог берёт на себя задача бэкапа: локальная копия уже есть
     with pytest.raises(TelegramAPIError):
         await tg.notifier.send_service_document(backup)
+
+
+# ---- split_text: UTF-16 и HTML ----
+
+
+def test_длина_куска_считается_в_единицах_utf16() -> None:
+    # Эмодзи вне BMP — две единицы: 3000 штук — это 6000, а не 3000
+    chunks = split_text("😀" * 3000)
+    assert len(chunks) > 1
+    assert all(telegram_length(chunk) <= CHUNK_LIMIT for chunk in chunks)
+    assert "".join(chunks) == "😀" * 3000
+
+
+def test_строки_с_эмодзи_режутся_по_переносам_в_пределах_лимита() -> None:
+    text = "\n".join(["😀" * 900] * 4)
+    chunks = split_text(text)
+    assert all(telegram_length(chunk) <= CHUNK_LIMIT for chunk in chunks)
+    assert "\n".join(chunks) == text
+
+
+def test_длинная_строка_не_режется_посреди_тега_и_сущности() -> None:
+    line = "".join(f'<a href="https://example.com/{n}">ссылка &amp; {n}</a> ' for n in range(60))
+    chunks = split_text(line, limit=100)
+    assert len(chunks) > 1
+    assert "".join(chunks) == line
+    for chunk in chunks:
+        assert chunk.count("<") == chunk.count(">")
+        assert chunk.count("&") == chunk.count(";")
+        assert telegram_length(chunk) <= 100
+
+
+# ---- служебный чат недоступен ----
+
+
+def make_notifier(tg: Harness, app: App, owners: tuple[int, ...]) -> TelegramNotifier:
+    return TelegramNotifier(tg.bot, app.sessions, app.clock, SERVICE_CHAT, owner_ids=owners)
+
+
+def sent_to(tg: Harness, chat_id: int) -> list[str]:
+    return [c["text"] for c in tg.session.of("SendMessage") if c["chat_id"] == chat_id]
+
+
+async def test_миграция_чата_пишет_в_лог_новый_id_и_совет(
+    app: App, tg: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    notifier = make_notifier(tg, app, (1,))
+    fail_with(tg, TelegramMigrateToChat(_METHOD, "Bad Request: group migrated", -100777))
+    delivered = await notifier.send_service("текст")
+    assert delivered is False
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("-100777" in m and "SERVICE_CHAT_ID" in m for m in errors)
+
+
+async def test_миграция_чата_дублирует_сообщение_владельцам(app: App, tg: Harness) -> None:
+    notifier = make_notifier(tg, app, (1, 2))
+    fail_with(tg, TelegramMigrateToChat(_METHOD, "Bad Request: group migrated", -100777))
+    await notifier.send_service("важное")
+    for owner in (1, 2):
+        (text,) = sent_to(tg, owner)
+        assert "важное" in text
+        assert "-100777" in text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramForbiddenError(_METHOD, "Forbidden: bot was kicked from the supergroup chat"),
+        TelegramBadRequest(_METHOD, "Bad Request: chat not found"),
+    ],
+)
+async def test_недоступный_служебный_чат_дублируется_владельцам(
+    app: App, tg: Harness, error: Exception
+) -> None:
+    notifier = make_notifier(tg, app, (1, 2))
+    fail_with(tg, error)
+    delivered = await notifier.send_service("бэкап готов")
+    assert delivered is False
+    for owner in (1, 2):
+        (text,) = sent_to(tg, owner)
+        assert text.startswith(SERVICE_CHAT_UNAVAILABLE_TEXT)
+        assert "бэкап готов" in text
+
+
+async def test_успешная_отправка_владельцам_не_дублируется(app: App, tg: Harness) -> None:
+    notifier = make_notifier(tg, app, (1,))
+    assert await notifier.send_service("всё хорошо") is True
+    assert sent_to(tg, 1) == []
+
+
+async def test_прочая_ошибка_отправки_не_дублируется_владельцам(app: App, tg: Harness) -> None:
+    notifier = make_notifier(tg, app, (1,))
+    fail_with(tg, TelegramBadRequest(_METHOD, "Bad Request: can't parse entities"))
+    assert await notifier.send_service("текст") is False
+    assert sent_to(tg, 1) == []
+
+
+async def test_дублирование_владельцам_не_зацикливается_без_владельцев(
+    app: App, tg: Harness
+) -> None:
+    notifier = make_notifier(tg, app, ())
+    fail_with(tg, TelegramForbiddenError(_METHOD, "Forbidden: bot was kicked"))
+    assert await notifier.send_service("текст") is False
+    assert len(tg.session.of("SendMessage")) == 1

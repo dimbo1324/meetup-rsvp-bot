@@ -13,7 +13,6 @@ dependencies = [
     "pydantic-settings>=2.16",
     "tzdata>=2026.5",
     "uvloop>=0.23; sys_platform == 'linux'",
-    "structlog>=26.1",
     "sentry-sdk>=2.73",
 ]
 

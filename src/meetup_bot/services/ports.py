@@ -14,8 +14,8 @@ class Notifier(Protocol):
         """Личное сообщение; False, если написать нельзя (нет диалога или бот заблокирован)."""
         ...
 
-    async def send_service(self, text: str) -> None:
-        """Сообщение в служебный чат админов."""
+    async def send_service(self, text: str) -> bool:
+        """Сообщение в служебный чат админов; False, если хотя бы часть не доставлена."""
         ...
 
     async def send_attendance_prompt(self, admin_id: int, event_id: int) -> bool:
@@ -33,8 +33,8 @@ class NullNotifier:
     async def send_dm(self, user_id: int, text: str) -> bool:
         return False
 
-    async def send_service(self, text: str) -> None:
-        return None
+    async def send_service(self, text: str) -> bool:
+        return False
 
     async def send_attendance_prompt(self, admin_id: int, event_id: int) -> bool:
         return False

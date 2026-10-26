@@ -19,3 +19,16 @@ SCHEDULER_STOPPED_TEXT = "⚠️ Планировщик остановился: 
 BOT_STARTED_TEXT = "Бот запущен, версия {version}"
 ERROR_REPORT_TEXT = "⚠️ Ошибка: {kind}"
 BACKUP_CAPTION = "Резервная копия базы: {name}"
+DEV_MODE_MARK = "⚠️ РЕЖИМ DEV"
+SERVICE_CHAT_UNAVAILABLE_TEXT = "⚠️ Служебный чат недоступен, поэтому сообщение пришло вам лично."
+SERVICE_CHAT_MIGRATED_HINT = (
+    "Группа стала супергруппой с новым id. Укажите SERVICE_CHAT_ID={chat_id} в .env "
+    "и перезапустите бота."
+)
+SERVICE_CHAT_PUBLIC_TEXT = (
+    "⚠️ Служебный чат публичный или не является группой: резервные копии базы с данными "
+    "участников могут увидеть посторонние. Сделайте его закрытой группой."
+)
+SERVICE_CHAT_UNKNOWN_TEXT = (
+    "⚠️ Бот не видит служебный чат: проверьте SERVICE_CHAT_ID и что бот добавлен в чат."
+)

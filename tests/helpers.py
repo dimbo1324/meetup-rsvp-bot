@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -12,6 +15,7 @@ from meetup_bot.container import Services, build_services
 from meetup_bot.db.base import Base
 from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.safe import BackgroundTasks
 
 OWNER_ID = 1
 ADMIN_ID = 2
@@ -32,8 +36,9 @@ class RecordingNotifier:
         self.dms.append((user_id, text))
         return True
 
-    async def send_service(self, text: str) -> None:
+    async def send_service(self, text: str) -> bool:
         self.service.append(text)
+        return True
 
     async def send_attendance_prompt(self, admin_id: int, event_id: int) -> bool:
         self.prompts.append((admin_id, event_id))
@@ -51,6 +56,20 @@ class RecordingRefresher:
 
     def schedule(self, event_id: int) -> None:
         self.scheduled.append(event_id)
+
+
+class InlineBackgroundTasks(BackgroundTasks):
+    """Фоновые задачи стартуют сразу, до первого настоящего ожидания.
+
+    Записывающие порты не ждут сети, поэтому уведомление успевает записаться ещё внутри
+    `spawn`, и тестам не нужен `drain()` после каждого `register()`. Тесты самой отложенной
+    отправки берут обычный `BackgroundTasks`.
+    """
+
+    def spawn(self, effect: Coroutine[Any, Any, object]) -> None:
+        task = asyncio.Task(self._guarded(effect), eager_start=True)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
 
 @dataclass
@@ -78,6 +97,7 @@ async def make_app(tmp_path: Path, clock: FakeClock, **build_kwargs: object) -> 
     sessions = create_session_factory(engine)
     notifier = RecordingNotifier()
     refresher = RecordingRefresher()
+    build_kwargs.setdefault("background", InlineBackgroundTasks())
     services = await build_services(
         sessions,
         clock,

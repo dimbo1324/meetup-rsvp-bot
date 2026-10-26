@@ -2,34 +2,29 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.db.models import (
-    LIVE_REGISTRATION_STATUSES,
-    UNFINISHED_EVENT_STATUSES,
-    Ban,
-    BanReason,
-    Event,
-    Registration,
-    RegistrationStatus,
-    User,
-)
-from meetup_bot.repositories import admins, audit
+from meetup_bot.db.models import Ban, BanReason, RegistrationStatus
+from meetup_bot.repositories import admins, audit, events, registrations
 from meetup_bot.repositories import bans as bans_repo
 from meetup_bot.repositories import users as users_repo
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
-from meetup_bot.services.admin_support import RenderText, default_render_text, notify_promotions
+from meetup_bot.services.admin_support import (
+    Provided,
+    RenderText,
+    default_render_text,
+    notify_promotions,
+)
 from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, PostRefresher
+from meetup_bot.services.provided import resolve_or_default
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule, safe_send_dm
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
@@ -63,7 +58,7 @@ class BanService:
         locks: EventLocks,
         notifier: Notifier,
         post_refresher: PostRefresher,
-        rules_provider: Callable[[], RulesSettings] = RulesSettings,
+        rules_provider: Provided[RulesSettings] | None = None,
         render_text: RenderText | None = None,
     ) -> None:
         self._sessions = sessions
@@ -73,6 +68,9 @@ class BanService:
         self._refresher = post_refresher
         self._rules = rules_provider
         self._render: RenderText = render_text or default_render_text
+
+    def _rules_settings(self) -> RulesSettings:
+        return resolve_or_default(self._rules, RulesSettings)
 
     async def ban(
         self,
@@ -143,7 +141,7 @@ class BanService:
         Ручные баны не трогаем. Автоснятие помечается `auto_removed`, чтобы не обнулять
         счётчик неявок как ручной разбан.
         """
-        threshold = self._rules().ban_after_no_shows
+        threshold = self._rules_settings().ban_after_no_shows
         async with self._sessions() as session, session.begin():
             count = await bans_repo.count_no_shows(session, user_id)
             active = await bans_repo.get_active(session, user_id)
@@ -179,7 +177,7 @@ class BanService:
         и строго до открытия транзакции, как в остальных сервисах. Побочные эффекты
         (посты, сообщения продвинутым и забаненному) выполняются после коммита.
         """
-        remove = self._rules().remove_banned_from_future_events
+        remove = self._rules_settings().remove_banned_from_future_events
         for _ in range(_MAX_LOCK_ATTEMPTS):
             candidates: set[int] = set()
             if remove:
@@ -199,8 +197,8 @@ class BanService:
                     # Имя выбранного админом человека или заглушка для внешнего ключа на users
                     if user is not None:
                         await users_repo.upsert(session, user, now)
-                    elif await session.get(User, user_id) is None:
-                        await users_repo.upsert(session, UserInfo(user_id, ""), now)
+                    else:
+                        await users_repo.ensure_exists(session, user_id, now)
                     ban = Ban(
                         user_id=user_id,
                         active=True,
@@ -237,21 +235,11 @@ class BanService:
         for touched_id in sorted(touched):
             safe_schedule(self._refresher, touched_id)
         await notify_promotions(self._notifier, self._render, promoted)
-        if self._rules().notify_user_on_ban:
+        if self._rules_settings().notify_user_on_ban:
             await safe_send_dm(self._notifier, user_id, self._render("ban_notice", {}))
 
     async def _future_event_ids(self, session: AsyncSession, user_id: int) -> set[int]:
-        rows = await session.scalars(
-            select(Registration.event_id)
-            .join(Event, Registration.event_id == Event.id)
-            .where(
-                Registration.user_id == user_id,
-                Registration.status.in_(LIVE_REGISTRATION_STATUSES),
-                Event.status.in_(UNFINISHED_EVENT_STATUSES),
-                Event.starts_at > self._clock.now(),
-            )
-        )
-        return set(rows.all())
+        return await registrations.future_event_ids_of_user(session, user_id, self._clock.now())
 
     async def _remove_from_events(
         self,
@@ -264,17 +252,10 @@ class BanService:
         """Снимает записи и очередь; возвращает изменившиеся встречи и продвинутых из очереди."""
         touched: set[int] = set()
         promoted: list[Promotion] = []
-        late_hours = self._rules().late_promotion_hours
+        late_hours = self._rules_settings().late_promotion_hours
         for event_id in sorted(event_ids):
-            rows = await session.scalars(
-                select(Registration).where(
-                    Registration.event_id == event_id,
-                    Registration.user_id == user_id,
-                    Registration.status.in_(LIVE_REGISTRATION_STATUSES),
-                )
-            )
             freed_seat = False
-            for registration in rows.all():
+            for registration in await registrations.list_live_of_user(session, event_id, user_id):
                 if registration.status == RegistrationStatus.ACTIVE.value:
                     freed_seat = True
                 registration.status = RegistrationStatus.REMOVED.value
@@ -282,7 +263,7 @@ class BanService:
                 registration.removed_at = now
                 touched.add(event_id)
             await session.flush()
-            event = await session.get(Event, event_id)
+            event = await events.get(session, event_id)
             if freed_seat and event is not None:
                 promoted.extend(
                     await promote_waitlist(session, event, now, late_promotion_hours=late_hours)

@@ -159,13 +159,16 @@ async def test_устаревший_диалог_отвечает_подсказ
     assert reports(tg) == []
 
 
-async def test_устаревший_диалог_в_команде_молча_поглощается(
+async def test_устаревший_диалог_в_сообщении_отвечает_подсказкой_и_снимает_клавиатуру(
     app: App, tg: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     break_start(monkeypatch, app, UnknownIntent("нет интента"))
     await tg.feed(command_update(USER, "/start"))
     assert tg.session.of("AnswerCallbackQuery") == []
     assert reports(tg) == []
+    (reply,) = [c for c in tg.session.of("SendMessage") if c["chat_id"] == USER]
+    assert reply["text"] == STALE_DIALOG_TEXT
+    assert reply["reply_markup"] == {"remove_keyboard": True}
 
 
 async def test_сбой_ответа_на_устаревшую_кнопку_игнорируется(

@@ -20,7 +20,35 @@ class UserInfo:
     username: str | None = None
 
 
+async def get(session: AsyncSession, user_id: int) -> User | None:
+    return await session.get(User, user_id)
+
+
+async def ensure_exists(session: AsyncSession, user_id: int, now: datetime) -> User:
+    """Заглушка без имени для внешних ключей (бан по ID, владелец до первого /start).
+
+    Настоящие данные подтянутся при первом взаимодействии: `upsert` заменит пустое имя.
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        user = User(
+            id=user_id,
+            first_name="",
+            dm_available=False,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(user)
+        await session.flush()
+    return user
+
+
 async def upsert(session: AsyncSession, info: UserInfo, now: datetime) -> User:
+    """Создаёт пользователя или обновляет имя; без изменений в БД ничего не пишется.
+
+    Вызывается на каждое сообщение, поэтому лишняя запись (и сдвиг `updated_at`, по которому
+    сортируется список известных пользователей) недопустима.
+    """
     user = await session.get(User, info.id)
     if user is None:
         user = User(
@@ -33,13 +61,16 @@ async def upsert(session: AsyncSession, info: UserInfo, now: datetime) -> User:
             updated_at=now,
         )
         session.add(user)
-    elif info.first_name:
-        # Пустое имя приходит от заглушек (бан по ID, выбор без имени): известное не затираем
+        await session.flush()
+        return user
+    # Пустое имя приходит от заглушек (бан по ID, выбор без имени): известное не затираем
+    fresh = (info.first_name, info.last_name, info.username)
+    if info.first_name and fresh != (user.first_name, user.last_name, user.username):
         user.first_name = info.first_name
         user.last_name = info.last_name
         user.username = info.username
         user.updated_at = now
-    await session.flush()
+        await session.flush()
     return user
 
 

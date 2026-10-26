@@ -59,7 +59,8 @@ async def test_успешная_запись_показывает_дату_и_д
     event_id = await make_event(app)
     answer = await press(tg, event_id)
     assert answer["show_alert"] is True
-    assert answer["text"].startswith("Вы записаны на пятница, 23 октября, 16:30.")
+    # Новый текст по умолчанию (изменён вместе с итоговыми требованиями): встреча и время окончания
+    assert answer["text"].startswith("Вы записаны на встречу: пятница, 23 октября, 16:30–18:30.")
     assert "отмените запись до 22 октября, 20:00" in answer["text"]
 
 
@@ -265,6 +266,19 @@ async def test_первое_нажатие_регистрирует_пост(app
     assert post.inline_message_id == INLINE
     assert post.posted_by is None
     assert post.created_at == app.clock.now()
+
+
+async def test_отмена_не_регистрирует_пост(app: App, tg: Harness) -> None:
+    event_id = await make_event(app)
+    await press(tg, event_id, "c")
+    assert await posts_of(app, event_id) == []
+
+
+async def test_запись_с_гостем_регистрирует_пост(app: App, tg: Harness) -> None:
+    event_id = await make_event(app)
+    await app.services.settings.set("plus_one_enabled", True, OWNER_ID)
+    await press(tg, event_id, "j1")
+    assert len(await posts_of(app, event_id)) == 1
 
 
 async def test_повторные_нажатия_не_дублируют_пост(app: App, tg: Harness) -> None:

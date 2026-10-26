@@ -26,6 +26,7 @@ async def _big_event(app: App, count: int = GUESTS) -> int:
         assert event is not None
         starts_at = event.starts_at
     app.clock.advance(starts_at - app.clock.now() + timedelta(hours=1))
+    await app.services.lifecycle.finish_due(app.clock.now())
     return created.event_id
 
 

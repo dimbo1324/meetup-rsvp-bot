@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from meetup_bot.clock import Clock
 from meetup_bot.renderer.post import Participant, PostData
-from meetup_bot.repositories import events, registrations
+from meetup_bot.repositories import event_posts, events, registrations
 from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 from meetup_bot.services.names import public_name
 
@@ -48,3 +49,29 @@ async def load_post_data(
             plus_one_enabled=plus_one_enabled,
             waiting=waiting,
         )
+
+
+async def register_post(
+    sessions: async_sessionmaker[AsyncSession],
+    clock: Clock,
+    *,
+    event_id: int,
+    inline_message_id: str,
+    posted_by: int | None,
+    has_photo: bool | None,
+) -> bool:
+    """Запоминает разосланный inline-пост; True, если он новый.
+
+    Идемпотентно: `chosen_inline_result` и нажатие кнопки (ленивая регистрация) могут
+    прийти оба. `has_photo=None` — вид неизвестен, берётся по текущему фото встречи.
+    """
+    async with sessions() as session, session.begin():
+        _, created = await event_posts.register(
+            session,
+            event_id=event_id,
+            inline_message_id=inline_message_id,
+            posted_by=posted_by,
+            now=clock.now(),
+            has_photo=has_photo,
+        )
+        return created

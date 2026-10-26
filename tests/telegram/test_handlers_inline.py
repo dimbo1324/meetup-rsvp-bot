@@ -130,8 +130,11 @@ async def test_встреча_с_фото_выдаётся_фотографие�
     answer = await query_answer(tg, ADMIN_ID)
     (result,) = answer["results"]
     assert result["type"] == "photo"
-    assert result["id"] == f"event:{event_id}"
+    # Суффикс нужен, чтобы chosen_inline_result узнал вид разосланного поста
+    assert result["id"] == f"event:{event_id}:photo"
     assert result["photo_file_id"] == "photo-file-1"
+    assert result["title"].startswith("Встреча:")
+    assert result["description"] == "Занято 0 из 10 мест"
     assert "Записались: 0 из 10" in result["caption"]
     assert result["reply_markup"]["inline_keyboard"]
 
@@ -222,3 +225,24 @@ async def test_выбор_несуществующей_встречи_не_ро�
     # Внешний ключ не даст создать пост: ошибка логируется, исключение наружу не выходит
     await tg.feed(chosen_update(ADMIN_ID, "event:9999", INLINE_ID))
     assert tg.session.of("EditMessageText") == []
+
+
+async def test_выбор_фото_результата_запоминает_фото_пост(app: App, tg: Harness) -> None:
+    event_id = await make_event(app, photo_file_id="photo-file-1")
+    await tg.feed(chosen_update(ADMIN_ID, f"event:{event_id}:photo", INLINE_ID))
+    (post,) = await all_posts(app)
+    assert post.has_photo is True
+    assert post.last_photo_file_id == "photo-file-1"
+
+
+async def test_выбор_текстового_результата_запоминает_текстовый_пост_даже_с_фото_у_встречи(
+    app: App, tg: Harness
+) -> None:
+    # Фото добавили между выдачей списка и выбором: разосланный пост остался текстовым
+    event_id = await make_event(app, photo_file_id="photo-file-1")
+    await tg.feed(chosen_update(ADMIN_ID, f"event:{event_id}", INLINE_ID))
+    (post,) = await all_posts(app)
+    assert post.has_photo is False
+    await tg.updater.aclose()
+    assert tg.session.of("EditMessageText")
+    assert not tg.session.of("EditMessageCaption")

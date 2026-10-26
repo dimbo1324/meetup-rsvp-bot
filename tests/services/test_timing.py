@@ -6,6 +6,7 @@ import pytest
 from meetup_bot.services.timing import (
     InvalidEventTimes,
     ScheduleSettings,
+    clamp_deadline,
     compute_times,
     next_event_start,
     validate_times,
@@ -113,3 +114,23 @@ def test_запрос_явки_строго_после_начала() -> None:
 def test_naive_datetime_отвергается() -> None:
     with pytest.raises(ValueError):
         compute_times(datetime(2026, 10, 23, 16, 30), SETTINGS)
+
+
+def test_дедлайн_равный_моменту_создания_допустим() -> None:
+    times = compute_times(FRIDAY_START, SETTINGS)
+    validate_times(times, times.cancel_deadline_at)
+
+
+def test_clamp_deadline_поднимает_прошедший_дедлайн_до_момента_создания() -> None:
+    times = compute_times(FRIDAY_START, SETTINGS)
+    created = times.cancel_deadline_at + timedelta(hours=5)
+    clamped, changed = clamp_deadline(times, created)
+    assert changed
+    assert clamped.cancel_deadline_at == created
+    validate_times(clamped, created)
+
+
+def test_clamp_deadline_не_трогает_будущий_дедлайн() -> None:
+    times = compute_times(FRIDAY_START, SETTINGS)
+    clamped, changed = clamp_deadline(times, CREATED_AT)
+    assert (clamped, changed) == (times, False)

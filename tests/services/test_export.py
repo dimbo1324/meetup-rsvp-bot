@@ -174,7 +174,8 @@ async def test_csv_отметка_явки_попадает_в_колонку_at
     await app.services.registration.register(event_id, person(1))
     await app.services.registration.register(event_id, person(2))
     no_show = await reg_id(app, event_id, person(2).id)
-    app.clock.advance(timedelta(days=1, hours=9))  # после начала встречи
+    app.clock.advance(timedelta(days=1, hours=9))  # после закрытия записи
+    await app.services.lifecycle.finish_due(app.clock.now())
     await app.services.attendance.mark(ADMIN_ID, event_id, {no_show})
     rows = (await export(app, event_id))[1:]
     assert [(r[2], r[9]) for r in rows] == [("Участник1", "attended"), ("Участник2", "no_show")]

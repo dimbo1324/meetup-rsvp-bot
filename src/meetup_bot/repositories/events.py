@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from meetup_bot.db.models import Event, Registration, RegistrationStatus
+from meetup_bot.db.models import Event, EventStatus, Registration, RegistrationStatus
 
 
 async def get(session: AsyncSession, event_id: int) -> Event | None:
@@ -39,3 +40,31 @@ async def seats_taken_map(session: AsyncSession, event_ids: Sequence[int]) -> di
     )
     taken = {event_id: int(total or 0) for event_id, total in rows.all()}
     return {event_id: taken.get(event_id, 0) for event_id in event_ids}
+
+
+async def unevaluated_marked_ids(session: AsyncSession) -> list[int]:
+    """Встречи с отмеченной явкой, по которым пересчёт банов ещё не завершён (кроме отменённых)."""
+    rows = await session.scalars(
+        select(Event.id)
+        .where(
+            Event.attendance_marked_at.is_not(None),
+            Event.bans_evaluated_at.is_(None),
+            Event.status != EventStatus.CANCELLED.value,
+        )
+        .order_by(Event.id)
+    )
+    return list(rows.all())
+
+
+async def expired_unmarked_ids(session: AsyncSession, started_before: datetime) -> list[int]:
+    """Завершённые встречи без отметки явки, начавшиеся раньше `started_before`."""
+    rows = await session.scalars(
+        select(Event.id)
+        .where(
+            Event.attendance_marked_at.is_(None),
+            Event.status == EventStatus.FINISHED.value,
+            Event.starts_at < started_before,
+        )
+        .order_by(Event.id)
+    )
+    return list(rows.all())

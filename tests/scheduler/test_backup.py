@@ -384,3 +384,13 @@ async def test_бэкап_берёт_часовой_пояс_из_настрое
     await app.services.settings.set("timezone", "UTC", 1)
     assert (await app.services.scheduler.tick())["backup"] == 1
     assert os.path.exists(app.tmp_path / "backups" / "bot-2026-10-22.db")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-права на Windows не применяются")
+async def test_права_существующего_каталога_бэкапов_ужесточаются(
+    source: Path, backups: Path
+) -> None:
+    backups.mkdir()
+    backups.chmod(0o755)
+    await backup_database(source, backups, NOW, timezone=TZ)
+    assert backups.stat().st_mode & 0o777 == 0o700

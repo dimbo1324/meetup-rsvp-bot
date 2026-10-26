@@ -30,6 +30,10 @@ ANOTHER_ADMIN = "другой админ"
 ERROR_TEXTS: dict[ErrorCode, str] = {
     ErrorCode.ALREADY_ADMIN: "Этот пользователь уже админ.",
     ErrorCode.ALREADY_REGISTERED: "Этот человек уже записан на встречу.",
+    ErrorCode.ATTENDANCE_ALREADY_MARKED: (
+        "Явка по этой встрече уже отмечена: переносить или заново открывать запись нельзя."
+    ),
+    ErrorCode.ATTENDANCE_NOT_YET: "Отметить явку можно после закрытия записи на встречу.",
     ErrorCode.ATTENDANCE_WINDOW_CLOSED: (
         f"Окно отметки явки закрыто (прошло более {ATTENDANCE_WINDOW.days} суток)."
     ),
@@ -40,7 +44,6 @@ ERROR_TEXTS: dict[ErrorCode, str] = {
         "Лимит не может быть ниже числа занятых мест. Сначала уберите лишних."
     ),
     ErrorCode.EVENT_CANCELLED: "Встреча отменена.",
-    ErrorCode.EVENT_NOT_STARTED: "Встреча ещё не началась: отметить явку пока нельзя.",
     ErrorCode.INVALID_ATTENDANCE: "Недопустимая отметка явки.",
     ErrorCode.INVALID_CAPACITY: (
         f"Лимит мест должен быть числом от {MIN_CAPACITY} до {MAX_CAPACITY}."

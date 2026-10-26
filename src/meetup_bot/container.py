@@ -33,6 +33,7 @@ from meetup_bot.scheduler.tick import Scheduler
 from meetup_bot.services.admin_support import RenderText
 from meetup_bot.services.admins import AdminService
 from meetup_bot.services.attendance import AttendanceService
+from meetup_bot.services.attendance_prompts import AttendancePromptService
 from meetup_bot.services.bans import BanService
 from meetup_bot.services.events import EventService
 from meetup_bot.services.export import ExportService
@@ -42,6 +43,8 @@ from meetup_bot.services.participants import ParticipantService
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.registration import RegistrationService
+from meetup_bot.services.reminders import ReminderService
+from meetup_bot.services.safe import BackgroundTasks
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.services.users import UserService
 from meetup_bot.texts.defaults import TEXT_PREFIX
@@ -63,6 +66,8 @@ class Services:
     post_refresher: PostRefresher
     notifier: Notifier
     users: UserService
+    # Фоновые уведомления; при остановке приложения вызвать `await background.aclose()`
+    background: BackgroundTasks
 
 
 def make_text_renderer(settings: SettingsService) -> RenderText:
@@ -85,10 +90,12 @@ async def build_services(
     post_refresher: PostRefresher | None = None,
     post_refresher_factory: Callable[[SettingsService], PostRefresher] | None = None,
     send_backup: SendDocument | None = None,
+    background: BackgroundTasks | None = None,
 ) -> Services:
     """Собирает все сервисы и планировщик. Вызывать один раз при старте приложения."""
     notifier = notifier or NullNotifier()
     locks = EventLocks()
+    background = background or BackgroundTasks()
 
     settings = SettingsService(sessions, clock)
     await settings.load()
@@ -108,6 +115,15 @@ async def build_services(
             photo_file_id=d.photo_file_id,
         )
 
+    bans = BanService(
+        sessions,
+        clock,
+        locks,
+        notifier,
+        post_refresher,
+        rules_provider=settings.rules_now,
+        render_text=render,
+    )
     events = EventService(
         sessions,
         clock,
@@ -117,6 +133,7 @@ async def build_services(
         post_refresher=post_refresher,
         rules=settings.rules_now,
         render_text=render,
+        ban_service=bans,
     )
     registration = RegistrationService(
         sessions,
@@ -128,15 +145,7 @@ async def build_services(
         options_provider=settings.options_now,
         render_text=render,
         schedule=settings.schedule_now,
-    )
-    bans = BanService(
-        sessions,
-        clock,
-        locks,
-        notifier,
-        post_refresher,
-        rules_provider=settings.rules_now,
-        render_text=render,
+        background=background,
     )
     attendance = AttendanceService(sessions, clock, locks, bans, rules_provider=settings.rules_now)
     participants = ParticipantService(
@@ -160,10 +169,12 @@ async def build_services(
         defaults_provider=defaults,
     )
 
+    attendance_prompts = AttendancePromptService(sessions, notifier, settings.schedule_now)
+
     # Порядок важен: сначала создаём и напоминаем, потом закрываем и завершаем, затем явка
     tasks: list[ScheduledTask] = [
         AutoCreateTask(lifecycle, settings.rules_now),
-        ReminderTask(sessions, notifier, settings.rules_now, render),
+        ReminderTask(ReminderService(sessions, notifier, settings.rules_now, render)),
         PostReminderTask(
             PostReminderService(
                 sessions, notifier, settings.rules_now, settings.schedule_now, locks=locks
@@ -171,8 +182,8 @@ async def build_services(
         ),
         CloseRegistrationTask(lifecycle),
         FinishEventsTask(lifecycle),
-        AttendancePromptTask(sessions, notifier),
-        AttendanceReminderTask(sessions, notifier, settings.schedule_now),
+        AttendancePromptTask(attendance_prompts),
+        AttendanceReminderTask(attendance_prompts),
         AttendanceExpireTask(attendance),
         BanRecheckTask(attendance),
         BackupTask(
@@ -199,4 +210,5 @@ async def build_services(
         post_refresher=post_refresher,
         notifier=notifier,
         users=UserService(sessions, clock),
+        background=background,
     )

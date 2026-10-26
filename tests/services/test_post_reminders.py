@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from meetup_bot.db.models import Event, EventStatus
 from meetup_bot.repositories import event_posts
 from meetup_bot.scheduler.tasks import PostReminderTask
+from meetup_bot.services.defaults import POST_REMINDER_RETRY
 from meetup_bot.services.post_reminders import PostReminderService
 from meetup_bot.services.rules import RulesSettings
 from tests.helpers import ADMIN_ID, OWNER_ID, App, RecordingNotifier
@@ -207,25 +208,54 @@ async def test_отметка_коммитится_до_отправки(app: Ap
 
 
 class FailingNotifier(RecordingNotifier):
-    async def send_service(self, text: str) -> None:
+    async def send_service(self, text: str) -> bool:
         raise RuntimeError("сеть")
 
 
-async def test_сбой_отправки_не_ломает_и_не_повторяется(app: App) -> None:
+async def test_сбой_отправки_не_ломает_а_отметка_снимается_для_повтора(app: App) -> None:
     event_id = await create_event(app)
     notifier = FailingNotifier()
     now = go_to(app, REMIND_AT)
     assert await service(app, notifier).send_due(now) == [event_id]
-    assert await service(app, notifier).send_due(now + timedelta(minutes=1)) == []
-    assert (await get_event(app, event_id)).post_reminder_sent_at == now
+    assert (await get_event(app, event_id)).post_reminder_sent_at is None
 
 
-async def test_принимает_асинхронный_провайдер_правил(app: App) -> None:
+async def test_недоставленное_напоминание_не_повторяется_чаще_интервала(app: App) -> None:
+    event_id = await create_event(app)
+    notifier = FailingNotifier()
+    now = go_to(app, REMIND_AT)
+    svc = service(app, notifier)
+    assert await svc.send_due(now) == [event_id]
+    assert await svc.send_due(now + POST_REMINDER_RETRY - timedelta(seconds=1)) == []
+    assert await svc.send_due(now + POST_REMINDER_RETRY) == [event_id]
+
+
+async def test_повтор_после_сбоя_доставляется_и_больше_не_шлётся(app: App) -> None:
+    event_id = await create_event(app)
+
+    class Flaky(RecordingNotifier):
+        failing = True
+
+        async def send_service(self, text: str) -> bool:
+            if self.failing:
+                return False
+            return await super().send_service(text)
+
+    notifier = Flaky()
+    now = go_to(app, REMIND_AT)
+    svc = service(app, notifier)
+    await svc.send_due(now)
+    notifier.failing = False
+    retry_at = now + POST_REMINDER_RETRY
+    assert await svc.send_due(retry_at) == [event_id]
+    assert len(notifier.service) == 1
+    assert (await get_event(app, event_id)).post_reminder_sent_at == retry_at
+    assert await svc.send_due(retry_at + POST_REMINDER_RETRY) == []
+
+
+async def test_принимает_значение_правил_вместо_провайдера(app: App) -> None:
     await create_event(app)
-
-    async def rules() -> RulesSettings:
-        return RulesSettings(post_reminder_days_before=0)
-
+    rules = RulesSettings(post_reminder_days_before=0)
     svc = PostReminderService(app.sessions, app.notifier, rules, app.services.settings.schedule_now)
     assert await svc.send_due(go_to(app, REMIND_AT)) == []
 

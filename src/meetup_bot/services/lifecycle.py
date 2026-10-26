@@ -12,24 +12,22 @@ from __future__ import annotations
 
 import enum
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import UNFINISHED_EVENT_STATUSES, Event, EventStatus
 from meetup_bot.renderer.post import participant_line
-from meetup_bot.repositories import audit
+from meetup_bot.repositories import audit, schedule
 from meetup_bot.services.admin_support import (
     Provided,
     chunk_lines,
     resolve,
-    resolve_any,
 )
 from meetup_bot.services.defaults import DEFAULT_CAPACITY
 from meetup_bot.services.errors import InvalidOperation
@@ -57,9 +55,6 @@ logger = logging.getLogger(__name__)
 # Сколько после закрытия записи итог ещё актуален, даже если запрос явки совпал с закрытием
 CLOSED_SUMMARY_GRACE = timedelta(minutes=30)
 
-# Провайдер может быть и синхронным, и асинхронным
-RulesProvider = Callable[[], RulesSettings | Awaitable[RulesSettings]]
-
 
 @dataclass(frozen=True)
 class EventDefaults:
@@ -72,7 +67,7 @@ class EventDefaults:
     photo_file_id: str | None = None
 
 
-DefaultsProvider = Callable[[], EventDefaults | Awaitable[EventDefaults]]
+DefaultsProvider = Callable[[], EventDefaults]
 
 
 class AutoCreateStatus(enum.StrEnum):
@@ -230,7 +225,7 @@ class LifecycleService:
     ) -> AutoCreateResult:
         defaults = EventDefaults()
         if self._defaults_provider is not None:
-            defaults = await resolve_any(self._defaults_provider)
+            defaults = self._defaults_provider()
         try:
             event_id = await self._events.create_event(
                 starts_at=starts_at,
@@ -259,25 +254,15 @@ class LifecycleService:
     async def _close_due_ids(self, now: datetime) -> list[int]:
         # Выборка без блокировок: решающая проверка повторяется под блокировкой встречи
         async with self._sessions() as session:
-            stmt = select(Event.id).where(
-                Event.status == EventStatus.OPEN.value,
-                Event.registration_closes_at <= now,
-            )
-            return list((await session.scalars(stmt.order_by(Event.id))).all())
+            return await schedule.ids_to_close(session, now)
 
     async def _finish_due_ids(self, now: datetime) -> list[int]:
         async with self._sessions() as session:
-            stmt = select(Event.id).where(
-                Event.status.in_(UNFINISHED_EVENT_STATUSES),
-                Event.starts_at <= now,
-                Event.registration_closes_at <= now,
-            )
-            return list((await session.scalars(stmt.order_by(Event.id))).all())
+            return await schedule.ids_to_finish(session, now)
 
     async def _key_exists(self, key: str) -> bool:
         async with self._sessions() as session:
-            found = await session.scalar(select(Event.id).where(Event.recurrence_key == key))
-            return found is not None
+            return await schedule.recurrence_key_exists(session, key)
 
     async def _send_closed_summary(self, event_id: int) -> None:
         timezone = self._schedule.timezone

@@ -27,11 +27,12 @@ MESSAGE_TEXT_KEYS: frozenset[str] = frozenset(
 
 DEFAULT_TEXTS: dict[str, str] = {
     "text.registered": (
-        "Вы записаны на {weekday}, {date}, {time}. "
+        "Вы записаны на встречу: {weekday}, {date}, {time}–{end_time}. "
         "Если планы изменятся, отмените запись до {deadline}."
     ),
     "text.registered_late": (
-        "Вы записаны на {weekday}, {date}, {time}. Обратите внимание: отменить запись уже нельзя."
+        "Вы записаны на встречу: {weekday}, {date}, {time}–{end_time}. "
+        "Обратите внимание: отменить запись уже нельзя."
     ),
     "text.full": "Извините, мест не осталось. Попробуйте в следующий раз!",
     "text.waitlisted": (
@@ -53,10 +54,12 @@ DEFAULT_TEXTS: dict[str, str] = {
     "text.not_registered": "Вы не были записаны на эту встречу.",
     "text.enable_dm_hint": "Нажмите «Старт» у бота, чтобы получать напоминания.",
     "text.reminder": (
-        "Напоминаем: завтра встреча! {weekday}, {date}, {time}, {place}. "
+        "Напоминаем о встрече: {weekday}, {date}, {time}–{end_time}, {place}. "
         "Не сможете прийти? Отмените запись до {deadline}."
     ),
-    "text.promoted": "Освободилось место — вы записаны на {weekday}, {date}, {time}!",
+    "text.promoted": (
+        "Освободилось место — вы записаны на встречу: {weekday}, {date}, {time}–{end_time}!"
+    ),
     "text.event_cancelled": "Встреча {date} отменена. {reason}",
     "text.event_moved": "Встреча перенесена: теперь {weekday}, {date}, {time}, {place}.",
     "text.attendance_marked_by": "Явку отметил(а) {name}",

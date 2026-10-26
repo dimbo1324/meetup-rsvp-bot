@@ -13,6 +13,7 @@ from meetup_bot.repositories import events
 from meetup_bot.services.errors import InvalidOperation, NotFound, PermissionDenied
 from meetup_bot.services.events import UNSET
 from meetup_bot.services.registration import RegisterStatus
+from meetup_bot.services.settings_schema import get_spec
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 STRANGER = 777
@@ -675,7 +676,16 @@ async def test_закрытие_записи_раньше_начала_откл�
     assert exc.value.code == "invalid_times"
 
 
-async def test_закрытие_записи_позже_запроса_явки_отклоняется(app: App) -> None:
+async def test_закрытие_записи_позже_запроса_явки_поднимает_запрос_явки(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    later = event.attendance_prompt_at + timedelta(minutes=1)
+    await app.services.events.edit_moments(OWNER_ID, event_id, registration_closes_at=later)
+    updated = await load(app, event_id)
+    assert (updated.registration_closes_at, updated.attendance_prompt_at) == (later, later)
+
+
+async def test_явный_запрос_явки_раньше_закрытия_записи_отклоняется(app: App) -> None:
     event_id = await make_event(app)
     event = await load(app, event_id)
     with pytest.raises(InvalidOperation) as exc:
@@ -683,6 +693,23 @@ async def test_закрытие_записи_позже_запроса_явки_
             OWNER_ID,
             event_id,
             registration_closes_at=event.attendance_prompt_at + timedelta(minutes=1),
+            attendance_prompt_at=event.attendance_prompt_at,
+        )
+    assert exc.value.code == "invalid_times"
+
+
+async def test_закрытие_записи_не_дальше_предела_настройки_от_начала(app: App) -> None:
+    event_id = await make_event(app)
+    event = await load(app, event_id)
+    limit = timedelta(minutes=get_spec("registration_close_minutes_after_start").max or 0)
+    await app.services.events.edit_moments(
+        OWNER_ID, event_id, registration_closes_at=event.starts_at + limit
+    )
+    with pytest.raises(InvalidOperation) as exc:
+        await app.services.events.edit_moments(
+            OWNER_ID,
+            event_id,
+            registration_closes_at=event.starts_at + limit + timedelta(minutes=1),
         )
     assert exc.value.code == "invalid_times"
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.db.models import AdminRole, User
+from meetup_bot.db.models import AdminRole
 from meetup_bot.repositories import admins, audit, users
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
@@ -42,9 +42,7 @@ class AdminService:
         async with self._sessions() as session, session.begin():
             for owner_id in sorted(wanted):
                 # Заглушка нужна из-за внешнего ключа; настоящие данные подтянутся при /start
-                if await session.get(User, owner_id) is None:
-                    session.add(User(id=owner_id, created_at=now, updated_at=now))
-                    await session.flush()
+                await users.ensure_exists(session, owner_id, now)
                 admin = await admins.get(session, owner_id)
                 if admin is None:
                     await admins.insert(

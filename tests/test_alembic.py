@@ -173,3 +173,46 @@ def test_откат_0005_сохраняет_встречи(tmp_path: Path) -> No
         assert conn.execute("SELECT starts_at FROM events").fetchall() == [
             ("2026-10-24 20:00:00.000000",)
         ]
+
+
+def _insert_post(db: Path, event_id: int, inline_id: str) -> None:
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.execute(
+            "INSERT INTO event_posts (event_id, inline_message_id, created_at, is_dead) "
+            "VALUES (?, ?, '2026-10-24 12:00:00.000000', 0)",
+            (event_id, inline_id),
+        )
+
+
+def test_миграция_0006_заполняет_вид_старых_постов_по_фото_встречи(tmp_path: Path) -> None:
+    db = tmp_path / "old.db"
+    assert _alembic(db, "upgrade", "0005").returncode == 0
+    with closing(sqlite3.connect(db)) as conn, conn:
+        for starts_at, photo in (("2026-10-24 20:00:00.000000", "photo-1"), ("2026-10-31", None)):
+            conn.execute(
+                "INSERT INTO events (status, starts_at, ends_at, capacity, description_html, "
+                "place, place_url, photo_file_id, cancel_deadline_at, registration_closes_at, "
+                "reminder_at, attendance_prompt_at, created_at, updated_at) "
+                "VALUES ('open', ?1, ?1, 10, '', '', '', ?2, ?1, ?1, ?1, ?1, ?1, ?1)",
+                (starts_at, photo),
+            )
+    _insert_post(db, 1, "with-photo")
+    _insert_post(db, 2, "without-photo")
+    result = _alembic(db, "upgrade", "head")
+    assert result.returncode == 0, result.stderr
+    with closing(sqlite3.connect(db)) as conn:
+        rows = conn.execute(
+            "SELECT inline_message_id, has_photo, last_photo_file_id FROM event_posts ORDER BY id"
+        ).fetchall()
+    assert rows == [("with-photo", 1, "photo-1"), ("without-photo", 0, None)]
+
+
+def test_миграция_0006_откат_и_повторное_применение(tmp_path: Path) -> None:
+    db = tmp_path / "clean.db"
+    assert _alembic(db, "upgrade", "head").returncode == 0
+    result = _alembic(db, "downgrade", "0005")
+    assert result.returncode == 0, result.stderr
+    with closing(sqlite3.connect(db)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(event_posts)")}
+    assert not {"has_photo", "last_photo_file_id"} & columns
+    assert _alembic(db, "upgrade", "head").returncode == 0

@@ -27,11 +27,13 @@ async def register(
     inline_message_id: str,
     posted_by: int | None,
     now: datetime,
+    has_photo: bool | None = None,
 ) -> tuple[EventPost, bool]:
     """Регистрирует пост; идемпотентно. Возвращает (пост, создан_ли_сейчас).
 
     Вызывается и из `chosen_inline_result`, и при первом нажатии кнопки (lazy registration),
     поэтому повторная регистрация того же `inline_message_id` не создаёт дубль.
+    `has_photo=None` — вид поста неизвестен, берётся по текущему фото встречи.
     """
     existing = await get_by_inline_id(session, inline_message_id)
     if existing is not None:
@@ -40,11 +42,17 @@ async def register(
             existing.is_dead = False
             existing.last_render_hash = None
         return existing, False
+    event = await session.get(Event, event_id)
+    photo = event.photo_file_id if event is not None else None
+    if has_photo is None:
+        has_photo = bool(photo)
     post = EventPost(
         event_id=event_id,
         inline_message_id=inline_message_id,
         posted_by=posted_by,
         created_at=now,
+        has_photo=has_photo,
+        last_photo_file_id=photo if has_photo else None,
     )
     session.add(post)
     await session.flush()
@@ -96,9 +104,17 @@ async def mark_dead(session: AsyncSession, post_id: int) -> None:
 
 
 async def mark_edited(
-    session: AsyncSession, post_id: int, *, content_hash: str, now: datetime
+    session: AsyncSession,
+    post_id: int,
+    *,
+    content_hash: str,
+    now: datetime,
+    has_photo: bool,
+    photo_file_id: str | None,
 ) -> None:
     post = await session.get(EventPost, post_id)
     if post is not None:
         post.last_render_hash = content_hash
         post.last_edited_at = now
+        post.has_photo = has_photo
+        post.last_photo_file_id = photo_file_id

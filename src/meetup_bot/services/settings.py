@@ -274,27 +274,3 @@ class SettingsService:
                     )
             self._version += 1
             self._cache().pop(key, None)
-
-    async def render_text(self, key: str, *, escape_html: bool = True, **variables: object) -> str:
-        await self._load()
-        return self.render_text_now(key, escape_html=escape_html, **variables)
-
-    async def timezone(self) -> ZoneInfo:
-        await self._load()
-        return self.timezone_now()
-
-    async def schedule_settings(self) -> ScheduleSettings:
-        await self._load()
-        return self.schedule_now()
-
-    async def registration_options(self) -> RegistrationOptions:
-        await self._load()
-        return self.options_now()
-
-    async def rules_settings(self) -> RulesSettings:
-        await self._load()
-        return self.rules_now()
-
-    async def default_event_params(self) -> DefaultEventParams:
-        await self._load()
-        return self.defaults_now()

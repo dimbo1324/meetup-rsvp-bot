@@ -6,7 +6,8 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import Router
-from aiogram.types import ErrorEvent
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import ErrorEvent, ReplyKeyboardRemove
 from aiogram_dialog.api.exceptions import (
     InvalidStackIdError,
     OutdatedIntent,
@@ -41,6 +42,13 @@ async def on_error(event: ErrorEvent, notifier: Notifier, clock: Clock) -> bool:
         stale = event.update.callback_query
         if stale is not None:
             await safe_answer(stale, STALE_DIALOG_TEXT)
+        stale_message = event.update.message
+        if stale_message is not None:
+            # Старая клавиатура ответов могла остаться у человека: убираем её вместе с ответом
+            try:
+                await stale_message.answer(STALE_DIALOG_TEXT, reply_markup=ReplyKeyboardRemove())
+            except TelegramAPIError:
+                logger.warning("не удалось ответить на сообщение в устаревшем диалоге")
         return True
     # Трейсбек идёт только в лог: в нём могут быть данные пользователей, а токен в него не попадает
     logger.error("необработанная ошибка в обработчике: %s", kind, exc_info=exception)

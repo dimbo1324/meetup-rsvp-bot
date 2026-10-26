@@ -186,6 +186,10 @@ class EventPost(Base):
     last_render_hash: Mapped[str | None] = mapped_column(String(64), default=None)
     last_edited_at: Mapped[datetime | None] = mapped_column(UtcDateTime, default=None)
     is_dead: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Вид разосланного сообщения: фото-пост нельзя превратить в текстовый и обратно
+    has_photo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Фото, которое сейчас показано в фото-посте: по нему видно, что нужно сменить медиа
+    last_photo_file_id: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class Ban(Base):

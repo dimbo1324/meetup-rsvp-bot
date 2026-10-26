@@ -1,26 +1,23 @@
-"""Отметка явки и её исправление (раздел 5.8, сценарий 4.6)."""
+"""Отметка явки и её исправление (раздел 5.8, сценарий 4.6).
+
+Явка отмечается только у завершённой встречи (`finished`: наступили и начало, и закрытие
+записи): пока запись открыта, состав участников ещё меняется.
+"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.db.models import (
-    Attendance,
-    Event,
-    EventStatus,
-    Registration,
-    RegistrationStatus,
-    User,
-)
+from meetup_bot.db.models import Attendance, Event, EventStatus, RegistrationStatus
 from meetup_bot.repositories import audit, events, registrations
+from meetup_bot.repositories import users as users_repo
 from meetup_bot.services import access
+from meetup_bot.services.admin_support import Provided
 from meetup_bot.services.bans import BanOutcome, BanService
 from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
@@ -31,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 # Окно отметки и исправления явки, считая от начала встречи
 ATTENDANCE_WINDOW = timedelta(days=7)
+
+
+def attendance_window_open(event: Event, now: datetime) -> bool:
+    """Можно ли сейчас отмечать или исправлять явку: встреча завершена и окно не истекло."""
+    return event.status == EventStatus.FINISHED.value and now <= event.starts_at + ATTENDANCE_WINDOW
 
 
 class AlreadyMarked(DomainError):
@@ -52,8 +54,22 @@ class SheetRow:
 
 
 @dataclass(frozen=True)
+class SheetInfo:
+    """Всё для листа явки: данные встречи, режим и участники."""
+
+    event_id: int
+    starts_at: datetime
+    ends_at: datetime
+    place: str
+    # Явка уже отмечена: нажатие на имя сразу правит БД, «Готово» не нужна
+    correction: bool
+    # До какого момента можно отмечать и исправлять
+    window_ends_at: datetime
+    rows: list[SheetRow]
+
+
+@dataclass(frozen=True)
 class MarkResult:
-    marked_by: int
     no_shows: tuple[int, ...]  # id записей, отмеченных как неявка
     new_bans: tuple[int, ...]  # id пользователей, получивших автобан
     # Пользователи, для которых пересчёт бана упал: дожмёт BanRecheckTask (`retry_pending_bans`)
@@ -67,43 +83,46 @@ class AttendanceService:
         clock: Clock,
         locks: EventLocks,
         ban_service: BanService,
-        rules_provider: Callable[[], RulesSettings] = RulesSettings,
+        rules_provider: Provided[RulesSettings] | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
         self._locks = locks
         self._bans = ban_service
+        # Правила читает BanService; параметр оставлен ради совместимости сборки
         self._rules = rules_provider
+
+    async def sheet_info(self, actor_id: int, event_id: int) -> SheetInfo:
+        """Данные листа явки либо код ошибки: нет прав, нет встречи, отменена, рано, поздно."""
+        async with self._sessions() as session, session.begin():
+            event = await self._load_finished(session, actor_id, event_id)
+            now = self._clock.now()
+            self._require_window(event, now)
+            return SheetInfo(
+                event_id=event_id,
+                starts_at=event.starts_at,
+                ends_at=event.ends_at,
+                place=event.place,
+                correction=event.attendance_marked_at is not None,
+                window_ends_at=event.starts_at + ATTENDANCE_WINDOW,
+                rows=await self._sheet_rows(session, event_id),
+            )
 
     async def get_sheet(self, actor_id: int, event_id: int) -> list[SheetRow]:
         async with self._sessions() as session, session.begin():
-            await access.require_admin(session, actor_id)
-            event = await self._require_event(session, event_id)
-            self._require_started(event, self._clock.now())
-            rows = await registrations.list_active_with_users(session, event_id)
-            return [
-                SheetRow(
-                    registration_id=reg.id,
-                    user_id=reg.user_id,
-                    name=display_name(user, reg.manual_name),
-                    guests=reg.guests,
-                    attendance=reg.attendance,
-                )
-                for reg, user in rows
-            ]
+            await self._load_finished(session, actor_id, event_id)
+            return await self._sheet_rows(session, event_id)
 
     async def mark(
         self, actor_id: int, event_id: int, no_show_registration_ids: set[int]
     ) -> MarkResult:
         """«Готово»: записывает отметки всем активным разом, остальные считаются пришедшими."""
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await access.require_admin(session, actor_id)
+            event = await self._load_finished(session, actor_id, event_id)
             now = self._clock.now()
-            event = await self._require_event(session, event_id)
-            self._require_started(event, now)
             if event.attendance_marked_at is not None:
                 marker = (
-                    await session.get(User, event.attendance_marked_by)
+                    await users_repo.get(session, event.attendance_marked_by)
                     if event.attendance_marked_by is not None
                     else None
                 )
@@ -113,7 +132,7 @@ class AttendanceService:
                 )
             self._require_window(event, now)
 
-            active = await self._active_registrations(session, event_id)
+            active = await registrations.list_active(session, event_id)
             if not no_show_registration_ids <= {reg.id for reg in active}:
                 raise InvalidOperation(
                     ErrorCode.UNKNOWN_REGISTRATION, "запись не найдена среди участников"
@@ -140,12 +159,7 @@ class AttendanceService:
 
         # Пересчёт банов вне блокировки этой встречи: бан берёт блокировки будущих встреч
         new_bans, failed = await self._evaluate_bans(actor_id, event_id, no_show_users)
-        return MarkResult(
-            actor_id,
-            tuple(sorted(no_show_registration_ids)),
-            tuple(new_bans),
-            tuple(failed),
-        )
+        return MarkResult(tuple(sorted(no_show_registration_ids)), tuple(new_bans), tuple(failed))
 
     async def _evaluate_bans(
         self, actor_id: int | None, event_id: int, user_ids: list[int]
@@ -181,17 +195,7 @@ class AttendanceService:
         Без проверки прав: вызывается планировщиком. Идемпотентно.
         """
         async with self._sessions() as session:
-            pending = list(
-                (
-                    await session.scalars(
-                        select(Event.id).where(
-                            Event.attendance_marked_at.is_not(None),
-                            Event.bans_evaluated_at.is_(None),
-                            Event.status != EventStatus.CANCELLED.value,
-                        )
-                    )
-                ).all()
-            )
+            pending = await events.unevaluated_marked_ids(session)
         done: list[int] = []
         for event_id in pending:
             async with self._sessions() as session:
@@ -205,30 +209,6 @@ class AttendanceService:
                 done.append(event_id)
         return done
 
-    async def reevaluate_bans(self, event_id: int) -> list[int]:
-        """Досчитывает баны по уже отмеченной встрече; возвращает выданные автобаны.
-
-        Без проверки прав: для системы и планировщика (дожать сбои из `mark`). Идемпотентно.
-        """
-        async with self._sessions() as session, session.begin():
-            event = await events.get(session, event_id)
-            if event is None or event.attendance_marked_at is None:
-                return []
-            marked_by = event.attendance_marked_by
-            user_ids = await registrations.no_show_user_ids(session, event_id)
-        new_bans: list[int] = []
-        for user_id in user_ids:
-            try:
-                outcome = await self._bans.recalc_for_attendance(marked_by, user_id, event_id)
-            except Exception:
-                logger.exception(
-                    "не удалось пересчитать бан (user_id=%s, event_id=%s)", user_id, event_id
-                )
-                continue
-            if outcome.banned:
-                new_bans.append(user_id)
-        return new_bans
-
     async def correct(
         self,
         actor_id: int,
@@ -236,19 +216,22 @@ class AttendanceService:
         registration_id: int,
         new_attendance: Attendance,
     ) -> BanOutcome:
-        """Исправляет отметку после «Готово»; результат говорит, выдан ли или снят бан."""
+        """Исправляет отметку после «Готово»; результат говорит, выдан ли или снят бан.
+
+        Принимает целевое значение, а не переключает: два админа, нажавших одновременно,
+        получают одно и то же состояние, а не отменяют друг друга.
+        """
         if new_attendance is Attendance.UNKNOWN:
             raise InvalidOperation(
                 ErrorCode.INVALID_ATTENDANCE, "можно выбрать только пришёл или неявка"
             )
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await access.require_admin(session, actor_id)
+            event = await self._load_finished(session, actor_id, event_id)
             now = self._clock.now()
-            event = await self._require_event(session, event_id)
             if event.attendance_marked_at is None:
                 raise InvalidOperation(ErrorCode.NOT_MARKED, "явка ещё не отмечена")
             self._require_window(event, now)
-            reg = await session.get(Registration, registration_id)
+            reg = await registrations.get(session, registration_id)
             # Отменённую админом «как неявка» запись можно исправить: так снимается ошибочный штраф
             correctable = reg is not None and (
                 reg.status == RegistrationStatus.ACTIVE.value
@@ -260,47 +243,42 @@ class AttendanceService:
             if reg is None or reg.event_id != event_id or not correctable:
                 raise NotFound(f"запись {registration_id} не найдена")
             previous = reg.attendance
-            reg.attendance = new_attendance.value
-            await audit.add(
-                session,
-                action="attendance.correct",
-                now=now,
-                actor_id=actor_id,
-                event_id=event_id,
-                target_user_id=reg.user_id,
-                payload={
-                    "registration_id": registration_id,
-                    "from": previous,
-                    "to": new_attendance.value,
-                },
-            )
+            if previous != new_attendance.value:
+                reg.attendance = new_attendance.value
+                await audit.add(
+                    session,
+                    action="attendance.correct",
+                    now=now,
+                    actor_id=actor_id,
+                    event_id=event_id,
+                    target_user_id=reg.user_id,
+                    payload={
+                        "registration_id": registration_id,
+                        "from": previous,
+                        "to": new_attendance.value,
+                    },
+                )
             user_id = reg.user_id
         if user_id is None:
             return BanOutcome(None)
         return await self._bans.recalc_for_attendance(actor_id, user_id, event_id)
 
     async def expire_unmarked(self, now: datetime) -> list[int]:
-        """Закрывает отметку для встреч старше 7 суток: все пришли, никого не баним."""
-        async with self._sessions() as session, session.begin():
-            candidates = list(
-                (
-                    await session.scalars(
-                        select(Event.id).where(
-                            Event.attendance_marked_at.is_(None),
-                            Event.status != EventStatus.CANCELLED.value,
-                            Event.starts_at < now - ATTENDANCE_WINDOW,
-                        )
-                    )
-                ).all()
-            )
+        """Закрывает отметку для завершённых встреч старше 7 суток: все пришли, никого не баним."""
+        async with self._sessions() as session:
+            candidates = await events.expired_unmarked_ids(session, now - ATTENDANCE_WINDOW)
         closed: list[int] = []
         for event_id in candidates:
             async with self._locks.lock(event_id), self._sessions() as session, session.begin():
                 event = await events.get(session, event_id)
                 # Пока ждали блокировку, админ мог успеть отметить явку
-                if event is None or event.attendance_marked_at is not None:
+                if (
+                    event is None
+                    or event.attendance_marked_at is not None
+                    or event.status != EventStatus.FINISHED.value
+                ):
                     continue
-                for reg in await self._active_registrations(session, event_id):
+                for reg in await registrations.list_active(session, event_id):
                     reg.attendance = Attendance.ATTENDED.value
                 event.attendance_marked_at = now
                 event.attendance_marked_by = None
@@ -313,29 +291,30 @@ class AttendanceService:
         return closed
 
     @staticmethod
-    async def _active_registrations(session: AsyncSession, event_id: int) -> list[Registration]:
-        rows = await session.scalars(
-            select(Registration).where(
-                Registration.event_id == event_id,
-                Registration.status == RegistrationStatus.ACTIVE.value,
+    async def _sheet_rows(session: AsyncSession, event_id: int) -> list[SheetRow]:
+        rows = await registrations.list_active_with_users(session, event_id)
+        return [
+            SheetRow(
+                registration_id=reg.id,
+                user_id=reg.user_id,
+                name=display_name(user, reg.manual_name),
+                guests=reg.guests,
+                attendance=reg.attendance,
             )
-        )
-        return list(rows.all())
+            for reg, user in rows
+        ]
 
     @staticmethod
-    async def _require_event(session: AsyncSession, event_id: int) -> Event:
-        event = await events.get(session, event_id)
-        if event is None:
-            raise NotFound(f"встреча {event_id} не найдена")
+    async def _load_finished(session: AsyncSession, actor_id: int, event_id: int) -> Event:
+        event = await access.load_event_for_admin(session, actor_id, event_id, editable_only=False)
         if event.status == EventStatus.CANCELLED.value:
             # Неявки по отменённой встрече не засчитываются, отмечать нечего
             raise InvalidOperation(ErrorCode.EVENT_CANCELLED, "встреча отменена")
+        if event.status != EventStatus.FINISHED.value:
+            raise InvalidOperation(
+                ErrorCode.ATTENDANCE_NOT_YET, "явку можно отметить после закрытия записи"
+            )
         return event
-
-    @staticmethod
-    def _require_started(event: Event, now: datetime) -> None:
-        if event.status != EventStatus.FINISHED.value and event.starts_at > now:
-            raise InvalidOperation(ErrorCode.EVENT_NOT_STARTED, "встреча ещё не началась")
 
     @staticmethod
     def _require_window(event: Event, now: datetime) -> None:

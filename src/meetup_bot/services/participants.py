@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -12,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import (
     LIVE_REGISTRATION_STATUSES,
-    UNFINISHED_EVENT_STATUSES,
     Attendance,
     Event,
     Registration,
@@ -23,16 +21,17 @@ from meetup_bot.repositories import audit, events, events_admin, registrations, 
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
+    Provided,
     RenderText,
     default_render_text,
     notify_promotions,
-    resolve,
 )
 from meetup_bot.services.bans import BanService
 from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import display_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
+from meetup_bot.services.provided import resolve_or_default
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
@@ -43,8 +42,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class AddResult:
     registration_id: int
-    seats_taken: int
-    capacity: int
     # Лимит превышен с подтверждением админа (force)
     over_capacity: bool
 
@@ -70,7 +67,6 @@ class ParticipantRow:
     guests: int
     status: str
     source: str
-    attendance: str
     created_at: datetime
     position: int | None  # место в очереди для waitlist
     # Дойдут ли личные сообщения; у ручной записи без аккаунта писать некому
@@ -83,6 +79,8 @@ class ParticipantList:
     waitlist: list[ParticipantRow]
     capacity: int
     seats_taken: int
+    # Дедлайн самостоятельной отмены прошёл: убрать запись можно только «как неявка» или без штрафа
+    after_deadline: bool
 
 
 class ParticipantService:
@@ -93,7 +91,7 @@ class ParticipantService:
         locks: EventLocks,
         notifier: Notifier | None = None,
         post_refresher: PostRefresher | None = None,
-        rules: RulesSettings | Callable[[], RulesSettings] | None = None,
+        rules: Provided[RulesSettings] | None = None,
         render_text: RenderText | None = None,
         *,
         ban_service: BanService | None = None,
@@ -153,7 +151,7 @@ class ParticipantService:
                     "over_capacity": over,
                 },
             )
-            result = AddResult(registration.id, taken + 1, event.capacity, over)
+            result = AddResult(registration.id, over)
         safe_schedule(self._refresher, event_id)
         return result
 
@@ -197,7 +195,9 @@ class ParticipantService:
 
     async def list_participants(self, actor_id: int, event_id: int) -> ParticipantList:
         async with self._sessions() as session:
-            event = await self._load_event(session, actor_id, event_id, editable_only=False)
+            event = await access.load_event_for_admin(
+                session, actor_id, event_id, editable_only=False
+            )
             rows = await events_admin.list_with_users(session, event_id, LIVE_REGISTRATION_STATUSES)
             active: list[ParticipantRow] = []
             waitlist: list[ParticipantRow] = []
@@ -211,14 +211,14 @@ class ParticipantService:
                     guests=registration.guests,
                     status=registration.status,
                     source=registration.source,
-                    attendance=registration.attendance,
                     created_at=registration.created_at,
                     position=len(waitlist) + 1 if is_waiting else None,
                     dm_available=user is not None and user.dm_available,
                 )
                 (waitlist if is_waiting else active).append(row)
             taken = await events.seats_taken(session, event_id)
-            return ParticipantList(active, waitlist, event.capacity, taken)
+            after_deadline = self._clock.now() > event.cancel_deadline_at
+            return ParticipantList(active, waitlist, event.capacity, taken, after_deadline)
 
     async def _release(
         self, actor_id: int, event_id: int, registration_id: int, *, as_no_show: bool, action: str
@@ -273,16 +273,8 @@ class ParticipantService:
         return result
 
     def _rules_settings(self) -> RulesSettings:
-        return RulesSettings() if self._rules is None else resolve(self._rules)
+        return resolve_or_default(self._rules, RulesSettings)
 
     @staticmethod
-    async def _load_event(
-        session: AsyncSession, actor_id: int, event_id: int, *, editable_only: bool = True
-    ) -> Event:
-        await access.require_admin(session, actor_id)
-        event = await events.get(session, event_id)
-        if event is None:
-            raise NotFound(f"встреча {event_id} не найдена")
-        if editable_only and event.status not in UNFINISHED_EVENT_STATUSES:
-            raise InvalidOperation(ErrorCode.BAD_STATUS)
-        return event
+    async def _load_event(session: AsyncSession, actor_id: int, event_id: int) -> Event:
+        return await access.load_event_for_admin(session, actor_id, event_id, editable_only=True)

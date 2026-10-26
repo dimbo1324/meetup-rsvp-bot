@@ -1,7 +1,7 @@
 """Общие мелочи админских сервисов: шаблоны, форматирование, нарезка, безопасная рассылка."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -12,7 +12,6 @@ from meetup_bot.services.admin_support import (
     default_render_text,
     notify_promotions,
     resolve,
-    resolve_any,
     send_dms,
 )
 from meetup_bot.services.safe import safe_schedule, safe_send_dm, safe_send_service
@@ -23,6 +22,7 @@ from tests.helpers import RecordingNotifier, RecordingRefresher
 
 # Суббота 1 ноября 17:00 в Монтевидео
 START = datetime(2026, 11, 1, 20, 0, tzinfo=UTC)
+END = START + timedelta(hours=2)
 
 
 # ---- тексты по умолчанию (дата передаётся моментом, форматирует рендер) ----------------
@@ -63,8 +63,8 @@ def test_отмена_экранирует_html_в_причине() -> None:
 
 
 def test_продвижение_из_очереди() -> None:
-    assert default_render_text("promoted", {"starts_at": START}) == (
-        "Освободилось место — вы записаны на воскресенье, 1 ноября, 17:00!"
+    assert default_render_text("promoted", {"starts_at": START, "ends_at": END}) == (
+        "Освободилось место — вы записаны на встречу: воскресенье, 1 ноября, 17:00–19:00!"
     )
 
 
@@ -104,9 +104,9 @@ def test_tidy_убирает_следы_пустых_подстановок(raw:
 async def test_продвинутым_пишем_только_если_разрешили_личку() -> None:
     notifier = RecordingNotifier()
     promotions = [
-        Promotion(1, 10, False, START, "Кафе", dm_available=True),
-        Promotion(2, 11, False, START, "Кафе", dm_available=False),
-        Promotion(3, None, False, START, "Кафе", dm_available=True),
+        Promotion(1, 10, False, START, END, "Кафе", dm_available=True),
+        Promotion(2, 11, False, START, END, "Кафе", dm_available=False),
+        Promotion(3, None, False, START, END, "Кафе", dm_available=True),
     ]
     await notify_promotions(notifier, default_render_text, promotions)
     assert [uid for uid, _ in notifier.dms] == [10]
@@ -132,7 +132,7 @@ def test_format_moment_в_UTC_без_сдвига() -> None:
     )
 
 
-# ---- resolve / resolve_any ------------------------------------------------------------
+# ---- resolve ------------------------------------------------------------
 
 
 def test_resolve_значение_возвращается_как_есть() -> None:
@@ -148,17 +148,6 @@ def test_resolve_вызывает_провайдер_при_каждом_обр�
         return len(calls)
 
     assert (resolve(provider), resolve(provider)) == (1, 2)
-
-
-async def test_resolve_any_синхронный_провайдер() -> None:
-    assert await resolve_any(lambda: 5) == 5
-
-
-async def test_resolve_any_асинхронный_провайдер() -> None:
-    async def provider() -> int:
-        return 7
-
-    assert await resolve_any(provider) == 7
 
 
 # ---- chunk_lines ----------------------------------------------------------------------

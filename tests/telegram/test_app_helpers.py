@@ -18,7 +18,10 @@ from meetup_bot.app import (
     _sentry_before_send,
     _sqlite_path,
     _watch_scheduler,
+    startup_text,
 )
+from meetup_bot.config import Settings
+from meetup_bot.texts.service import DEV_MODE_MARK
 
 TOKEN = "123456789:AAH-secret_Token-xyz"
 
@@ -143,3 +146,24 @@ async def test_штатно_завершённый_планировщик_не_�
     await asyncio.wait([task])
     await asyncio.sleep(0.05)
     assert notifier.messages == []
+
+
+def _config(env: str) -> Settings:
+    return Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        bot_token=TOKEN,
+        owner_ids="1",  # type: ignore[arg-type]
+        service_chat_id=-100500,
+        env=env,  # type: ignore[arg-type]
+        app_version="1.2.3<x>",
+    )
+
+
+def test_стартовое_сообщение_в_бою_без_пометки_dev() -> None:
+    text = startup_text(_config("prod"))
+    assert DEV_MODE_MARK not in text
+    assert "1.2.3&lt;x&gt;" in text
+
+
+def test_стартовое_сообщение_в_dev_помечено() -> None:
+    assert startup_text(_config("dev")).startswith(DEV_MODE_MARK)

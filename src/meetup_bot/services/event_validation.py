@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.settings_schema import (
     FILE_ID_MAX_LEN,
@@ -17,6 +19,14 @@ from meetup_bot.services.settings_schema import (
     get_spec,
     validate,
 )
+
+
+def max_registration_close_delay() -> timedelta:
+    """Предел «закрытие записи после начала» — тот же, что у настройки в админке."""
+    limit = get_spec("registration_close_minutes_after_start").max
+    if limit is None:
+        raise RuntimeError("в схеме нет предела закрытия записи")
+    return timedelta(minutes=limit)
 
 
 def validate_capacity(value: int) -> int:

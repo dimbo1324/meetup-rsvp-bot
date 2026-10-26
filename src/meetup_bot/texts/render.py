@@ -76,6 +76,10 @@ REASON_PREFIX = "Причина: "
 _SPACES = re.compile(r"[ \t]{2,}")
 # Запятая перед знаком препинания или концом строки остаётся от пустой подстановки
 _DANGLING_COMMA = re.compile(r"[ \t]*,[ \t]*(?=[.,!?;:)]|$)", re.MULTILINE)
+# Тире диапазона времени без конца («16:30–.») остаётся, когда сервис не передал `ends_at`
+_DANGLING_RANGE_DASH = re.compile(
+    rf"(?<=\d){TIME_RANGE_DASH}(?=[ \t]*(?:[.,!?;:)]|$))", re.MULTILINE
+)
 _SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+(?=[.,!?;:])")
 
 
@@ -171,6 +175,7 @@ def text_variables(params: Mapping[str, Any], tz: ZoneInfo | str) -> dict[str, s
 
 def tidy(text: str) -> str:
     """Убирает следы пустых подстановок: «16:30, .» → «16:30.», двойные пробелы, хвосты."""
+    text = _DANGLING_RANGE_DASH.sub("", text)
     text = _DANGLING_COMMA.sub("", text)
     text = _SPACE_BEFORE_PUNCT.sub("", text)
     text = _SPACES.sub(" ", text)
@@ -181,10 +186,11 @@ def fill(template: str, values: Mapping[str, str], *, escape_html: bool) -> str:
     """Подставляет значения в уже проверенный шаблон.
 
     `escape_html=True` — для сообщений в parse_mode=HTML: имя или причина иначе сломали бы
-    разметку. Во всплывающих окнах HTML не интерпретируется, там экранировать нельзя.
+    разметку. Кавычки экранируются тоже: подстановка может оказаться внутри атрибута
+    (`href="…"`), и незакрытая кавычка позволила бы дописать чужой атрибут. Во всплывающих
+    окнах HTML не интерпретируется, там экранировать нельзя.
     """
     prepared = {
-        name: html.escape(value, quote=False) if escape_html else value
-        for name, value in values.items()
+        name: html.escape(value) if escape_html else value for name, value in values.items()
     }
     return tidy(template.format_map(_BlankMissing(prepared)))

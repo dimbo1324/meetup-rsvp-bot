@@ -134,12 +134,12 @@ async def _on_done(
         await _answer(callback)
         return
     attendance_ui.forget(message.chat.id, message.message_id)
-    lines = [f"Явка отмечена ✔. Неявок: {len(result.no_shows)}"]
+    lines = [f"Явка отмечена ✅. Неявок: {len(result.no_shows)}"]
     if result.failed_ban_user_ids:
         # Отметка сохранена; пересчёт банов дожмёт планировщик (задача ban_recheck)
         lines.append(
-            f"⚠ Пересчёт банов для {len(result.failed_ban_user_ids)} участн. отложен: "
-            "бот повторит его автоматически."
+            f"⚠ Пересчёт банов отложен для участников: {len(result.failed_ban_user_ids)}. "
+            "Бот повторит его автоматически."
         )
     if result.new_bans:
         lines.append(f"Выдано автобанов: {len(result.new_bans)}")

@@ -21,6 +21,7 @@ from meetup_bot.config import Settings
 from meetup_bot.container import build_services
 from meetup_bot.db.session import create_engine, create_session_factory
 from meetup_bot.handlers import ALLOWED_UPDATES, build_router
+from meetup_bot.middlewares.rate_limit import install_rate_limit
 from meetup_bot.repositories import admins as admins_repo
 from meetup_bot.repositories import event_posts
 from meetup_bot.scheduler.backup import BACKUPS_DIRNAME
@@ -31,7 +32,8 @@ from meetup_bot.telegram.attendance_ui import AttendanceUI
 from meetup_bot.telegram.commands import sync_commands
 from meetup_bot.telegram.notifier import TelegramNotifier
 from meetup_bot.telegram.post_updater import PostUpdater
-from meetup_bot.texts.service import BOT_STARTED_TEXT, SCHEDULER_STOPPED_TEXT
+from meetup_bot.telegram.service_chat import check_service_chat
+from meetup_bot.texts.service import BOT_STARTED_TEXT, DEV_MODE_MARK, SCHEDULER_STOPPED_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,13 @@ def _init_sentry(dsn: str) -> None:
     )
 
 
+def startup_text(config: Settings) -> str:
+    """Сообщение о запуске; в режиме dev помечено, чтобы его не спутали с боевым."""
+    version = html.escape(config.app_version, quote=False)
+    text = BOT_STARTED_TEXT.format(version=version)
+    return f"{DEV_MODE_MARK}\n{text}" if config.is_dev else text
+
+
 def _watch_scheduler(task: asyncio.Task[None], notifier: TelegramNotifier) -> None:
     """Падение планировщика не должно проходить незамеченным."""
 
@@ -114,7 +123,9 @@ async def run(config: Settings) -> None:
     scheduler_task: asyncio.Task[None] | None = None
     post_refresher: PostRefresher | None = None
     try:
-        notifier = TelegramNotifier(bot, sessions, clock, config.service_chat_id)
+        notifier = TelegramNotifier(
+            bot, sessions, clock, config.service_chat_id, owner_ids=config.owner_ids
+        )
 
         def make_updater(settings: SettingsService) -> PostRefresher:
             return PostUpdater(bot, sessions, clock, settings)
@@ -146,6 +157,7 @@ async def run(config: Settings) -> None:
             notifier=notifier,
             attendance_ui=attendance_ui,
         )
+        install_rate_limit(dispatcher, clock)
         dispatcher.include_router(build_router())
         setup_dialogs(dispatcher)
         async with sessions() as session:
@@ -157,11 +169,16 @@ async def run(config: Settings) -> None:
             for event_id in await event_posts.list_live_event_ids(session):
                 services.post_refresher.schedule(event_id)
 
-        version = html.escape(config.app_version, quote=False)
-        await notifier.send_service(BOT_STARTED_TEXT.format(version=version))
+        if config.is_dev:
+            logger.warning("%s: запуск в режиме разработки, dev-команды включены", DEV_MODE_MARK)
+        await check_service_chat(bot, notifier, config.service_chat_id)
+        await notifier.send_service(startup_text(config))
 
         scheduler_task = asyncio.create_task(services.scheduler.run_forever(), name="scheduler")
         _watch_scheduler(scheduler_task, notifier)
+        # Вебхук (если остался от прежнего запуска) блокирует getUpdates; очередь не сбрасываем,
+        # чтобы после простоя обработать накопившиеся нажатия
+        await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot, allowed_updates=ALLOWED_UPDATES)
     finally:
         if scheduler_task is not None:

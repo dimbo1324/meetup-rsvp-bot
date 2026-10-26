@@ -266,7 +266,7 @@ async def test_set_нормализует_значение_перед_сохра
 async def test_set_часовой_пояс_обновляет_timezone_now(settings: SettingsService) -> None:
     await settings.set("timezone", "UTC", ADMIN_ID)
     assert settings.timezone_now().key == "UTC"
-    assert (await settings.timezone()).key == "UTC"
+    assert settings.timezone_now().key == "UTC"
 
 
 async def test_set_некорректный_часовой_пояс_отклонён(settings: SettingsService) -> None:
@@ -363,7 +363,7 @@ async def test_schedule_now_отражает_изменения(settings: Settin
     assert schedule.registration_close_minutes_after_start == 30
     assert schedule.attendance_prompt_minutes_after == 120
     assert schedule.cancel_deadline_time == time(20, 0)
-    assert await settings.schedule_settings() == schedule
+    assert settings.schedule_now() == schedule
 
 
 async def test_rules_now_отражает_изменения(settings: SettingsService) -> None:
@@ -376,7 +376,7 @@ async def test_rules_now_отражает_изменения(settings: SettingsS
     assert rules.auto_create_time == time(9, 15)
     assert rules.auto_create_days_after == 1
     assert rules.show_names_in_post is False
-    assert await settings.rules_settings() == rules
+    assert settings.rules_now() == rules
 
 
 async def test_options_now_отражает_изменения(settings: SettingsService) -> None:
@@ -386,7 +386,7 @@ async def test_options_now_отражает_изменения(settings: Setting
     await settings.set("plus_one_enabled", True, ADMIN_ID)
     options = settings.options_now()
     assert (options.waitlist_enabled, options.plus_one_enabled) == (False, True)
-    assert await settings.registration_options() == options
+    assert settings.options_now() == options
 
 
 async def test_defaults_now_отражает_изменения(settings: SettingsService) -> None:
@@ -398,7 +398,7 @@ async def test_defaults_now_отражает_изменения(settings: Settin
     await settings.set("default_photo_file_id", "AgAC123", ADMIN_ID)
     expected = DefaultEventParams(15, "Кафе", "https://maps.example/x", "<b>Привет</b>", "AgAC123")
     assert settings.defaults_now() == expected
-    assert await settings.default_event_params() == expected
+    assert settings.defaults_now() == expected
 
 
 async def test_испорченное_время_в_БД_падает_явно(
@@ -421,10 +421,11 @@ def test_render_подставляет_значения(settings: SettingsServic
         weekday="суббота",
         date="1 ноября",
         time="17:00",
+        end_time="19:00",
         deadline="пятница, 20:00",
     )
     assert (
-        text == "Вы записаны на суббота, 1 ноября, 17:00. "
+        text == "Вы записаны на встречу: суббота, 1 ноября, 17:00–19:00. "
         "Если планы изменятся, отмените запись до пятница, 20:00."
     )
 
@@ -443,9 +444,9 @@ def test_render_без_экранирования_для_всплывающих_
     assert text == "Явку отметил(а) <b>&"
 
 
-def test_render_кавычки_не_экранируются(settings: SettingsService) -> None:
+def test_render_кавычки_экранируются(settings: SettingsService) -> None:
     text = settings.render_text_now("text.attendance_marked_by", name='Ян "Бык" О\'Нил')
-    assert text == 'Явку отметил(а) Ян "Бык" О\'Нил'
+    assert text == "Явку отметил(а) Ян &quot;Бык&quot; О&#x27;Нил"
 
 
 def test_render_отсутствующая_подстановка_даёт_пустую_строку(settings: SettingsService) -> None:
@@ -497,7 +498,7 @@ async def test_render_использует_текст_админа_после_se
 
 
 async def test_render_async_совпадает_с_синхронным(settings: SettingsService) -> None:
-    assert await settings.render_text("text.already_waitlist", position=2) == (
+    assert settings.render_text_now("text.already_waitlist", position=2) == (
         settings.render_text_now("text.already_waitlist", position=2)
     )
 

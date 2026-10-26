@@ -41,9 +41,17 @@ async def start_of(app: App, event_id: int) -> datetime:
 
 
 async def advance_to_after_start(app: App, event_id: int) -> None:
-    """Сдвигает часы на час после начала встречи (только вперёд)."""
-    target = await start_of(app, event_id) + timedelta(hours=1)
+    """Часы — на закрытие записи (начало + час), встреча переведена в finished.
+
+    Явка отмечается только у завершённой встречи; статус ставит планировщик, поэтому тест
+    вызывает его шаг вручную (только вперёд по времени).
+    """
+    async with app.sessions() as session:
+        event = await session.get(Event, event_id)
+        assert event is not None
+        target = max(event.starts_at, event.registration_closes_at)
     app.clock.advance(target - app.clock.now())
+    await app.services.lifecycle.finish_due(app.clock.now())
 
 
 async def join(app: App, event_id: int, n: int) -> int:
@@ -443,11 +451,11 @@ async def test_исправление_отменённой_как_неявка_�
 # --- get_sheet ---
 
 
-async def test_ведомость_недоступна_пока_встреча_не_началась(app: App) -> None:
+async def test_ведомость_недоступна_пока_запись_не_закрыта(app: App) -> None:
     event_id = await make_event(app)
     with pytest.raises(InvalidOperation) as error:
         await app.services.attendance.get_sheet(ADMIN_ID, event_id)
-    assert error.value.code == "event_not_started"
+    assert error.value.code == "attendance_not_yet"
 
 
 async def test_ведомость_содержит_активных_участников_в_порядке_записи(app: App) -> None:
@@ -506,8 +514,7 @@ async def test_mark_записывает_кто_и_когда_отметил(app
     event_id = await make_event(app)
     await join(app, event_id, 1)
     await advance_to_after_start(app, event_id)
-    result = await app.services.attendance.mark(ADMIN_ID, event_id, set())
-    assert result.marked_by == ADMIN_ID
+    await app.services.attendance.mark(ADMIN_ID, event_id, set())
     async with app.sessions() as session:
         event = await session.get(Event, event_id)
     assert event is not None
@@ -533,6 +540,7 @@ async def test_первый_нажавший_готово_побеждает(app
 async def test_already_marked_после_автозакрытия_без_имени(app: App) -> None:
     event_id = await make_event(app)
     await join(app, event_id, 1)
+    await advance_to_after_start(app, event_id)
     later = await start_of(app, event_id) + ATTENDANCE_WINDOW + timedelta(minutes=1)
     await app.services.attendance.expire_unmarked(later)
     app.clock.advance(later - app.clock.now())
@@ -541,16 +549,17 @@ async def test_already_marked_после_автозакрытия_без_име�
     assert (error.value.marked_by_id, error.value.marked_by_name) == (None, None)
 
 
-async def test_mark_до_начала_встречи_запрещён(app: App) -> None:
+async def test_mark_до_закрытия_записи_запрещён(app: App) -> None:
     event_id = await make_event(app)
     with pytest.raises(InvalidOperation) as error:
         await app.services.attendance.mark(ADMIN_ID, event_id, set())
-    assert error.value.code == "event_not_started"
+    assert error.value.code == "attendance_not_yet"
 
 
 async def test_mark_через_7_суток_и_минуту_закрыт_окном(app: App) -> None:
     event_id = await make_event(app)
     await join(app, event_id, 1)
+    await advance_to_after_start(app, event_id)
     app.clock.advance(await start_of(app, event_id) + ATTENDANCE_WINDOW - app.clock.now())
     app.clock.advance(timedelta(minutes=1))
     with pytest.raises(InvalidOperation) as error:
@@ -561,9 +570,10 @@ async def test_mark_через_7_суток_и_минуту_закрыт_окн�
 async def test_mark_ровно_на_границе_окна_ещё_разрешён(app: App) -> None:
     event_id = await make_event(app)
     await join(app, event_id, 1)
+    await advance_to_after_start(app, event_id)
     app.clock.advance(await start_of(app, event_id) + ATTENDANCE_WINDOW - app.clock.now())
     result = await app.services.attendance.mark(ADMIN_ID, event_id, set())
-    assert result.marked_by == ADMIN_ID
+    assert result.failed_ban_user_ids == ()
 
 
 async def test_чужие_registration_id_отклоняются_и_ничего_не_меняют(app: App) -> None:
@@ -765,6 +775,7 @@ async def test_исправление_пишет_аудит(app: App) -> None:
 async def test_expire_unmarked_через_7_суток_отмечает_всех_пришедшими(app: App) -> None:
     event_id = await make_event(app)
     regs = [await join(app, event_id, n) for n in (1, 2)]
+    await advance_to_after_start(app, event_id)
     later = await start_of(app, event_id) + ATTENDANCE_WINDOW + timedelta(minutes=1)
     app.clock.advance(later - app.clock.now())
 
@@ -782,6 +793,7 @@ async def test_expire_unmarked_через_7_суток_отмечает_всех
 async def test_expire_unmarked_раньше_7_суток_ничего_не_делает(app: App) -> None:
     event_id = await make_event(app)
     registration_id = await join(app, event_id, 1)
+    await advance_to_after_start(app, event_id)
     almost = await start_of(app, event_id) + ATTENDANCE_WINDOW
     assert await app.services.attendance.expire_unmarked(almost) == []
     assert await attendance_of(app, registration_id) == "unknown"
@@ -799,12 +811,13 @@ async def test_expire_unmarked_не_трогает_уже_отмеченную_�
 
 async def test_expire_unmarked_повторный_вызов_пуст(app: App) -> None:
     event_id = await make_event(app)
+    await advance_to_after_start(app, event_id)
     later = await start_of(app, event_id) + ATTENDANCE_WINDOW + timedelta(minutes=1)
     assert await app.services.attendance.expire_unmarked(later) == [event_id]
     assert await app.services.attendance.expire_unmarked(later) == []
 
 
-# --- reevaluate_bans и сбои пересчёта ---
+# --- retry_pending_bans и сбои пересчёта ---
 
 
 def failing_recalc(app: App, fail_for: set[int] | None = None) -> None:
@@ -858,7 +871,7 @@ async def test_сбой_одного_пересчёта_не_мешает_ост
     assert result.new_bans == (person(2).id,)
 
 
-async def test_reevaluate_bans_дожимает_пропущенные_баны_идемпотентно(
+async def test_retry_pending_bans_дожимает_пропущенные_баны_идемпотентно(
     app: App, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     event_id = await make_event(app)
@@ -872,12 +885,12 @@ async def test_reevaluate_bans_дожимает_пропущенные_баны_
     await app.services.attendance.mark(ADMIN_ID, event_id, {registration_id})
     monkeypatch.undo()
 
-    assert await app.services.attendance.reevaluate_bans(event_id) == [person(1).id]
-    assert await app.services.attendance.reevaluate_bans(event_id) == []
+    assert await app.services.attendance.retry_pending_bans() == [event_id]
+    assert await app.services.attendance.retry_pending_bans() == []
     assert len(await bans_of(app, person(1).id)) == 1
 
 
-async def test_reevaluate_bans_терпит_сбой_и_продолжает(
+async def test_retry_pending_bans_терпит_сбой_и_продолжает(
     app: App, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     event_id = await make_event(app)
@@ -891,22 +904,26 @@ async def test_reevaluate_bans_терпит_сбой_и_продолжает(
     await app.services.attendance.mark(ADMIN_ID, event_id, regs)
     monkeypatch.undo()
     failing_recalc(app, {person(1).id})
-    assert await app.services.attendance.reevaluate_bans(event_id) == [person(2).id]
+    # Встреча не обработана целиком: её дожмут снова, но второй пользователь уже забанен
+    assert await app.services.attendance.retry_pending_bans() == []
+    assert await active_ban(app, person(2).id) is not None
+    assert await active_ban(app, person(1).id) is None
 
 
-async def test_reevaluate_bans_для_неотмеченной_и_несуществующей_встречи_пуст(app: App) -> None:
+async def test_retry_pending_bans_для_неотмеченной_встречи_пуст(app: App) -> None:
     event_id = await make_event(app)
-    assert await app.services.attendance.reevaluate_bans(event_id) == []
-    assert await app.services.attendance.reevaluate_bans(9999) == []
+    await advance_to_after_start(app, event_id)
+    assert await app.services.attendance.retry_pending_bans() == []
 
 
-async def test_reevaluate_bans_не_банит_при_пороге_0(app: App) -> None:
+async def test_порог_0_после_отметки_ничего_не_дожимает(app: App) -> None:
     event_id = await make_event(app)
     registration_id = await join(app, event_id, 1)
     await set_rule(app, "ban_after_no_shows", 0)
     await advance_to_after_start(app, event_id)
     await app.services.attendance.mark(ADMIN_ID, event_id, {registration_id})
-    assert await app.services.attendance.reevaluate_bans(event_id) == []
+    assert await app.services.attendance.retry_pending_bans() == []
+    assert await bans_of(app, person(1).id) == []
 
 
 async def test_статус_записи_неявившегося_остаётся_active(app: App) -> None:

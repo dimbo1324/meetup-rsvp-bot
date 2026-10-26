@@ -23,20 +23,22 @@ from meetup_bot.db.models import (
     Event,
     EventStatus,
 )
-from meetup_bot.repositories import audit, events, events_admin
+from meetup_bot.repositories import audit, events, events_admin, registrations
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
     Provided,
     RenderText,
     default_render_text,
     notify_promotions,
-    resolve,
     send_dms,
 )
+from meetup_bot.services.attendance import attendance_window_open
+from meetup_bot.services.bans import BanService
 from meetup_bot.services.defaults import DEFAULT_CAPACITY
-from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.event_template import EventTemplate
 from meetup_bot.services.event_validation import (
+    max_registration_close_delay,
     validate_capacity,
     validate_description,
     validate_photo,
@@ -45,12 +47,14 @@ from meetup_bot.services.event_validation import (
 )
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
+from meetup_bot.services.provided import resolve_or_default
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule
 from meetup_bot.services.timing import (
     EventTimes,
     InvalidEventTimes,
     ScheduleSettings,
+    clamp_deadline,
     compute_times,
     next_event_start,
     validate_times,
@@ -64,6 +68,7 @@ RECENT_DAYS = 14
 __all__ = [
     "UNSET",
     "CreatedEvent",
+    "EventCard",
     "EventListItem",
     "EventService",
     "EventTemplate",
@@ -93,12 +98,46 @@ class CreatedEvent:
     event_id: int
     # Нефатальные замечания (например, слишком длинное описание) — показать админу
     warnings: list[str]
+    # Расчётный дедлайн отмены уже прошёл и приравнен к моменту создания: отменить запись
+    # без штрафа нельзя, админа стоит предупредить
+    deadline_clamped: bool = False
 
 
 @dataclass(frozen=True)
 class RescheduleResult:
     # Закрытая встреча открыта заново автоматически (новые моменты в будущем)
     registration_reopened: bool
+    # Дедлайн отмены при переносе уже прошёл и приравнен к моменту переноса
+    deadline_clamped: bool = False
+
+
+@dataclass(frozen=True)
+class EventCard:
+    """Всё, что нужно карточке встречи в меню: поля, счётчики и допустимые действия."""
+
+    id: int
+    status: str
+    starts_at: datetime
+    ends_at: datetime
+    place: str
+    place_url: str
+    description_html: str
+    photo_file_id: str | None
+    capacity: int
+    seats_taken: int
+    waitlist_count: int
+    cancel_deadline_at: datetime
+    registration_closes_at: datetime
+    reminder_at: datetime
+    attendance_prompt_at: datetime
+    cancel_reason: str | None
+    attendance_marked: bool
+    editable: bool
+    can_close: bool
+    can_open: bool
+    can_cancel: bool
+    can_reschedule: bool
+    can_mark_attendance: bool
 
 
 class EventService:
@@ -119,6 +158,7 @@ class EventService:
         post_refresher: PostRefresher | None = None,
         rules: Provided[RulesSettings] | None = None,
         render_text: RenderText | None = None,
+        ban_service: BanService | None = None,
     ) -> None:
         if locks is None:
             # Отдельный реестр не синхронизирован с блокировками других сервисов, поэтому
@@ -133,12 +173,13 @@ class EventService:
         self._refresher: PostRefresher = post_refresher or NullPostRefresher()
         self._rules = rules
         self._render: RenderText = render_text or default_render_text
+        self._bans = ban_service
 
     def _schedule_settings(self) -> ScheduleSettings:
-        return ScheduleSettings() if self._schedule is None else resolve(self._schedule)
+        return resolve_or_default(self._schedule, ScheduleSettings)
 
     def _rules_settings(self) -> RulesSettings:
-        return RulesSettings() if self._rules is None else resolve(self._rules)
+        return resolve_or_default(self._rules, RulesSettings)
 
     async def create_event_as_admin(
         self,
@@ -223,6 +264,7 @@ class EventService:
             photo_file_id = validate_photo(photo_file_id)
             try:
                 times = compute_times(starts_at or next_event_start(now, schedule), schedule)
+                times, deadline_clamped = clamp_deadline(times, now)
                 validate_times(times, now)
             except ValueError as exc:  # включая InvalidEventTimes
                 raise InvalidOperation(ErrorCode.INVALID_TIMES, str(exc)) from exc
@@ -252,12 +294,16 @@ class EventService:
                 now=now,
                 actor_id=created_by,
                 event_id=event.id,
-                payload={"starts_at": times.starts_at.isoformat(), "capacity": capacity},
+                payload={
+                    "starts_at": times.starts_at.isoformat(),
+                    "capacity": capacity,
+                    "deadline_clamped": deadline_clamped,
+                },
             )
             event_id = event.id
         if warnings:
             logger.warning("встреча %s: %s", event_id, "; ".join(warnings))
-        return CreatedEvent(event_id, warnings)
+        return CreatedEvent(event_id, warnings, deadline_clamped)
 
     async def list_events(self, actor_id: int, include_recent: bool = False) -> list[EventListItem]:
         """Открытые и закрытые встречи; с `include_recent` — ещё и всё за последние 14 дней."""
@@ -277,6 +323,58 @@ class EventService:
                 )
                 for event in found
             ]
+
+    async def get_card(self, actor_id: int, event_id: int) -> EventCard:
+        """Карточка встречи любого статуса с флагами допустимых действий (для меню)."""
+        now = self._clock.now()
+        async with self._sessions() as session:
+            event = await access.load_event_for_admin(
+                session, actor_id, event_id, editable_only=False
+            )
+            taken = await events.seats_taken(session, event_id)
+            waitlist = await registrations.count_waitlist(session, event_id)
+        editable = event.status in UNFINISHED_EVENT_STATUSES
+        marked = event.attendance_marked_at is not None
+        return EventCard(
+            id=event.id,
+            status=event.status,
+            starts_at=event.starts_at,
+            ends_at=event.ends_at,
+            place=event.place,
+            place_url=event.place_url,
+            description_html=event.description_html,
+            photo_file_id=event.photo_file_id,
+            capacity=event.capacity,
+            seats_taken=taken,
+            waitlist_count=waitlist,
+            cancel_deadline_at=event.cancel_deadline_at,
+            registration_closes_at=event.registration_closes_at,
+            reminder_at=event.reminder_at,
+            attendance_prompt_at=event.attendance_prompt_at,
+            cancel_reason=event.cancel_reason,
+            attendance_marked=marked,
+            editable=editable,
+            can_close=event.status == EventStatus.OPEN.value,
+            can_open=event.status == EventStatus.CLOSED.value and not marked,
+            can_cancel=event.status != EventStatus.CANCELLED.value,
+            can_reschedule=editable and not marked,
+            can_mark_attendance=attendance_window_open(event, now),
+        )
+
+    async def capacity_needs_confirmation(
+        self, actor_id: int, event_id: int, new_capacity: int
+    ) -> bool:
+        """Уменьшение лимита до значения не ниже занятых мест — разрушительно (12.2): нужно
+        подтверждение. Увеличение и невозможное уменьшение (ниже занятых) подтверждения не просят:
+        второе отклонит `set_capacity`.
+        """
+        new_capacity = validate_capacity(new_capacity)
+        async with self._sessions() as session:
+            event = await access.load_event_for_admin(
+                session, actor_id, event_id, editable_only=True
+            )
+            taken = await events.seats_taken(session, event_id)
+        return taken <= new_capacity < event.capacity
 
     async def last_event_template(self, actor_id: int) -> EventTemplate | None:
         """Поля самой поздней по началу неотменённой встречи; None, если таких нет."""
@@ -359,9 +457,11 @@ class EventService:
             raise InvalidOperation(ErrorCode.INVALID_TIMES, "Новое время встречи уже прошло.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
+            self._require_attendance_not_marked(event)
             times = replace(
                 computed, ends_at=computed.starts_at + (event.ends_at - event.starts_at)
             )
+            times, deadline_clamped = clamp_deadline(times, now)
             try:
                 # Порядок считается от создания встречи, а не от «сейчас» (как в edit_moments):
                 # иначе нельзя было бы перенести встречу на близкую дату
@@ -389,6 +489,7 @@ class EventService:
                     "old_starts_at": old_starts_at.isoformat(),
                     "new_starts_at": times.starts_at.isoformat(),
                     "reopened": reopen,
+                    "deadline_clamped": deadline_clamped,
                 },
             )
         safe_schedule(self._refresher, event_id)
@@ -397,7 +498,7 @@ class EventService:
         promoted_ids = {p.user_id for p in promotions}
         await send_dms(self._notifier, [u for u in recipients if u not in promoted_ids], text)
         await notify_promotions(self._notifier, self._render, promotions)
-        return RescheduleResult(registration_reopened=reopen)
+        return RescheduleResult(registration_reopened=reopen, deadline_clamped=deadline_clamped)
 
     async def set_capacity(self, actor_id: int, event_id: int, new_capacity: int) -> None:
         new_capacity = validate_capacity(new_capacity)
@@ -441,16 +542,12 @@ class EventService:
         now = self._clock.now()
         promotions: list[Promotion] = []
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            await access.require_admin(session, actor_id)
-            event = await events.get(session, event_id)
-            if event is None:
-                raise NotFound(f"встреча {event_id} не найдена")
+            event = await self._load_editable(session, actor_id, event_id)
             current = event.status
-            if current not in UNFINISHED_EVENT_STATUSES:
-                raise InvalidOperation(ErrorCode.BAD_STATUS)
             if open == (current == EventStatus.OPEN.value):
                 return
             if open:
+                self._require_attendance_not_marked(event)
                 if now >= event.registration_closes_at:
                     raise InvalidOperation(
                         ErrorCode.REGISTRATION_TIME_PASSED,
@@ -468,11 +565,21 @@ class EventService:
         await notify_promotions(self._notifier, self._render, promotions)
 
     async def cancel_event(self, actor_id: int, event_id: int, reason: str | None = None) -> None:
-        """Отменяет встречу. Неявки по ней не считаются: бан-логика исключает cancelled."""
+        """Отменяет встречу. Неявки по ней не считаются: бан-логика исключает cancelled.
+
+        Можно отменить и завершённую встречу (её не было, а явка уже отмечена): автобаны
+        по её неявкам пересчитываются после коммита.
+        """
         now = self._clock.now()
         reason = (reason or "").strip() or None
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
-            event = await self._load_editable(session, actor_id, event_id)
+            event = await access.load_event_for_admin(
+                session, actor_id, event_id, editable_only=False
+            )
+            if event.status == EventStatus.CANCELLED.value:
+                raise InvalidOperation(ErrorCode.BAD_STATUS)
+            attendance_was_marked = event.attendance_marked_at is not None
+            was_finished = event.status == EventStatus.FINISHED.value
             event.status = EventStatus.CANCELLED.value
             event.cancelled_at = now
             event.cancel_reason = reason
@@ -489,10 +596,38 @@ class EventService:
                 session, event_id, events_admin.ACTIVE_ONLY
             )
             starts_at = event.starts_at
+            no_show_users = (
+                await registrations.no_show_user_ids(session, event_id)
+                if attendance_was_marked
+                else []
+            )
         safe_schedule(self._refresher, event_id)
         # Значения передаются сырыми: экранирует рендер текстов (parse_mode=HTML у ЛС)
         params = {"starts_at": starts_at, "reason": reason or ""}
-        await send_dms(self._notifier, recipients, self._render("event_cancelled", params))
+        # О завершённой встрече участникам уже не пишем: отмена нужна, чтобы исправить баны
+        if not was_finished:
+            await send_dms(self._notifier, recipients, self._render("event_cancelled", params))
+        await self._recalc_bans_after_cancel(actor_id, event_id, no_show_users)
+
+    async def _recalc_bans_after_cancel(
+        self, actor_id: int, event_id: int, user_ids: list[int]
+    ) -> None:
+        """Неявки отменённой встречи не считаются: автобаны по ней снимаются.
+
+        Вне блокировки встречи (бан берёт блокировки будущих встреч). Сбой одного пересчёта
+        не должен терять уже сохранённую отмену и остальные пересчёты.
+        """
+        if self._bans is None:
+            return
+        for user_id in user_ids:
+            try:
+                await self._bans.recalc_for_attendance(actor_id, user_id, event_id)
+            except Exception:
+                logger.exception(
+                    "не удалось пересчитать бан после отмены (user_id=%s, event_id=%s)",
+                    user_id,
+                    event_id,
+                )
 
     async def edit_moments(
         self,
@@ -507,7 +642,9 @@ class EventService:
     ) -> None:
         """Ручная правка моментов; инварианты 5.2 проверяются по итоговому набору.
 
-        Закрытие записи может быть позже начала (опоздавшие записываются, пока есть места).
+        Закрытие записи может быть позже начала (опоздавшие записываются, пока есть места),
+        но не дальше предела настройки. Если закрытие сдвинуто позже запроса явки, а запрос
+        не передан, он поднимается до закрытия, как в `compute_times`.
         """
         now = self._clock.now()
         given = (
@@ -521,13 +658,19 @@ class EventService:
             raise InvalidOperation(ErrorCode.INVALID_TIMES, "Время должно быть с часовым поясом.")
         async with self._locks.lock(event_id), self._sessions() as session, session.begin():
             event = await self._load_editable(session, actor_id, event_id)
+            closes = registration_closes_at or event.registration_closes_at
+            if closes > event.starts_at + max_registration_close_delay():
+                raise InvalidOperation(
+                    ErrorCode.INVALID_TIMES, "Закрытие записи слишком далеко от начала встречи."
+                )
+            prompt = attendance_prompt_at or max(event.attendance_prompt_at, closes)
             new = EventTimes(
                 starts_at=event.starts_at,
                 ends_at=ends_at or event.ends_at,
                 cancel_deadline_at=cancel_deadline_at or event.cancel_deadline_at,
-                registration_closes_at=registration_closes_at or event.registration_closes_at,
+                registration_closes_at=closes,
                 reminder_at=reminder_at or event.reminder_at,
-                attendance_prompt_at=attendance_prompt_at or event.attendance_prompt_at,
+                attendance_prompt_at=prompt,
             )
             try:
                 # Порядок считается от создания встречи, а не от «сейчас»: иначе нельзя было бы
@@ -587,11 +730,11 @@ class EventService:
         event.attendance_reminder_sent_at = None
 
     @staticmethod
+    def _require_attendance_not_marked(event: Event) -> None:
+        """После отметки явки время и запись менять нельзя: неявки уже учтены в банах."""
+        if event.attendance_marked_at is not None:
+            raise InvalidOperation(ErrorCode.ATTENDANCE_ALREADY_MARKED)
+
+    @staticmethod
     async def _load_editable(session: AsyncSession, actor_id: int, event_id: int) -> Event:
-        await access.require_admin(session, actor_id)
-        event = await events.get(session, event_id)
-        if event is None:
-            raise NotFound(f"встреча {event_id} не найдена")
-        if event.status not in UNFINISHED_EVENT_STATUSES:
-            raise InvalidOperation(ErrorCode.BAD_STATUS)
-        return event
+        return await access.load_event_for_admin(session, actor_id, event_id, editable_only=True)

@@ -32,12 +32,14 @@ from meetup_bot.services.admin_support import (
     notify_promotions,
     resolve,
 )
+from meetup_bot.services.cooldown import Cooldown
+from meetup_bot.services.defaults import NOTIFY_CANCEL_COOLDOWN
 from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.names import public_name
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.rules import RegistrationOptions, RulesSettings
-from meetup_bot.services.safe import safe_schedule, safe_send_service
+from meetup_bot.services.safe import BackgroundTasks, safe_schedule, safe_send_service
 from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
 from meetup_bot.texts.render import format_moment
@@ -87,6 +89,7 @@ class RegisterResult:
     filled_event: bool = False
     # Данные для подстановок в тексты без обращения handler-а к БД
     starts_at: datetime | None = None
+    ends_at: datetime | None = None
     cancel_deadline_at: datetime | None = None
     place: str = ""
     dm_available: bool = False
@@ -106,6 +109,7 @@ class CancelResult:
     # Кого освобождённое место продвинуло из очереди (уже закоммичено)
     promoted: tuple[Promotion, ...] = ()
     starts_at: datetime | None = None
+    ends_at: datetime | None = None
     place: str = ""
     # Имя отменившего — для служебного сообщения админам
     user_name: str = ""
@@ -125,10 +129,11 @@ class RegistrationService:
         locks: EventLocks | None = None,
         notifier: Notifier | None = None,
         post_refresher: PostRefresher | None = None,
-        rules_provider: Callable[[], RulesSettings] | None = None,
+        rules_provider: Provided[RulesSettings] | None = None,
         options_provider: Callable[[], RegistrationOptions] | None = None,
         render_text: RenderText | None = None,
         schedule: Provided[ScheduleSettings] | None = None,
+        background: BackgroundTasks | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
@@ -140,7 +145,12 @@ class RegistrationService:
         self._locks = locks
         self._notifier: Notifier = notifier or NullNotifier()
         self._post_refresher: PostRefresher = post_refresher or NullPostRefresher()
-        self._rules_provider: Callable[[], RulesSettings] = rules_provider or RulesSettings
+        self._rules_provider: Provided[RulesSettings] = rules_provider or RulesSettings()
+        # Уведомления уходят в фоне: ответ на нажатие не ждёт Telegram (см. BackgroundTasks)
+        self._background = background or BackgroundTasks()
+        # Один человек не должен заспамить служебный чат серией «запись — отмена»
+        self._cancel_cooldown = Cooldown(NOTIFY_CANCEL_COOLDOWN, clock)
+        self._full_cooldown = Cooldown(NOTIFY_CANCEL_COOLDOWN, clock)
         self._options_provider = options_provider
         self._render: RenderText = render_text or default_render_text
         self._schedule = schedule
@@ -169,17 +179,22 @@ class RegistrationService:
         # Побочные эффекты — строго после коммита и вне блокировки
         if result.changed_state:
             safe_schedule(self._post_refresher, event_id)
-        notify_full = self._rules_provider().notify_admins_on_full
-        if result.filled_event and result.starts_at and notify_full:
+        notify_full = resolve(self._rules_provider).notify_admins_on_full
+        if (
+            result.filled_event
+            and result.starts_at
+            and notify_full
+            and self._full_cooldown.allow(event_id)
+        ):
             when = format_moment(result.starts_at, self._timezone())
             text = EVENT_FULL_TEXT.format(
                 when=when, taken=result.seats_taken, capacity=result.capacity
             )
-            await safe_send_service(self._notifier, text)
+            self._background.spawn(safe_send_service(self._notifier, text))
         return result
 
     async def cancel(self, event_id: int, user_id: int) -> CancelResult:
-        rules = self._rules_provider()
+        rules = resolve(self._rules_provider)
         async with (
             self._locks.lock(event_id),
             self._sessions() as session,
@@ -190,15 +205,21 @@ class RegistrationService:
         if not result.changed_state:
             return result
         safe_schedule(self._post_refresher, event_id)
-        await notify_promotions(self._notifier, self._render, result.promoted)
+        if result.promoted:
+            self._background.spawn(notify_promotions(self._notifier, self._render, result.promoted))
         # Выход из очереди мест не освобождает, поэтому админам о нём не сообщаем
-        if rules.notify_admins_on_cancel and not result.was_waitlist and result.starts_at:
+        if (
+            rules.notify_admins_on_cancel
+            and not result.was_waitlist
+            and result.starts_at
+            and self._cancel_cooldown.allow((user_id, event_id))
+        ):
             when = format_moment(result.starts_at, self._timezone())
             name = html.escape(result.user_name, quote=False)
             text = USER_CANCELLED_TEXT.format(
                 name=name, when=when, taken=result.seats_taken, capacity=result.capacity
             )
-            await safe_send_service(self._notifier, text)
+            self._background.spawn(safe_send_service(self._notifier, text))
         return result
 
     async def _register(
@@ -233,6 +254,7 @@ class RegistrationService:
                 cancel_deadline_passed=cancel_deadline_passed,
                 filled_event=filled_event,
                 starts_at=event.starts_at,
+                ends_at=event.ends_at,
                 cancel_deadline_at=event.cancel_deadline_at,
                 place=event.place,
                 dm_available=dm_available,
@@ -331,6 +353,7 @@ class RegistrationService:
                 taken,
                 event.capacity,
                 starts_at=event.starts_at,
+                ends_at=event.ends_at,
                 place=event.place,
             )
 
@@ -347,6 +370,7 @@ class RegistrationService:
                 event.capacity,
                 was_waitlist,
                 starts_at=event.starts_at,
+                ends_at=event.ends_at,
                 place=event.place,
             )
 
@@ -378,6 +402,7 @@ class RegistrationService:
             was_waitlist,
             tuple(promoted),
             starts_at=event.starts_at,
+            ends_at=event.ends_at,
             place=event.place,
             user_name=user_name,
         )

@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramMigrateToChat,
+    TelegramRetryAfter,
+)
 from aiogram.types import FSInputFile
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -15,7 +23,12 @@ from meetup_bot.clock import Clock
 from meetup_bot.repositories import users
 from meetup_bot.telegram.attendance_ui import AttendanceUI, SheetStatus
 from meetup_bot.telegram.common import MAX_RETRY_AFTER
-from meetup_bot.texts.service import BACKUP_CAPTION
+from meetup_bot.texts.render import telegram_length
+from meetup_bot.texts.service import (
+    BACKUP_CAPTION,
+    SERVICE_CHAT_MIGRATED_HINT,
+    SERVICE_CHAT_UNAVAILABLE_TEXT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +37,48 @@ CHUNK_LIMIT = 4000
 UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024
 
 
+# Неделимые куски HTML: тег и сущность; остальное — по одному символу
+_ATOM_RE = re.compile(r"<[^>]*>|&#?\w+;|.", re.DOTALL)
+_CHAT_NOT_FOUND = "chat not found"
+
+
+def _split_long_line(line: str, limit: int) -> list[str]:
+    """Режет одну длинную строку по границам тегов и сущностей, не разрывая их."""
+    parts: list[str] = []
+    current = ""
+    size = 0
+    for atom in _ATOM_RE.findall(line):
+        atom_size = telegram_length(atom)
+        # Тег длиннее лимита сохранить целым нельзя: режем по символам
+        pieces = list(atom) if atom_size > limit else [atom]
+        for piece in pieces:
+            piece_size = telegram_length(piece)
+            if size + piece_size > limit and current:
+                parts.append(current)
+                current, size = "", 0
+            current += piece
+            size += piece_size
+    if current:
+        parts.append(current)
+    return parts
+
+
 def split_text(text: str, limit: int = CHUNK_LIMIT) -> list[str]:
-    """Режет по переносам строк, где возможно; слишком длинную строку — жёстко."""
+    """Режет по переносам строк; слишком длинную строку — вне тегов и сущностей HTML.
+
+    Длина считается в единицах UTF-16, как её считает Telegram.
+    """
     chunks: list[str] = []
     current = ""
     for line in text.split("\n"):
-        while len(line) > limit:
+        if telegram_length(line) > limit:
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(line[:limit])
-            line = line[limit:]
+            *head, line = _split_long_line(line, limit)
+            chunks.extend(head)
         candidate = f"{current}\n{line}" if current else line
-        if len(candidate) > limit:
+        if telegram_length(candidate) > limit:
             chunks.append(current)
             current = line
         else:
@@ -53,11 +95,13 @@ class TelegramNotifier:
         sessions: async_sessionmaker[AsyncSession],
         clock: Clock,
         service_chat_id: int,
+        owner_ids: Iterable[int] = (),
     ) -> None:
         self._bot = bot
         self._sessions = sessions
         self._clock = clock
         self._service_chat_id = service_chat_id
+        self._owner_ids = tuple(owner_ids)
         self._attendance_ui: AttendanceUI | None = None
 
     async def send_dm(self, user_id: int, text: str) -> bool:
@@ -81,18 +125,49 @@ class TelegramNotifier:
                 return True
         return False
 
-    async def send_service(self, text: str) -> None:
+    async def send_service(self, text: str) -> bool:
+        delivered = True
         for chunk in split_text(text):
+            if not await self._send_service_chunk(chunk):
+                delivered = False
+        return delivered
+
+    async def _send_service_chunk(self, chunk: str) -> bool:
+        try:
             try:
                 await self._bot.send_message(self._service_chat_id, chunk)
             except TelegramRetryAfter as exc:
                 await asyncio.sleep(min(exc.retry_after, MAX_RETRY_AFTER))
-                try:
-                    await self._bot.send_message(self._service_chat_id, chunk)
-                except TelegramAPIError as retry_exc:
-                    logger.warning("служебное сообщение не доставлено: %s", retry_exc.message)
-            except TelegramAPIError as exc:
+                await self._bot.send_message(self._service_chat_id, chunk)
+        except TelegramMigrateToChat as exc:
+            logger.error(
+                "служебный чат переехал: migrate_to_chat_id=%s; укажите SERVICE_CHAT_ID=%s в .env",
+                exc.migrate_to_chat_id,
+                exc.migrate_to_chat_id,
+            )
+            hint = SERVICE_CHAT_MIGRATED_HINT.format(chat_id=exc.migrate_to_chat_id)
+            await self._duplicate_to_owners(chunk, hint)
+        except TelegramForbiddenError as exc:
+            logger.error("служебный чат недоступен: %s", exc.message)
+            await self._duplicate_to_owners(chunk)
+        except TelegramBadRequest as exc:
+            if _CHAT_NOT_FOUND in exc.message.lower():
+                logger.error("служебный чат не найден: проверьте SERVICE_CHAT_ID")
+                await self._duplicate_to_owners(chunk)
+            else:
                 logger.warning("служебное сообщение не доставлено: %s", exc.message)
+        except TelegramAPIError as exc:
+            logger.warning("служебное сообщение не доставлено: %s", exc.message)
+        else:
+            return True
+        return False
+
+    async def _duplicate_to_owners(self, chunk: str, hint: str = "") -> None:
+        """Служебная информация не должна пропадать вместе с недоступным чатом."""
+        header = f"{SERVICE_CHAT_UNAVAILABLE_TEXT}\n{hint}".rstrip("\n")
+        for part in split_text(f"{header}\n\n{chunk}"):
+            for owner_id in self._owner_ids:
+                await self.send_dm(owner_id, part)
 
     async def send_service_document(self, path: Path) -> None:
         """Отправляет файл в служебный чат; ошибки Telegram пробрасываются вызывающему."""

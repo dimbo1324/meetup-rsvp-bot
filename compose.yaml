@@ -14,6 +14,14 @@ services:
     volumes:
       - ./data:/app/data
     mem_limit: 300m
+    # Минимум привилегий: бот не пишет никуда, кроме /app/data и /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     logging:
       driver: json-file
       options:
@@ -37,6 +45,13 @@ services:
   #   volumes:
   #     - ./data-<локация>:/app/data
   #   mem_limit: 300m
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   cap_drop:
+  #     - ALL
+  #   read_only: true
+  #   tmpfs:
+  #     - /tmp
   #   logging:
   #     driver: json-file
   #     options:

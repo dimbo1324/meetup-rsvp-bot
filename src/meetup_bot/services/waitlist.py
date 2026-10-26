@@ -21,6 +21,7 @@ class Promotion:
     late_promoted: bool
     # Данные встречи для подстановок в личное сообщение без обращения handler-а к БД
     starts_at: datetime
+    ends_at: datetime
     place: str
     # Можно ли писать человеку в личку (нажимал ли он «Старт» у бота)
     dm_available: bool = False
@@ -70,6 +71,7 @@ async def promote_waitlist(
                 registration.user_id,
                 late,
                 event.starts_at,
+                event.ends_at,
                 event.place,
                 dm_available=user is not None and user.dm_available,
             )

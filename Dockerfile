@@ -10,7 +10,8 @@ RUN uv sync --frozen --no-dev
 FROM python:3.14-slim AS runtime
 # Версия для сообщения «Бот запущен»: APP_VERSION=$(git rev-parse --short HEAD) docker compose build
 ARG APP_VERSION=
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 APP_VERSION=${APP_VERSION}
+# Корневая ФС контейнера только для чтения: байт-код не пишем
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 APP_VERSION=${APP_VERSION}
 WORKDIR /app
 RUN useradd --create-home --uid 10001 bot && mkdir -p /app/data && chown bot:bot /app/data
 COPY --from=builder --chown=bot:bot /app/.venv ./.venv

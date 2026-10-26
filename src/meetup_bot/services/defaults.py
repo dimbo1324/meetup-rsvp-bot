@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import time
+from datetime import time, timedelta
 
 DEFAULT_TIMEZONE = "America/Montevideo"
 
@@ -40,3 +40,8 @@ DEFAULT_WAITLIST_ENABLED = True
 DEFAULT_LATE_PROMOTION_HOURS = 24
 DEFAULT_NOTIFY_ADMINS_ON_FULL = True
 DEFAULT_NOTIFY_ADMINS_ON_CANCEL = True
+
+# Защита служебного чата от спама: не чаще одного уведомления на ключ за этот интервал
+NOTIFY_CANCEL_COOLDOWN = timedelta(minutes=10)
+# Повтор недоставленного напоминания «пост не разослан» — не чаще, чем раз в этот интервал
+POST_REMINDER_RETRY = timedelta(minutes=30)

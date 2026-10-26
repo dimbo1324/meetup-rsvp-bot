@@ -119,3 +119,40 @@ def test_коды_ошибок_сервисов_только_из_errorcode() ->
     pattern = re.compile(r"InvalidOperation\(\s*[\"']")
     for path in _sources():
         assert not pattern.search(path.read_text(encoding="utf-8")), path.name
+
+
+# Сервисы ядра встреч ходят в БД только через репозитории: запросы в них не пишем
+_REPOSITORY_ONLY_SERVICES = (
+    "access",
+    "admins",
+    "attendance",
+    "bans",
+    "events",
+    "export",
+    "participants",
+    "users",
+)
+
+
+@pytest.mark.parametrize("name", _REPOSITORY_ONLY_SERVICES)
+def test_сервисы_ядра_не_строят_запросов_в_обход_репозиториев(name: str) -> None:
+    text = (SRC / "services" / f"{name}.py").read_text(encoding="utf-8")
+    assert not re.search(r"\bselect\(|session\.(scalars?|execute)\(|session\.get\(", text), name
+    assert "from sqlalchemy import" not in text, name
+
+
+def test_загрузка_встречи_для_админа_только_в_access() -> None:
+    """Копии «найти встречу, проверить права и статус» в сервисах не плодим."""
+    for name in _REPOSITORY_ONLY_SERVICES:
+        if name == "access":
+            continue
+        text = (SRC / "services" / f"{name}.py").read_text(encoding="utf-8")
+        assert "встреча {" not in text, name
+    assert len(_definitions("load_event_for_admin")) == 1
+
+
+def test_провайдер_настроек_разрешается_одним_хелпером() -> None:
+    for name in ("events", "participants", "bans"):
+        text = (SRC / "services" / f"{name}.py").read_text(encoding="utf-8")
+        assert "Callable[[], RulesSettings]" not in text, name
+        assert "resolve_or_default" in text, name

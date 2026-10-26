@@ -22,6 +22,9 @@ BACKUP_GLOB = "bot-????-??-??.db"
 BACKUPS_DIRNAME = "backups"
 # Сколько последних ежедневных копий хранить
 BACKUP_KEEP = 14
+# Права: в копиях лежат персональные данные участников, доступ только владельцу процесса
+BACKUPS_DIR_MODE = 0o700
+BACKUP_FILE_MODE = 0o600
 # Локальное время ежедневного бэкапа: ночью, когда бот почти не нагружен
 BACKUP_AT = time(4, 0)
 
@@ -47,7 +50,9 @@ def _backup_sync(db_path: Path, target: Path, backups_dir: Path, keep: int) -> b
         return False
     if not db_path.exists():
         raise FileNotFoundError(f"база данных не найдена: {db_path}")
-    backups_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backups_dir.mkdir(mode=BACKUPS_DIR_MODE, parents=True, exist_ok=True)
+    # Каталог мог быть создан раньше с другими правами (или umask обнулил биты в mkdir)
+    os.chmod(backups_dir, BACKUPS_DIR_MODE)
     # Остатки прерванных прошлых запусков не должны копиться и занимать место
     for orphan in backups_dir.glob("*.db.tmp"):
         orphan.unlink(missing_ok=True)
@@ -69,7 +74,7 @@ def _backup_sync(db_path: Path, target: Path, backups_dir: Path, keep: int) -> b
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"копия БД не прошла проверку целостности: {target.name}")
     # Бэкап содержит персональные данные: права ограничиваем до публикации под финальным именем
-    os.chmod(tmp, 0o600)
+    os.chmod(tmp, BACKUP_FILE_MODE)
     os.replace(tmp, target)
     for old in sorted(backups_dir.glob(BACKUP_GLOB))[:-keep]:
         old.unlink(missing_ok=True)

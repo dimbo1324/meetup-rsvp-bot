@@ -22,9 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
-from meetup_bot.db.models import Attendance, EventStatus
-from meetup_bot.repositories import admins, events
-from meetup_bot.services.attendance import ATTENDANCE_WINDOW, SheetRow
+from meetup_bot.db.models import Attendance
+from meetup_bot.services.attendance import SheetRow
+from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound, PermissionDenied
 from meetup_bot.telegram.attendance_callbacks import (
     PAGE_PREFIX,
     TARGET_DONE,
@@ -55,6 +55,14 @@ class SheetStatus(enum.StrEnum):
     CANCELLED = "cancelled"
     NO_ACCESS = "no_access"
     FAILED = "failed"
+
+
+# Отказы сервиса, при которых список явки просто не отправляется
+_REFUSAL_STATUSES = {
+    ErrorCode.EVENT_CANCELLED: SheetStatus.CANCELLED,
+    ErrorCode.ATTENDANCE_NOT_YET: SheetStatus.NOT_STARTED,
+    ErrorCode.ATTENDANCE_WINDOW_CLOSED: SheetStatus.WINDOW_CLOSED,
+}
 
 
 def _callback(event_id: int, target: str) -> str:
@@ -186,41 +194,39 @@ class AttendanceUI:
         кнопкой «Готово»; уже отмечена и окно 7 суток открыто — режим исправления.
         """
         try:
-            async with self._sessions() as session:
-                if not await admins.is_admin(session, admin_id):
-                    return SheetStatus.NO_ACCESS
-                event = await events.get(session, event_id)
-                if event is None or event.status == EventStatus.CANCELLED.value:
-                    return SheetStatus.CANCELLED
-                now = self._clock.now()
-                if event.status != EventStatus.FINISHED.value and event.starts_at > now:
-                    return SheetStatus.NOT_STARTED
-                if now > event.starts_at + ATTENDANCE_WINDOW:
-                    return SheetStatus.WINDOW_CLOSED
-                starts_at, ends_at, place = event.starts_at, event.ends_at, event.place
-                correction = event.attendance_marked_at is not None
-            rows = await self._services.attendance.get_sheet(admin_id, event_id)
+            info = await self._services.attendance.sheet_info(admin_id, event_id)
+        except PermissionDenied:
+            return SheetStatus.NO_ACCESS
+        except NotFound:
+            return SheetStatus.CANCELLED
+        except InvalidOperation as exc:
+            status = _REFUSAL_STATUSES.get(exc.code)
+            if status is None:
+                logger.exception("не удалось подготовить список явки (event_id=%s)", event_id)
+                return SheetStatus.FAILED
+            return status
         except Exception:
             logger.exception("не удалось подготовить список явки (event_id=%s)", event_id)
             return SheetStatus.FAILED
 
+        rows = info.rows
         tz = self._services.settings.timezone_now()
-        title = f"Явка: встреча {format_interval(starts_at, ends_at, tz)}"
-        if place:
-            title += f", {place}"
+        title = f"Явка: встреча {format_interval(info.starts_at, info.ends_at, tz)}"
+        if info.place:
+            title += f", {info.place}"
         lines = [html.escape(title)]
         if not rows:
             lines.append("Активных участников нет.")
-        elif correction:
-            until = format_moment(starts_at + ATTENDANCE_WINDOW, tz)
+        elif info.correction:
+            until = format_moment(info.window_ends_at, tz)
             lines.append("Нажатие на имя сразу меняет отметку.")
             lines.append(f"Исправление отметок возможно до {until}.")
         else:
             lines.append("Нажмите на имя, чтобы отметить неявку (🚫), затем «Готово».")
         if page_count(len(rows), PAGE_SIZE) > 1:
             lines.append(f"Участников: {len(rows)}; листайте страницы кнопками ◀ ▶.")
-        marked = _db_no_shows(rows) if correction else set()
-        markup = build_keyboard(event_id, rows, marked, with_done=not correction)
+        marked = _db_no_shows(rows) if info.correction else set()
+        markup = build_keyboard(event_id, rows, marked, with_done=not info.correction)
         try:
             message = await self._bot.send_message(
                 admin_id, "\n".join(lines), parse_mode="HTML", reply_markup=markup
@@ -271,12 +277,14 @@ class AttendanceUI:
         event_id: int,
         registration_id: int,
     ) -> InlineKeyboardMarkup:
-        """Режим исправления: отметка сразу пишется в БД (обратная текущей по данным БД)."""
-        rows = await self._services.attendance.get_sheet(admin_id, event_id)
-        current = {row.registration_id: row.attendance for row in rows}
+        """Режим исправления: отметка сразу пишется в БД.
+
+        Целевое значение берётся с кнопки, которую админ видел, а не из БД: два админа,
+        нажавших одновременно, получают одно состояние, а не отменяют друг друга.
+        """
         new = (
             Attendance.ATTENDED
-            if current.get(registration_id) == Attendance.NO_SHOW.value
+            if registration_id in marked_in_markup(markup)
             else Attendance.NO_SHOW
         )
         await self._services.attendance.correct(admin_id, event_id, registration_id, new)

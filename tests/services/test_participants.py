@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
 
-from meetup_bot.db.models import Attendance, AuditLog, Ban, BanReason, Registration, User
+from meetup_bot.db.models import Attendance, AuditLog, Ban, BanReason, Event, Registration, User
 from meetup_bot.repositories import events
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation, NotFound, PermissionDenied
@@ -63,7 +64,7 @@ async def test_добавление_пользователя_создаёт_ак
     result = await app.services.participants.admin_add(ADMIN_ID, event_id, user=info(1))
     registration = await reg_of(app, event_id, 1001)
     assert (registration.status, registration.source) == ("active", "admin")
-    assert (result.seats_taken, result.capacity, result.over_capacity) == (1, 5, False)
+    assert result.over_capacity is False
     assert result.registration_id == registration.id
 
 
@@ -131,7 +132,7 @@ async def test_добавление_сверх_лимита_с_force_разре�
     result = await app.services.participants.admin_add(
         ADMIN_ID, event_id, manual_name="B", force=True
     )
-    assert (result.over_capacity, result.seats_taken, result.capacity) == (True, 2, 1)
+    assert result.over_capacity is True
     assert await taken(app, event_id) == 2
 
 
@@ -595,3 +596,15 @@ async def test_у_ручной_записи_без_аккаунта_личка_�
     listing = await app.services.participants.list_participants(OWNER_ID, event_id)
     assert listing.active[0].user_id is None
     assert listing.active[0].dm_available is False
+
+
+async def test_список_сообщает_прошёл_ли_дедлайн_отмены(app: App) -> None:
+    event_id = await make_event(app)
+    assert not (
+        await app.services.participants.list_participants(ADMIN_ID, event_id)
+    ).after_deadline
+    async with app.sessions() as session:
+        event = await session.get(Event, event_id)
+    assert event is not None
+    app.clock.advance(event.cancel_deadline_at - app.clock.now() + timedelta(minutes=1))
+    assert (await app.services.participants.list_participants(ADMIN_ID, event_id)).after_deadline

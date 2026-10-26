@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from meetup_bot.clock import FakeClock
 from meetup_bot.db.models import AuditLog, Event, EventStatus
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.lifecycle import (
     AutoCreateStatus,
     EventDefaults,
@@ -652,11 +653,19 @@ async def test_ключ_считается_по_локальной_дате_а_�
     )
 
 
+def reject_creation(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Сервис встреч отклоняет создание: так выглядят недопустимые моменты для автосоздания."""
+
+    async def invalid(**_: object) -> int:
+        raise InvalidOperation(ErrorCode.INVALID_TIMES, "порядок моментов нарушен")
+
+    monkeypatch.setattr(app.services.events, "create_event", invalid)
+
+
 async def test_автосоздание_с_недопустимыми_моментами_даёт_INVALID(
-    app: App, caplog: pytest.LogCaptureFixture
+    app: App, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Дедлайн отмены за 7 дней до встречи уже в прошлом: порядок моментов нарушен
-    await app.services.settings.set("cancel_deadline_days_before", 7, ADMIN_ID)
+    reject_creation(app, monkeypatch)
     rules = app.services.settings.rules_now()
     with caplog.at_level(logging.WARNING):
         result = await app.services.lifecycle.create_weekly_event(rules, app.clock.now())
@@ -666,9 +675,9 @@ async def test_автосоздание_с_недопустимыми_момен
 
 
 async def test_недопустимые_настройки_предупреждают_один_раз_на_ключ(
-    app: App, caplog: pytest.LogCaptureFixture
+    app: App, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await app.services.settings.set("cancel_deadline_days_before", 7, ADMIN_ID)
+    reject_creation(app, monkeypatch)
     rules = app.services.settings.rules_now()
     with caplog.at_level(logging.WARNING):
         for _ in range(3):
@@ -676,17 +685,30 @@ async def test_недопустимые_настройки_предупрежд�
     assert caplog.text.count("автосоздание weekly:2026-10-23 невозможно") == 1
 
 
-async def test_после_исправления_настроек_автосоздание_работает(app: App) -> None:
-    await app.services.settings.set("cancel_deadline_days_before", 7, ADMIN_ID)
+async def test_после_исправления_настроек_автосоздание_работает(
+    app: App, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reject_creation(app, monkeypatch)
     rules = app.services.settings.rules_now()
     assert (
         await app.services.lifecycle.create_weekly_event(rules, app.clock.now())
     ).status is AutoCreateStatus.INVALID
-    await app.services.settings.reset("cancel_deadline_days_before", ADMIN_ID)
+    monkeypatch.undo()
     result = await app.services.lifecycle.create_weekly_event(
         app.services.settings.rules_now(), app.clock.now()
     )
     assert result.status is AutoCreateStatus.CREATED
+
+
+async def test_автосоздание_поздней_встречи_зажимает_дедлайн_отмены(app: App) -> None:
+    # Дедлайн за 7 дней до встречи уже в прошлом: встреча создаётся, дедлайн = моменту создания
+    await app.services.settings.set("cancel_deadline_days_before", 7, ADMIN_ID)
+    result = await app.services.lifecycle.create_weekly_event(
+        app.services.settings.rules_now(), app.clock.now()
+    )
+    assert result.status is AutoCreateStatus.CREATED
+    assert result.event_id is not None
+    assert (await get_event(app, result.event_id)).cancel_deadline_at == app.clock.now()
 
 
 async def test_автосоздание_без_провайдеров_использует_умолчания(
@@ -700,10 +722,10 @@ async def test_автосоздание_без_провайдеров_испол
     assert event.capacity == EventDefaults().capacity
 
 
-async def test_автосоздание_принимает_асинхронный_провайдер_умолчаний(
+async def test_автосоздание_берёт_параметры_из_провайдера_умолчаний(
     app: App, clock: FakeClock
 ) -> None:
-    async def defaults() -> EventDefaults:
+    def defaults() -> EventDefaults:
         return EventDefaults(capacity=42, place="Парк")
 
     service = LifecycleService(

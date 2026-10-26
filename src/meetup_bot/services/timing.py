@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -91,13 +91,24 @@ def compute_times(starts_at: datetime, settings: ScheduleSettings) -> EventTimes
     )
 
 
+def clamp_deadline(times: EventTimes, floor: datetime) -> tuple[EventTimes, bool]:
+    """Дедлайн отмены не раньше `floor` (момента создания или переноса); True, если подняли.
+
+    У поздно созданной встречи расчётный дедлайн уже прошёл: он приравнивается к моменту
+    создания, и отменить запись без штрафа нельзя с самого начала.
+    """
+    if times.cancel_deadline_at >= floor:
+        return times, False
+    return replace(times, cancel_deadline_at=floor), True
+
+
 def validate_times(times: EventTimes, created_at: datetime) -> None:
-    """Порядок: создание < дедлайн отмены <= начало <= закрытие записи <= запрос явки.
+    """Порядок: создание <= дедлайн отмены <= начало <= закрытие записи <= запрос явки.
 
     Начало строго раньше конца встречи и запроса явки.
     """
     ordered = (
-        created_at < times.cancel_deadline_at,
+        created_at <= times.cancel_deadline_at,
         times.cancel_deadline_at <= times.starts_at,
         times.starts_at <= times.registration_closes_at,
         times.registration_closes_at <= times.attendance_prompt_at,
@@ -106,6 +117,6 @@ def validate_times(times: EventTimes, created_at: datetime) -> None:
     )
     if not all(ordered):
         raise InvalidEventTimes(
-            "нарушен порядок: создание < дедлайн отмены <= начало <= закрытие записи "
+            "нарушен порядок: создание <= дедлайн отмены <= начало <= закрытие записи "
             "<= запрос явки, начало < конец"
         )

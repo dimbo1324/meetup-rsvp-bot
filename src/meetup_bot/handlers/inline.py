@@ -17,10 +17,12 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from meetup_bot.clock import Clock
 from meetup_bot.container import Services
 from meetup_bot.db.models import EventStatus
 from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
+from meetup_bot.services.posts import register_post
 from meetup_bot.telegram.common import START_ABOUT, check_admin
 from meetup_bot.telegram.keyboards import to_markup
 from meetup_bot.telegram.post_updater import PostUpdater
@@ -32,8 +34,13 @@ logger = logging.getLogger(__name__)
 router = Router(name="inline")
 
 RESULT_PREFIX = "event:"
+# Фото-результат помечен в id: chosen_inline_result не говорит, каким был результат, а вид
+# разосланного поста (с фото или текстовый) определяет лимит подписи и способ правки
+RESULT_PHOTO_SUFFIX = ":photo"
 # Telegram принимает не более 50 результатов в одном ответе
 MAX_RESULTS = 50
+RESULT_TITLE = "Встреча"
+RESULT_DESCRIPTION = "Занято {taken} из {capacity} мест"
 _NOT_ADMIN_BUTTON = InlineQueryResultsButton(
     text="Бот записи на встречи", start_parameter=START_ABOUT
 )
@@ -65,22 +72,25 @@ async def on_inline_query(
             markup = to_markup(rendered)
             result_id = f"{RESULT_PREFIX}{item.id}"
             photo_file_id = data.photo_file_id
+            title = f"{RESULT_TITLE}: {format_interval(data.starts_at, data.ends_at, tz)}"
+            description = RESULT_DESCRIPTION.format(taken=item.seats_taken, capacity=item.capacity)
             if photo_file_id and rendered.has_photo:
                 results.append(
                     InlineQueryResultCachedPhoto(
-                        id=result_id,
+                        id=f"{result_id}{RESULT_PHOTO_SUFFIX}",
                         photo_file_id=photo_file_id,
+                        title=title,
+                        description=description,
                         caption=rendered.text,
                         reply_markup=markup,
                     )
                 )
                 continue
-            when = format_interval(data.starts_at, data.ends_at, tz)
             results.append(
                 InlineQueryResultArticle(
                     id=result_id,
-                    title=f"Встреча: {when}",
-                    description=f"Занято {item.seats_taken} из {item.capacity} мест",
+                    title=title,
+                    description=description,
                     input_message_content=InputTextMessageContent(
                         message_text=rendered.text,
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
@@ -99,6 +109,8 @@ async def on_chosen_inline_result(
     chosen: ChosenInlineResult,
     user_info: UserInfo,
     services: Services,
+    sessions: async_sessionmaker[AsyncSession],
+    clock: Clock,
     post_updater: PostUpdater,
 ) -> None:
     """Запоминает отправленный пост, чтобы потом его редактировать (по inline_message_id)."""
@@ -107,13 +119,22 @@ async def on_chosen_inline_result(
         # Без клавиатуры у сообщения Telegram не присылает inline_message_id
         logger.warning("chosen_inline_result без данных поста")
         return
+    raw_id = chosen.result_id.removeprefix(RESULT_PREFIX)
+    has_photo = raw_id.endswith(RESULT_PHOTO_SUFFIX)
     try:
-        event_id = int(chosen.result_id.removeprefix(RESULT_PREFIX))
+        event_id = int(raw_id.removesuffix(RESULT_PHOTO_SUFFIX))
     except ValueError:
         logger.warning("chosen_inline_result с неизвестным id результата")
         return
     try:
-        await services.users.register_post(event_id, inline_message_id, user_info.id)
+        await register_post(
+            sessions,
+            clock,
+            event_id=event_id,
+            inline_message_id=inline_message_id,
+            posted_by=user_info.id,
+            has_photo=has_photo,
+        )
     except Exception:
         logger.exception("не удалось зарегистрировать пост встречи %s", event_id)
         return

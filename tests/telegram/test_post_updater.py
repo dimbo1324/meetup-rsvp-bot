@@ -37,7 +37,9 @@ async def make_event(app: App, **kwargs: Any) -> int:
     return created.event_id
 
 
-async def add_post(app: App, event_id: int, inline_id: str = INLINE_ID) -> int:
+async def add_post(
+    app: App, event_id: int, inline_id: str = INLINE_ID, *, has_photo: bool | None = None
+) -> int:
     async with app.sessions() as session, session.begin():
         post, _ = await event_posts.register(
             session,
@@ -45,6 +47,7 @@ async def add_post(app: App, event_id: int, inline_id: str = INLINE_ID) -> int:
             inline_message_id=inline_id,
             posted_by=None,
             now=app.clock.now(),
+            has_photo=has_photo,
         )
         return post.id
 
@@ -473,3 +476,146 @@ async def test_задача_убирает_себя_из_реестра(app: App
     assert event_id in tg.updater._tasks
     await asyncio.wait(list(tg.updater._tasks.values()))
     assert tg.updater._tasks == {}
+
+
+LONG_DESCRIPTION = "Очень длинное описание. " * 80
+
+
+async def test_пост_запоминает_вид_по_фото_встречи_если_вид_не_указан(app: App) -> None:
+    with_photo = await make_event(app, photo_file_id="photo-1")
+    without_photo = await make_event(app)
+    first = await add_post(app, with_photo, "a")
+    second = await add_post(app, without_photo, "b")
+    assert (await get_post(app, first)).has_photo is True
+    assert (await get_post(app, first)).last_photo_file_id == "photo-1"
+    assert (await get_post(app, second)).has_photo is False
+
+
+async def test_явный_вид_поста_важнее_текущего_фото_встречи(app: App) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    post_id = await add_post(app, event_id, has_photo=False)
+    assert (await get_post(app, post_id)).has_photo is False
+
+
+async def test_смена_фото_у_фото_поста_правит_медиа_с_подписью_и_кнопками(
+    app: App, tg: Harness
+) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    post_id = await add_post(app, event_id)
+    await app.services.events.update_details(OWNER_ID, event_id, photo_file_id="photo-2")
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    (call,) = tg.session.of("EditMessageMedia")
+    assert call["inline_message_id"] == INLINE_ID
+    assert call["media"]["type"] == "photo"
+    assert call["media"]["media"] == "photo-2"
+    assert call["media"]["parse_mode"] == "HTML"
+    assert "Записались: 0 из 10" in call["media"]["caption"]
+    assert call["reply_markup"]["inline_keyboard"]
+    assert not tg.session.of("EditMessageCaption")
+    assert (await get_post(app, post_id)).last_photo_file_id == "photo-2"
+
+
+async def test_фото_не_меняется_при_правке_счётчика(app: App, tg: Harness) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    await add_post(app, event_id)
+    await app.services.registration.register(event_id, person(1))
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert not tg.session.of("EditMessageMedia")
+    assert len(tg.session.of("EditMessageCaption")) == 1
+
+
+async def test_смена_только_фото_без_изменения_текста_тоже_правит_медиа(
+    app: App, tg: Harness
+) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    await add_post(app, event_id)
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    await app.services.events.update_details(OWNER_ID, event_id, photo_file_id="photo-2")
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert [c["media"]["media"] for c in tg.session.of("EditMessageMedia")] == ["photo-2"]
+
+
+async def test_удаление_фото_у_встречи_оставляет_фото_посту_и_обновляет_подпись(
+    app: App, tg: Harness
+) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1", description_html=LONG_DESCRIPTION)
+    post_id = await add_post(app, event_id)
+    await app.services.events.update_details(OWNER_ID, event_id, photo_file_id=None)
+    await app.services.registration.register(event_id, person(1))
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert not tg.session.of("EditMessageText")
+    assert not tg.session.of("EditMessageMedia")
+    (call,) = tg.session.of("EditMessageCaption")
+    assert "Записались: 1 из 10" in call["caption"]
+    assert len(call["caption"]) <= 1024
+    assert (await get_post(app, post_id)).has_photo is True
+
+
+async def test_текстовому_посту_фото_не_добавляется_и_лимит_текста_4096(
+    app: App, tg: Harness
+) -> None:
+    event_id = await make_event(app, description_html=LONG_DESCRIPTION)
+    await add_post(app, event_id)
+    await app.services.events.update_details(OWNER_ID, event_id, photo_file_id="photo-1")
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert not tg.session.of("EditMessageMedia")
+    assert not tg.session.of("EditMessageCaption")
+    (call,) = tg.session.of("EditMessageText")
+    assert len(call["text"]) > 1024
+    assert len(call["text"]) <= 4096
+
+
+async def test_фото_пост_и_текстовый_пост_одной_встречи_получают_свои_лимиты(
+    app: App, tg: Harness
+) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1", description_html=LONG_DESCRIPTION)
+    await add_post(app, event_id, "photo-post", has_photo=True)
+    await add_post(app, event_id, "text-post", has_photo=False)
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    (caption,) = tg.session.of("EditMessageCaption")
+    (text,) = tg.session.of("EditMessageText")
+    assert caption["inline_message_id"] == "photo-post"
+    assert len(caption["caption"]) <= 1024
+    assert text["inline_message_id"] == "text-post"
+    assert len(text["text"]) > 1024
+
+
+async def test_отказ_смены_медиа_не_теряет_счётчик_и_не_повторяется(
+    app: App, tg: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    post_id = await add_post(app, event_id)
+    await app.services.events.update_details(OWNER_ID, event_id, photo_file_id="photo-2")
+    fail_first(tg, bad_request("Bad Request: wrong file identifier"), method="EditMessageMedia")
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert len(tg.session.of("EditMessageMedia")) == 1
+    assert len(tg.session.of("EditMessageCaption")) == 1
+    assert (await get_post(app, post_id)).last_render_hash
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert len(tg.session.of("EditMessageMedia")) == 1
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+async def test_ошибка_вида_исправляет_запомненный_вид_поста(app: App, tg: Harness) -> None:
+    event_id = await make_event(app, photo_file_id="photo-1")
+    post_id = await add_post(app, event_id, has_photo=True)
+    fail_first(
+        tg,
+        bad_request("Bad Request: there is no caption in the message to edit"),
+        method="EditMessageCaption",
+    )
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert (await get_post(app, post_id)).has_photo is False
+    tg.updater.schedule(event_id)
+    await flush(tg)
+    assert len(tg.session.of("EditMessageCaption")) == 1

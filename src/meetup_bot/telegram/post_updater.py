@@ -8,6 +8,7 @@ import logging
 from collections import defaultdict
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
@@ -16,16 +17,16 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
     TelegramServerError,
 )
-from aiogram.types import InlineKeyboardMarkup, LinkPreviewOptions
+from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.renderer.post import RenderedPost
+from meetup_bot.renderer.post import PostData, RenderedPost
 from meetup_bot.repositories import event_posts
 from meetup_bot.services.settings import SettingsService
 from meetup_bot.telegram.common import MAX_RETRY_AFTER
 from meetup_bot.telegram.keyboards import to_markup
-from meetup_bot.telegram.posts import build_post
+from meetup_bot.telegram.posts import build_post, render_as
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,15 @@ _DEAD_MARKERS = (
 )
 # Тип поста (фото/текст) изменился после рассылки: правим другим методом
 _WRONG_KIND_MARKERS = ("there is no caption in the message", "there is no text in the message")
+
+
+@dataclasses.dataclass(frozen=True)
+class _Target:
+    post_id: int
+    inline_id: str
+    last_hash: str | None
+    has_photo: bool
+    last_photo: str | None
 
 
 class PostUpdater:
@@ -112,27 +122,42 @@ class PostUpdater:
         built = await build_post(self._sessions, self._settings, event_id)
         if built is None:
             return
-        rendered = built[1]
+        data = built[0]
         async with self._sessions() as session:
             posts = await event_posts.list_live(session, event_id)
         # Дальше только простые значения: ORM-объекты после закрытия сессии не трогаем
-        targets = [(p.id, p.inline_message_id, p.last_render_hash) for p in posts]
+        targets = [
+            _Target(
+                p.id, p.inline_message_id, p.last_render_hash, p.has_photo, p.last_photo_file_id
+            )
+            for p in posts
+            if p.inline_message_id is not None
+        ]
         first = True
-        for post_id, inline_id, last_hash in targets:
-            if inline_id is None or last_hash == rendered.content_hash:
+        for target in targets:
+            rendered = render_as(data, target.has_photo)
+            new_media = target.has_photo and data.photo_file_id not in (None, target.last_photo)
+            if target.last_hash == rendered.content_hash and not new_media:
                 continue
             if not first:
                 await asyncio.sleep(self._pause)
             first = False
             try:
-                await self._edit_one(post_id, inline_id, rendered)
+                await self._edit_one(target, data, rendered, new_media=new_media)
             except Exception:
-                logger.exception("ошибка правки поста %s встречи %s", post_id, event_id)
+                logger.exception("ошибка правки поста %s встречи %s", target.post_id, event_id)
 
-    async def _edit_one(self, post_id: int, inline_id: str, rendered: RenderedPost) -> None:
+    async def _edit_one(
+        self, target: _Target, data: PostData, rendered: RenderedPost, *, new_media: bool
+    ) -> None:
+        post_id = target.post_id
+        has_photo = target.has_photo
+        # Фото, которое после правки видно в посте; при неизвестном виде остаётся прежним
+        shown = target.last_photo if has_photo else None
         for attempt in range(MAX_ATTEMPTS):
+            media = data.photo_file_id if new_media else None
             try:
-                await self._send_edit(inline_id, rendered)
+                await self._send_edit(target.inline_id, rendered, media)
             except TelegramRetryAfter as exc:
                 await asyncio.sleep(min(exc.retry_after, MAX_RETRY_AFTER))
                 continue
@@ -144,13 +169,26 @@ class PostUpdater:
             except TelegramBadRequest as exc:
                 message = exc.message.lower()
                 if _NOT_MODIFIED in message:
+                    shown = media or shown
                     break  # содержимое уже такое — считаем успехом
                 if any(marker in message for marker in _WRONG_KIND_MARKERS):
-                    rendered = dataclasses.replace(rendered, has_photo=not rendered.has_photo)
+                    # Запомненный вид поста неверен: исправляем его и правим другим методом
+                    has_photo = not has_photo
+                    rendered = render_as(data, has_photo)
+                    new_media = False
+                    shown = None
                     continue
                 if any(marker in message for marker in _DEAD_MARKERS):
                     await self._mark_dead(post_id)
                     return
+                if new_media:
+                    # Фото не принято (например, файл удалён): подпись и счётчик важнее
+                    logger.warning(
+                        "Telegram отклонил смену фото поста %s: %s", post_id, exc.message
+                    )
+                    shown = data.photo_file_id
+                    new_media = False
+                    continue
                 logger.error("Telegram отклонил правку поста %s: %s", post_id, exc.message)
                 return
             except TelegramForbiddenError:
@@ -160,19 +198,33 @@ class PostUpdater:
                 logger.exception("сбой Telegram при правке поста %s", post_id)
                 return
             else:
+                shown = media or shown
                 break
         else:
             logger.warning("правка поста %s: исчерпаны попытки из-за лимитов", post_id)
             return
         async with self._sessions() as session, session.begin():
             await event_posts.mark_edited(
-                session, post_id, content_hash=rendered.content_hash, now=self._clock.now()
+                session,
+                post_id,
+                content_hash=rendered.content_hash,
+                now=self._clock.now(),
+                has_photo=has_photo,
+                photo_file_id=shown if has_photo else None,
             )
 
-    async def _send_edit(self, inline_id: str, rendered: RenderedPost) -> None:
+    async def _send_edit(self, inline_id: str, rendered: RenderedPost, media: str | None) -> None:
         # Пустая разметка снимает кнопки; None оставил бы прежние
         markup = to_markup(rendered) or InlineKeyboardMarkup(inline_keyboard=[])
-        if rendered.has_photo:
+        if rendered.has_photo and media is not None:
+            await self._bot.edit_message_media(
+                media=InputMediaPhoto(
+                    media=media, caption=rendered.text, parse_mode=ParseMode.HTML
+                ),
+                inline_message_id=inline_id,
+                reply_markup=markup,
+            )
+        elif rendered.has_photo:
             await self._bot.edit_message_caption(
                 inline_message_id=inline_id, caption=rendered.text, reply_markup=markup
             )

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from meetup_bot.services.defaults import DEFAULT_TIMEZONE
@@ -36,13 +35,6 @@ def resolve[T](value: T | Callable[[], T]) -> T:
     return value() if callable(value) else value
 
 
-async def resolve_any[T](provider: Callable[[], T | Awaitable[T]]) -> T:
-    result = provider()
-    if inspect.isawaitable(result):
-        return await result
-    return result
-
-
 def chunk_lines(lines: Iterable[str], limit: int = MESSAGE_CHUNK) -> list[str]:
     """Склеивает строки в сообщения не длиннее `limit`; строки не рвутся посередине."""
     chunks: list[str] = []
@@ -72,5 +64,12 @@ async def notify_promotions(
     for promotion in promotions:
         if promotion.user_id is None or not promotion.dm_available:
             continue
-        text = render("promoted", {"starts_at": promotion.starts_at, "place": promotion.place})
+        text = render(
+            "promoted",
+            {
+                "starts_at": promotion.starts_at,
+                "ends_at": promotion.ends_at,
+                "place": promotion.place,
+            },
+        )
         await safe_send_dm(notifier, promotion.user_id, text)

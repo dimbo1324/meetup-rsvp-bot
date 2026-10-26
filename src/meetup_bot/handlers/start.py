@@ -36,21 +36,36 @@ WELCOME_ADMIN_EXTRA = (
     "встречу. Меню администратора — команда /menu."
 )
 REMIND_ON = "Напоминания включены. Я напишу вам перед встречей и если освободится место."
+# Человек мог нажать «Записаться», не успев прочитать всплывающее окно с итогом записи
+REMIND_STATUS_HINT = (
+    "Если вы только что записались, запись сохранена. Чтобы проверить её статус, "
+    "нажмите «Записаться» под постом ещё раз: повторное нажатие ничего не изменит."
+)
+# Сюда приходят уже нажавшие /start, поэтому просить его нажать ещё раз не нужно
 ABOUT_TEXT = (
     "Я бот записи на встречи клуба. Пост со встречей приходит в чат, а запись и отмена "
-    "делаются кнопками под ним. Нажмите /start, чтобы я мог присылать вам напоминания."
+    "делаются кнопками под ним. Напоминания включены: я напишу вам перед встречей."
 )
-HELP_USER = (
-    "Как пользоваться ботом:\n"
-    "• Под постом встречи нажмите «Записаться» (или «Записаться +1», если доступно).\n"
+HELP_HEAD = "Как пользоваться ботом:\n"
+HELP_JOIN = "• Под постом встречи нажмите «Записаться».\n"
+HELP_JOIN_PLUS_ONE = "• Под постом встречи нажмите «Записаться» (или «Записаться +1», с гостем).\n"
+HELP_TAIL = (
     "• Передумали — нажмите «Отменить запись» до указанного срока.\n"
     "• Нажмите /start, чтобы получать напоминания в личные сообщения."
 )
-HELP_ADMIN = (
-    HELP_USER + "\n\nДля администраторов:\n"
+HELP_USER = HELP_HEAD + HELP_JOIN + HELP_TAIL
+HELP_ADMIN_EXTRA = (
+    "\n\nДля администраторов:\n"
     "• Наберите @{bot} в любом чате, чтобы разослать пост открытой встречи.\n"
     "• /menu — меню администратора, /cancel — выйти из текущего диалога."
 )
+HELP_ADMIN = HELP_USER + HELP_ADMIN_EXTRA
+
+
+def build_help(*, is_admin: bool, bot: str, plus_one_enabled: bool) -> str:
+    """Справка; про «+1» говорим только когда кнопка действительно есть под постами."""
+    text = HELP_HEAD + (HELP_JOIN_PLUS_ONE if plus_one_enabled else HELP_JOIN) + HELP_TAIL
+    return text + HELP_ADMIN_EXTRA.format(bot=bot) if is_admin else text
 
 
 @private.message(Command("start"))
@@ -71,7 +86,7 @@ async def cmd_start(
 
     param = (command.args or "").strip()
     if param == START_REMIND:
-        text = REMIND_ON
+        text = f"{REMIND_ON}\n\n{REMIND_STATUS_HINT}"
     elif param == START_ABOUT:
         text = ABOUT_TEXT
     else:
@@ -87,13 +102,17 @@ async def cmd_start(
 async def cmd_help(
     message: Message,
     user_info: UserInfo,
+    services: Services,
     sessions: async_sessionmaker[AsyncSession],
     bot_username: str,
 ) -> None:
-    if await check_admin(sessions, user_info.id):
-        await message.answer(HELP_ADMIN.format(bot=bot_username))
-    else:
-        await message.answer(HELP_USER)
+    await message.answer(
+        build_help(
+            is_admin=await check_admin(sessions, user_info.id),
+            bot=bot_username,
+            plus_one_enabled=services.settings.options_now().plus_one_enabled,
+        )
+    )
 
 
 @private.message(Command("dev_shift"))
