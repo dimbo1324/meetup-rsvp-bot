@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 POST_SHARE_HINT = "в нужном чате наберите @ и имя бота и выберите встречу."
-AUTO_CREATED_TEXT = "Создана встреча на {when}. Разошлите пост: " + POST_SHARE_HINT
+AUTO_CREATED_TEXT = "Создана встреча: {when}. Разошлите пост: " + POST_SHARE_HINT
 POST_REMINDER_TEXT = "Пост встречи {when} ещё не разослан. Чтобы разослать: " + POST_SHARE_HINT
 
 EVENT_FULL_TEXT = "Встреча {when} заполнена: занято {taken} из {capacity}."

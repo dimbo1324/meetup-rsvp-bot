@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import ClientDecodeError, TelegramBadRequest
 from aiogram.methods import GetChat
 
 from meetup_bot.telegram.service_chat import check_service_chat
@@ -60,6 +60,17 @@ async def test_недоступный_чат_даёт_ошибку_в_лог_и_
     stub_get_chat(
         tg, monkeypatch, TelegramBadRequest(GetChat(chat_id=1), "Bad Request: chat not found")
     )
+    assert await check_service_chat(tg.bot, app.notifier, -100500) is False
+    assert app.notifier.service == [SERVICE_CHAT_UNKNOWN_TEXT]
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+
+
+async def test_сбой_разбора_ответа_не_мешает_запуску(
+    app: App, tg: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Диагностика чата вспомогательная: нетипичная ошибка библиотеки только логируется
+    broken = ClientDecodeError("не разобран ответ", ValueError("поле"), "{}")
+    stub_get_chat(tg, monkeypatch, broken)
     assert await check_service_chat(tg.bot, app.notifier, -100500) is False
     assert app.notifier.service == [SERVICE_CHAT_UNKNOWN_TEXT]
     assert any(r.levelname == "ERROR" for r in caplog.records)

@@ -6,7 +6,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import AiogramError
 
 from meetup_bot.services.ports import Notifier
 from meetup_bot.texts.service import SERVICE_CHAT_PUBLIC_TEXT, SERVICE_CHAT_UNKNOWN_TEXT
@@ -20,8 +20,9 @@ async def check_service_chat(bot: Bot, notifier: Notifier, chat_id: int) -> bool
     """True, если чат закрытая группа; иначе предупреждает в лог и в сам чат."""
     try:
         chat = await bot.get_chat(chat_id)
-    except TelegramAPIError as exc:
-        logger.error("служебный чат недоступен боту: %s", exc.message)
+    except AiogramError as exc:
+        # Диагностика вспомогательная: любой сбой библиотеки не должен мешать запуску
+        logger.error("служебный чат недоступен боту: %s", exc)
         await notifier.send_service(SERVICE_CHAT_UNKNOWN_TEXT)
         return False
     if chat.username or chat.type not in PRIVATE_CHAT_TYPES:
