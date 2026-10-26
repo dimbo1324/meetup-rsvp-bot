@@ -7,13 +7,17 @@ import pytest
 from aiogram.types import Message, PhotoSize, Update
 
 from meetup_bot.db.models import Event, EventStatus, User
-from meetup_bot.services.settings_schema import REASON_MAX_LEN
+from meetup_bot.services.settings_schema import PLACE_MAX_LEN, REASON_MAX_LEN
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
 
 PLACE = "Кафе «Утро»"
 # Встреча по умолчанию — пятница 16:30–18:30 (Монтевидео); часы стоят на четверге 22.10
 LIST_LABEL = "23 октября 16:30 · запись открыта · занято 0 из 3"
+NOT_YET_TEXT = "Отметить явку можно после закрытия записи на встречу."
+DEADLINE_WARNING = (
+    "Время отмены записи уже прошло, поэтому отменить запись без штрафа участники не смогут."
+)
 
 
 # ---- локальные помощники -------------------------------------------------------------
@@ -85,6 +89,13 @@ async def _allow_dm(app: App, user_id: int) -> None:
         user = await session.get(User, user_id)
         assert user is not None
         user.dm_available = True
+
+
+async def _finish_meeting(app: App, event_id: int) -> None:
+    """Часы -> закрытие записи, встреча переведена в «прошла»: только у такой отмечают явку."""
+    closes_at = (await _event(app, event_id)).registration_closes_at
+    app.clock.advance(closes_at - app.clock.now())
+    await app.services.lifecycle.finish_due(app.clock.now())
 
 
 async def _open_card(tg: Harness) -> int:
@@ -376,7 +387,7 @@ async def test_отметить_явку_до_начала_встречи_отк
     await _open_card(tg)
     sent_before = len(tg.session.of("SendMessage"))
     await _press(tg, "Отметить явку")
-    assert _alerts(tg)[-1] == "Встреча ещё не началась."
+    assert _alerts(tg)[-1] == NOT_YET_TEXT
     assert len(tg.session.of("SendMessage")) == sent_before
 
 
@@ -384,8 +395,7 @@ async def test_отметить_явку_после_начала_присыла�
     app: App, tg: Harness, event_id: int
 ) -> None:
     await app.services.registration.register(event_id, person(1))
-    starts_at = (await _event(app, event_id)).starts_at
-    app.clock.advance(starts_at - app.clock.now() + timedelta(hours=1))
+    await _finish_meeting(app, event_id)
     await _open_card(tg)
     await _press(tg, "Отметить явку")
     assert _alerts(tg)[-1] == "Список отправлен вам в личные сообщения."
@@ -412,8 +422,7 @@ async def test_отметить_явку_если_личка_закрыта_по
     from aiogram.exceptions import TelegramForbiddenError
     from aiogram.methods import SendMessage
 
-    starts_at = (await _event(app, event_id)).starts_at
-    app.clock.advance(starts_at - app.clock.now() + timedelta(hours=1))
+    await _finish_meeting(app, event_id)
     await _open_card(tg)
 
     def deny(name: str, data: dict[str, Any]) -> Exception | None:
@@ -424,6 +433,41 @@ async def test_отметить_явку_если_личка_закрыта_по
     tg.session.fail = deny
     await _press(tg, "Отметить явку")
     assert _alerts(tg)[-1] == "Не удалось отправить список (напишите боту /start)."
+
+
+async def test_отметить_явку_после_закрытия_окна_подсказывает_что_срок_вышел(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _finish_meeting(app, event_id)
+    await _open_card(tg)
+    app.clock.advance(timedelta(days=8))
+    sent_before = len(tg.session.of("SendMessage"))
+    await _press(tg, "Отметить явку")
+    assert _alerts(tg)[-1] == "Окно отметки явки закрыто (прошло более 7 суток)."
+    assert len(tg.session.of("SendMessage")) == sent_before
+
+
+async def test_карточка_показывает_что_явка_отмечена(app: App, tg: Harness, event_id: int) -> None:
+    await app.services.registration.register(event_id, person(1))
+    await _finish_meeting(app, event_id)
+    await _open_card(tg)
+    assert "Явка отмечена" not in _screen(tg)
+    await app.services.attendance.mark(OWNER_ID, event_id, set())
+    await _press(tg, "К списку")
+    await tg.click(OWNER_ID, _inline(tg), "занято")
+    assert "✅ Явка отмечена" in _screen(tg)
+
+
+async def test_у_прошедшей_встречи_нет_кнопок_закрытия_и_открытия_записи(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _finish_meeting(app, event_id)
+    await _open_card(tg)
+    labels = " | ".join(_labels(tg))
+    assert "Статус: прошла" in _screen(tg)
+    assert "Закрыть запись" not in labels
+    assert "Открыть запись" not in labels
+    assert "Редактировать" not in labels
 
 
 # ---- предпросмотр и CSV ---------------------------------------------------------------
@@ -523,6 +567,16 @@ async def test_правка_ссылки_и_её_удаление(app: App, tg: 
     assert "Ссылка убрана." in _screen(tg)
 
 
+async def test_ошибка_правки_показывает_текст_кода_и_уточнение_сервиса(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _open_edit(tg, "Место")
+    await _say(tg, "А" * (PLACE_MAX_LEN + 1))
+    assert _said(tg, "Недопустимое название места")
+    assert _said(tg, f"Не длиннее {PLACE_MAX_LEN} символов.")
+    assert (await _event(app, event_id)).place == PLACE
+
+
 async def test_некорректная_ссылка_даёт_подсказку_и_окно_остаётся(
     app: App, tg: Harness, event_id: int
 ) -> None:
@@ -595,6 +649,24 @@ async def test_кривая_дата_год_9999_не_роняет_диалог(
     await _say(tg, "31.12.9999 23:59")
     assert (await _event(app, event_id)).starts_at == before
     assert _said(tg, "ДД.ММ.ГГГГ ЧЧ:ММ") or _said(tg, "Моменты времени не согласованы")
+
+
+async def test_перенос_на_близкое_время_предупреждает_о_дедлайне_отмены(
+    app: App, tg: Harness, event_id: int
+) -> None:
+    await _open_edit(tg, "Дата и время")
+    await _say(tg, "22.10.2026 15:00")  # сегодня: расчётный дедлайн (вчера, 20:00) уже прошёл
+    event = await _event(app, event_id)
+    assert event.starts_at == datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
+    assert event.cancel_deadline_at == app.clock.now()
+    assert "Встреча перенесена" in _screen(tg)
+    assert DEADLINE_WARNING in _screen(tg)
+
+
+async def test_обычный_перенос_без_предупреждения_о_дедлайне(tg: Harness, event_id: int) -> None:
+    await _open_edit(tg, "Дата и время")
+    await _say(tg, "31.10.2026 18:30")
+    assert DEADLINE_WARNING not in _screen(tg)
 
 
 async def test_перенос_закрытой_встречи_сообщает_об_открытии_записи(

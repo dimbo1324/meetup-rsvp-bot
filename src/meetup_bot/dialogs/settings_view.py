@@ -11,6 +11,11 @@ from meetup_bot.texts.render import WEEKDAYS, clip
 
 WEEKDAY_KEYS = frozenset({"event_weekday"})
 PHOTO_KEY = "default_photo_file_id"
+TIMEZONE_KEY = "timezone"
+
+GROUP_DEFAULTS = "defaults"
+GROUP_SCHEDULE = "schedule"
+GROUP_RULES = "rules"
 
 POPULAR_TIMEZONES = (
     DEFAULT_TIMEZONE,
@@ -22,7 +27,7 @@ POPULAR_TIMEZONES = (
 
 # Группа -> (заголовок, подсказка, ключи в порядке показа)
 GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
-    "defaults": (
+    GROUP_DEFAULTS: (
         "Встречи по умолчанию",
         "Эти значения применяются к НОВЫМ встречам; уже созданные не меняются.",
         (
@@ -36,7 +41,7 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
             "default_photo_file_id",
         ),
     ),
-    "schedule": (
+    GROUP_SCHEDULE: (
         "Расписание",
         "Изменения влияют на НОВЫЕ встречи; уже созданные остаются как были.",
         (
@@ -53,7 +58,7 @@ GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
             "post_reminder_time",
         ),
     ),
-    "rules": (
+    GROUP_RULES: (
         "Правила",
         "",
         (
@@ -99,7 +104,7 @@ LABELS: dict[str, str] = {
     "late_promotion_hours": "Порог «поздней» подвижки",
     "notify_admins_on_full": "Сообщать админам о заполнении",
     "notify_admins_on_cancel": "Сообщать админам об отменах",
-    "timezone": "Часовой пояс",
+    TIMEZONE_KEY: "Часовой пояс",
 }
 
 # Пояснения сверх краткого описания из схемы

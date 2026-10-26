@@ -1,5 +1,6 @@
 """Диалог участников встречи: список, добавление, удаление, неявка и бан."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, Registration, RegistrationStatus, User
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.settings_schema import NAME_MAX_LEN, REASON_MAX_LEN
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 from tests.tg_fake import Harness, chat, command_update, next_id, text_update, tg_user
@@ -321,6 +323,28 @@ async def test_выбор_пользователя_сверх_лимита_ид�
     assert "Мест не хватает." in _screen(tg)
     await _press(tg, "Добавить сверх лимита")
     assert {r.user_id for r in await _registrations(app, event_id)} == {person(1).id, 555}
+
+
+async def test_сбой_списка_при_выборе_пользователя_виден_и_залогирован(
+    app: App,
+    tg: Harness,
+    event_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    await _open(tg)
+    await _press(tg, "Добавить участника")
+
+    async def broken(*_: object, **__: object) -> None:
+        raise InvalidOperation(ErrorCode.BAD_STATUS)
+
+    monkeypatch.setattr(app.services.participants, "list_participants", broken)
+    with caplog.at_level(logging.WARNING):
+        await _press(tg, "Выбрать пользователя Telegram")
+    # Пикер не открылся: человек остался в окне и видит причину, а не молча получил пустой список
+    assert "Это действие недоступно для встречи в текущем статусе." in _screen(tg)
+    assert "Кого записать?" in _screen(tg)
+    assert any("не удалось получить участников" in r.getMessage() for r in caplog.records)
 
 
 # ---- удаление ----------------------------------------------------------------------------

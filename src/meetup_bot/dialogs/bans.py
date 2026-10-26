@@ -12,23 +12,27 @@ from aiogram_dialog.widgets.input import TextInput
 from aiogram_dialog.widgets.kbd import Button, Column, Row, ScrollingGroup, Select
 from aiogram_dialog.widgets.text import Const, Format
 
-from meetup_bot.db.models import Ban, BanReason, User
-from meetup_bot.dialogs._buttons import BACK, CANCEL, NO, NO_REASON
-from meetup_bot.dialogs._common import actor_id, get_services, get_sessions, is_admin
+from meetup_bot.db.models import Ban, BanReason
+from meetup_bot.dialogs._buttons import BACK, CANCEL, LIST_PAGE_SIZE, NO, NO_REASON
+from meetup_bot.dialogs._common import actor_id, get_services, guard, is_admin, picked_user
 from meetup_bot.dialogs.states import BansSG, PickerSG
-from meetup_bot.repositories import users_known
 from meetup_bot.repositories.users import UserInfo
+from meetup_bot.services.errors import DomainError
 from meetup_bot.services.names import admin_label
 from meetup_bot.services.settings_schema import REASON_MAX_LEN
-from meetup_bot.telegram.common import fit_alert
+from meetup_bot.telegram.common import safe_answer
 from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 from meetup_bot.texts.render import DATE_INPUT_FORMAT, format_local, format_moment
 
 _HISTORY_LIMIT = 15
 _REASONS = {BanReason.NO_SHOW.value: "неявка", BanReason.MANUAL.value: "вручную"}
+_AUTOMATIC = "автоматически"
+_PICK_TITLE = "Кого забанить?"
+# Выбранный в окне выбора пользователь (результат диалога) на время ввода причины
+_BAN_USER_KEY = "ban_user"
 
 
-def _name(user: User | None, user_id: int) -> str:
+def _name(user: UserInfo | None, user_id: int) -> str:
     if user is None:
         return admin_label(None, None, None, user_id)
     return admin_label(user.first_name, user.last_name, user.username, user_id)
@@ -48,9 +52,8 @@ def _started_at_item(manager: DialogManager) -> bool:
     return isinstance(data, dict) and data.get("user_id") is not None
 
 
-async def _users(manager: DialogManager, ids: set[int]) -> dict[int, User]:
-    async with get_sessions(manager)() as session:
-        return await users_known.get_many(session, ids)
+async def _users(manager: DialogManager, ids: set[int]) -> dict[int, UserInfo]:
+    return await get_services(manager).users.get_many(ids)
 
 
 async def list_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str, Any]:
@@ -59,7 +62,7 @@ async def list_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
     services = get_services(dialog_manager)
     try:
         bans = await services.bans.list_banned(actor_id(dialog_manager))
-    except Exception as exc:
+    except DomainError as exc:
         return {"text": html.escape(describe_error(exc)), "bans": []}
     tz = services.settings.timezone_now()
     users = await _users(dialog_manager, {b.user_id for b in bans})
@@ -85,7 +88,7 @@ async def item_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
     services = get_services(dialog_manager)
     try:
         history = await services.bans.history(actor_id(dialog_manager), user_id)
-    except Exception as exc:
+    except DomainError as exc:
         return {"text": html.escape(describe_error(exc)), "has_ban": False}
     tz = services.settings.timezone_now()
     active = next((b for b in reversed(history) if b.active), None)
@@ -104,13 +107,13 @@ async def item_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
     return {"text": head + "\n".join(lines), "has_ban": True}
 
 
-def _author(user_id: int | None, users: dict[int, User]) -> str:
+def _author(user_id: int | None, users: dict[int, UserInfo]) -> str:
     if user_id is None:
-        return "автоматически"
+        return _AUTOMATIC
     return html.escape(_name(users.get(user_id), user_id))
 
 
-def _history_entry(ban: Ban, users: dict[int, User], tz: Any) -> str:
+def _history_entry(ban: Ban, users: dict[int, UserInfo], tz: Any) -> str:
     reason = _REASONS.get(ban.reason, ban.reason)
     line = (
         f"• {format_moment(ban.banned_at, tz)} — бан ({reason}), "
@@ -119,7 +122,7 @@ def _history_entry(ban: Ban, users: dict[int, User], tz: Any) -> str:
     if ban.comment:
         line += f"; {html.escape(ban.comment)}"
     if ban.unbanned_at is not None:
-        how = "автоматически" if ban.auto_removed else _author(ban.unbanned_by, users)
+        how = _AUTOMATIC if ban.auto_removed else _author(ban.unbanned_by, users)
         line += f"\n   разбан: {format_moment(ban.unbanned_at, tz)}, кем: {how}"
     elif ban.active:
         line += "\n   действует"
@@ -133,7 +136,7 @@ async def history_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[s
     services = get_services(dialog_manager)
     try:
         history = await services.bans.history(actor_id(dialog_manager), user_id)
-    except Exception as exc:
+    except DomainError as exc:
         return {"text": html.escape(describe_error(exc))}
     tz = services.settings.timezone_now()
     ids = {user_id}
@@ -161,71 +164,49 @@ async def ban_comment_getter(dialog_manager: DialogManager, **kwargs: Any) -> di
 
 async def confirm_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str, Any]:
     user_id = _target(dialog_manager)
-    users = await _users(dialog_manager, {user_id} if user_id is not None else set())
-    name = _name(users.get(user_id), user_id) if user_id is not None else ""
-    return {"text": f"Разбанить <b>{html.escape(name)}</b>?"}
+    if not await is_admin(dialog_manager) or user_id is None:
+        return {"text": NO_ACCESS}
+    users = await _users(dialog_manager, {user_id})
+    return {"text": f"Разбанить <b>{html.escape(_name(users.get(user_id), user_id))}</b>?"}
 
 
 async def on_ban_start(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard(callback, manager, close=False):
         return
-    await manager.start(PickerSG.pick, data={"title": "Кого забанить?", "exclude_ids": []})
+    await manager.start(PickerSG.pick, data={"title": _PICK_TITLE, "exclude_ids": []})
 
 
 async def on_picked(start_data: Any, result: Any, manager: DialogManager) -> None:
     """Результат выбора пользователя; при отмене (result=None) остаёмся на месте."""
-    if not isinstance(result, dict) or "user_id" not in result:
+    info = picked_user(result)
+    if info is None or not await is_admin(manager):
         return
-    if not await is_admin(manager):
-        return
-    info = UserInfo(
-        int(result["user_id"]),
-        str(result.get("first_name") or ""),
-        result.get("last_name"),
-        result.get("username"),
-    )
     # Имя сохранит сервис бана: иначе в чёрном списке у незнакомого человека был бы только ID
-    manager.dialog_data["ban_user_id"] = info.id
-    manager.dialog_data["ban_user"] = {
-        "first_name": info.first_name,
-        "last_name": info.last_name,
-        "username": info.username,
-    }
-    manager.dialog_data["ban_label"] = admin_label(
-        info.first_name, info.last_name, info.username, info.id
-    )
+    manager.dialog_data[_BAN_USER_KEY] = result
+    manager.dialog_data["ban_label"] = _name(info, info.id)
     await manager.switch_to(BansSG.ban_comment)
 
 
 async def _do_ban(
     manager: DialogManager, comment: str | None, notify: Callable[[str], Awaitable[Any]]
 ) -> None:
-    user_id = manager.dialog_data.get("ban_user_id")
-    if user_id is None:
+    user = picked_user(manager.dialog_data.get(_BAN_USER_KEY))
+    if user is None:
         await manager.switch_to(BansSG.list)
         return
     if not await is_admin(manager):
         await notify(NO_ACCESS)
         return
-    picked = manager.dialog_data.get("ban_user") or {}
-    user = UserInfo(
-        int(user_id),
-        str(picked.get("first_name") or ""),
-        picked.get("last_name"),
-        picked.get("username"),
-    )
     try:
         await get_services(manager).bans.ban(
-            actor_id(manager), int(user_id), reason=BanReason.MANUAL, comment=comment, user=user
+            actor_id(manager), user.id, reason=BanReason.MANUAL, comment=comment, user=user
         )
-    except Exception as exc:
+    except DomainError as exc:
         await notify(describe_error(exc))
         await manager.switch_to(BansSG.list)
         return
-    manager.dialog_data.pop("ban_user_id", None)
-    manager.dialog_data.pop("ban_user", None)
-    manager.dialog_data["user_id"] = int(user_id)
+    manager.dialog_data.pop(_BAN_USER_KEY, None)
+    manager.dialog_data["user_id"] = user.id
     await notify("Пользователь забанен.")
     await manager.switch_to(BansSG.item)
 
@@ -249,21 +230,20 @@ async def on_comment_error(
 
 async def on_no_comment(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
     async def notify(text: str) -> None:
-        await callback.answer(fit_alert(text), show_alert=True)
+        await safe_answer(callback, text)
 
     await _do_ban(manager, None, notify)
 
 
 async def on_ban_cancel(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    manager.dialog_data.pop("ban_user_id", None)
+    manager.dialog_data.pop(_BAN_USER_KEY, None)
     await manager.switch_to(BansSG.list)
 
 
 async def on_item(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: int
 ) -> None:
-    if not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard(callback, manager, close=False):
         return
     manager.dialog_data["user_id"] = item_id
     await manager.switch_to(BansSG.item)
@@ -278,17 +258,21 @@ async def on_back_to_list(callback: CallbackQuery, button: Button, manager: Dial
 
 
 async def on_unban_confirm(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
+    if not await guard(callback, manager, close=False):
+        return
     user_id = _target(manager)
-    if user_id is None or not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if user_id is None:
+        await manager.switch_to(BansSG.list)
         return
     try:
         ban = await get_services(manager).bans.unban(actor_id(manager), user_id)
-    except Exception as exc:
-        await callback.answer(fit_alert(describe_error(exc)), show_alert=True)
+    except DomainError as exc:
+        await safe_answer(callback, describe_error(exc))
         await manager.switch_to(BansSG.item)
         return
-    await callback.answer("Пользователь разбанен." if ban else "Бан уже снят.")
+    await safe_answer(
+        callback, "Пользователь разбанен." if ban else "Бан уже снят.", show_alert=False
+    )
     await on_back_to_list(callback, button, manager)
 
 
@@ -301,8 +285,7 @@ async def on_history(callback: CallbackQuery, button: Button, manager: DialogMan
 
 
 async def on_unban(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard(callback, manager, close=False):
         return
     await _to(manager, BansSG.confirm_unban)
 
@@ -330,7 +313,7 @@ DIALOGS = [
                 ),
                 id="bans_scroll",
                 width=1,
-                height=8,
+                height=LIST_PAGE_SIZE,
                 hide_on_single_page=True,
             ),
             Button(Const("➕ Забанить"), id="ban_new", on_click=on_ban_start),

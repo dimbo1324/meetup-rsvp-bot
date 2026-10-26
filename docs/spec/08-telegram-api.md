@@ -8,7 +8,7 @@
 - `inline_message_id` приходит в `chosen_inline_result`, **только если к сообщению прикреплена inline-клавиатура**. Наши посты всегда с кнопками.
 - **Подстраховка:** если `chosen_inline_result` не пришёл, `inline_message_id` есть в каждом `callback_query` от такого поста. Если такой ID ещё не известен, пост регистрируется при первом нажатии (lazy registration).
 - Ответ на `inline_query` для админа: открытые встречи, `cache_time = 0`, `is_personal = true`. Для не-админа: пустой список и `button = InlineQueryResultsButton(text="Бот записи на встречи", start_parameter="about")`.
-- Формат результата: встреча с фото даёт `InlineQueryResultCachedPhoto` (по `photo_file_id`) с `caption`, встреча без фото даёт `InlineQueryResultArticle`. ID результата: `event:<id>`.
+- Формат результата: встреча с фото даёт `InlineQueryResultCachedPhoto` (по `photo_file_id`) с `caption`, встреча без фото даёт `InlineQueryResultArticle`. ID результата: `event:<id>` для текстового и `event:<id>:photo` для фото-результата: по суффиксу `chosen_inline_result` узнаёт вид поста и сохраняет его в `event_posts.has_photo`.
 - Боту **не нужно** состоять в чатах, куда рассылаются посты. Он не знает `chat_id` таких постов, и это нормально: редактирование идёт по `inline_message_id`.
 - Редактирование: `editMessageCaption` или `editMessageText` с `inline_message_id`. Удалить inline-сообщение бот не может, только отредактировать.
 - Под постом Telegram показывает «через @имябота», убрать это нельзя.

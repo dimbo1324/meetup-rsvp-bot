@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import html
+import logging
 from typing import Any
 
 from aiogram.types import CallbackQuery, ContentType, Message
@@ -20,27 +21,32 @@ from aiogram_dialog.widgets.text import Const, Format
 from meetup_bot.db.models import BanReason, RegistrationSource, RegistrationStatus
 from meetup_bot.dialogs._buttons import BACK, NO_REASON, TO_EVENT, TO_LIST
 from meetup_bot.dialogs._common import (
+    WARNING_PREFIX,
     actor_id,
+    error_text,
     get_services,
-    get_sessions,
-    is_admin,
-    middleware_value,
+    guard,
+    notice_block,
+    picked_user,
+    set_notice,
 )
 from meetup_bot.dialogs.states import ParticipantsSG, PickerSG
-from meetup_bot.repositories import events as events_repo
-from meetup_bot.repositories.users import UserInfo
-from meetup_bot.services.errors import ErrorCode, InvalidOperation
+from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation
 from meetup_bot.services.names import FALLBACK_NAME
-from meetup_bot.services.participants import ParticipantRow
+from meetup_bot.services.participants import ParticipantList, ParticipantRow
 from meetup_bot.services.settings_schema import NAME_MAX_LEN, REASON_MAX_LEN
-from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 from meetup_bot.texts.render import GUEST_SUFFIX, clip, format_moment, telegram_length
+
+logger = logging.getLogger(__name__)
 
 _BUTTON_LIMIT = 60
 NO_DM_MARK = "📵"
 NO_DM_HINT = f"{NO_DM_MARK} — не нажимал(а) «Старт» у бота, личные сообщения не дойдут"
 
-_NOTICE, _REG, _PENDING, _ADD = "notice", "reg_id", "pending", "pending_add"
+_REG, _PENDING, _ADD = "reg_id", "pending", "pending_add"
+# Виды действий над записью: они же суффиксы id кнопок («ask_<вид>») и ключи текстов подтверждения
+_REMOVE, _FREE, _NOSHOW = "remove", "free", "noshow"
+_ASK_PREFIX = "ask_"
 
 
 # ---- общие помощники ----------------------------------------------------------------
@@ -51,35 +57,24 @@ def _event_id(manager: DialogManager) -> int:
     return int(data["event_id"])
 
 
-def _set_notice(manager: DialogManager, text: str | None) -> None:
-    manager.dialog_data[_NOTICE] = text
-
-
-def _notice(manager: DialogManager) -> str:
-    text = manager.dialog_data.get(_NOTICE)
-    return f"\n{html.escape(str(text))}\n" if text else ""
-
-
 async def _guard(event: Message | CallbackQuery, manager: DialogManager) -> bool:
-    if await is_admin(manager):
-        return True
-    if isinstance(event, CallbackQuery):
-        await event.answer(NO_ACCESS, show_alert=True)
-    else:
-        await event.answer(NO_ACCESS)
-    await manager.done()
-    return False
+    """Без прав диалог закрывается: продолжать работу с участниками нельзя."""
+    return await guard(event, manager, close=True)
+
+
+def _failure(error: DomainError) -> str:
+    return f"{WARNING_PREFIX}{error_text(error)}"
 
 
 async def _to_list(manager: DialogManager, notice: str | None = None) -> None:
-    _set_notice(manager, notice)
+    set_notice(manager, notice)
     manager.dialog_data.pop(_PENDING, None)
     manager.dialog_data.pop(_ADD, None)
     await manager.switch_to(ParticipantsSG.list)
 
 
 async def _clear_notice(_: Any, __: Any, manager: DialogManager) -> None:
-    _set_notice(manager, None)
+    set_notice(manager, None)
 
 
 def _back_to_list(suffix: str) -> SwitchTo:
@@ -112,7 +107,7 @@ def _row_label(row: ParticipantRow, index: int) -> str:
     return clip(label, _BUTTON_LIMIT - telegram_length(suffix)) + suffix
 
 
-async def _load_rows(manager: DialogManager) -> tuple[list[ParticipantRow], Any]:
+async def _load_rows(manager: DialogManager) -> tuple[list[ParticipantRow], ParticipantList]:
     result = await get_services(manager).participants.list_participants(
         actor_id(manager), _event_id(manager)
     )
@@ -125,9 +120,9 @@ async def _load_rows(manager: DialogManager) -> tuple[list[ParticipantRow], Any]
 async def _list_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     try:
         rows, result = await _load_rows(dialog_manager)
-    except Exception as exc:
+    except DomainError as exc:
         return {
-            "text": f"<b>👥 Участники</b>\n⚠️ {html.escape(describe_error(exc))}",
+            "text": f"<b>👥 Участники</b>\n{html.escape(_failure(exc))}",
             "items": [],
         }
     items = [
@@ -140,7 +135,7 @@ async def _list_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     text = (
         f"<b>👥 Участники</b>\nЗанято мест: {result.seats_taken} из {result.capacity}{queue}"
         f"{no_dm}\n"
-        f"{_notice(dialog_manager)}\n{body}"
+        f"{notice_block(dialog_manager)}\n{body}"
     )
     return {"text": text, "items": items}
 
@@ -151,7 +146,7 @@ async def _on_pick_row(
     if not await _guard(callback, manager):
         return
     manager.dialog_data[_REG] = registration_id
-    _set_notice(manager, None)
+    set_notice(manager, None)
     await manager.switch_to(ParticipantsSG.item)
 
 
@@ -164,7 +159,7 @@ async def _on_close(callback: CallbackQuery, _: Any, manager: DialogManager) -> 
 async def _on_add(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    _set_notice(manager, None)
+    set_notice(manager, None)
     await manager.switch_to(ParticipantsSG.add_choose)
 
 
@@ -173,22 +168,18 @@ async def _on_add(callback: CallbackQuery, _: Any, manager: DialogManager) -> No
 
 async def _find_row(manager: DialogManager) -> tuple[ParticipantRow | None, bool]:
     """(запись, прошёл ли дедлайн отмены). Запись None, если её уже нет в живых."""
-    rows, _ = await _load_rows(manager)
+    rows, result = await _load_rows(manager)
     wanted = manager.dialog_data.get(_REG)
     row = next((r for r in rows if r.registration_id == wanted), None)
-    async with get_sessions(manager)() as session:
-        event = await events_repo.get(session, _event_id(manager))
-    now = middleware_value(manager, "clock").now()
-    after_deadline = event is not None and now > event.cancel_deadline_at
-    return row, after_deadline
+    return row, result.after_deadline
 
 
 async def _item_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    empty = {"found": False, "can_noshow": False, "can_ban": False, "after_deadline": False}
+    empty = {"can_noshow": False, "can_ban": False, "after_deadline": False, "found": False}
     try:
         row, after_deadline = await _find_row(dialog_manager)
-    except Exception as exc:
-        return {"text": f"⚠️ {html.escape(describe_error(exc))}", **empty}
+    except DomainError as exc:
+        return {"text": html.escape(_failure(exc)), **empty}
     if row is None:
         return {"text": "Эта запись уже не активна.", **empty}
     tz = get_services(dialog_manager).settings.timezone_now()
@@ -205,7 +196,7 @@ async def _item_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     lines.append(f"Запись: {format_moment(row.created_at, tz)}, {source}")
     is_active = row.status == RegistrationStatus.ACTIVE.value
     return {
-        "text": "\n".join(lines) + "\n" + _notice(dialog_manager),
+        "text": "\n".join(lines) + "\n" + notice_block(dialog_manager),
         "found": True,
         "after_deadline": after_deadline,
         # Неявка имеет смысл только для активной записи реального пользователя
@@ -217,38 +208,34 @@ async def _item_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
 async def _ask_remove(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    manager.dialog_data[_PENDING] = {
-        "remove": "remove",
-        "free": "free",
-        "noshow": "noshow",
-    }[str(button.widget_id).removeprefix("ask_")]
+    manager.dialog_data[_PENDING] = str(button.widget_id).removeprefix(_ASK_PREFIX)
     await manager.switch_to(ParticipantsSG.confirm_remove)
 
 
 async def _on_ban_start(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    _set_notice(manager, None)
+    set_notice(manager, None)
     await manager.switch_to(ParticipantsSG.ban_comment)
 
 
 # ---- подтверждение удаления ----------------------------------------------------------
 
 _CONFIRM_TEXTS = {
-    "remove": "Удалить участника из встречи? Штрафа не будет, место освободится.",
-    "free": "Отменить запись без штрафа? Место освободится.",
-    "noshow": "Отменить запись как неявку? Это учтётся в счётчике неявок и может привести к бану.",
+    _REMOVE: "Удалить участника из встречи? Штрафа не будет, место освободится.",
+    _FREE: "Отменить запись без штрафа? Место освободится.",
+    _NOSHOW: "Отменить запись как неявку? Это учтётся в счётчике неявок и может привести к бану.",
 }
 
 
 async def _confirm_remove_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    kind = dialog_manager.dialog_data.get(_PENDING, "remove")
+    kind = dialog_manager.dialog_data.get(_PENDING, _REMOVE)
     try:
         row, _late = await _find_row(dialog_manager)
-    except Exception as exc:
-        return {"text": f"⚠️ {html.escape(describe_error(exc))}"}
+    except DomainError as exc:
+        return {"text": html.escape(_failure(exc))}
     who = html.escape(row.name) if row else "участника"
-    return {"text": f"<b>{who}</b>\n{_CONFIRM_TEXTS.get(str(kind), _CONFIRM_TEXTS['remove'])}"}
+    return {"text": f"<b>{who}</b>\n{_CONFIRM_TEXTS.get(str(kind), _CONFIRM_TEXTS[_REMOVE])}"}
 
 
 async def _on_confirm_remove(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
@@ -257,11 +244,11 @@ async def _on_confirm_remove(callback: CallbackQuery, _: Any, manager: DialogMan
     kind = manager.dialog_data.get(_PENDING)
     registration_id = manager.dialog_data.get(_REG)
     if kind not in _CONFIRM_TEXTS or registration_id is None:
-        await _to_list(manager, "⚠️ Действие устарело, повторите.")
+        await _to_list(manager, f"{WARNING_PREFIX}Действие устарело, повторите.")
         return
     service = get_services(manager).participants
     try:
-        if kind == "remove":
+        if kind == _REMOVE:
             result = await service.admin_remove(
                 actor_id(manager), _event_id(manager), int(registration_id)
             )
@@ -270,12 +257,12 @@ async def _on_confirm_remove(callback: CallbackQuery, _: Any, manager: DialogMan
                 actor_id(manager),
                 _event_id(manager),
                 int(registration_id),
-                as_no_show=kind == "noshow",
+                as_no_show=kind == _NOSHOW,
             )
-    except Exception as exc:
-        await _to_list(manager, f"⚠️ {describe_error(exc)}")
+    except DomainError as exc:
+        await _to_list(manager, _failure(exc))
         return
-    parts = ["✅ Запись отменена как неявка." if kind == "noshow" else "✅ Участник удалён."]
+    parts = ["✅ Запись отменена как неявка." if kind == _NOSHOW else "✅ Участник удалён."]
     if result.promoted:
         parts.append(f"Из очереди переведено: {len(result.promoted)}.")
     if result.banned:
@@ -291,11 +278,11 @@ async def _on_confirm_remove(callback: CallbackQuery, _: Any, manager: DialogMan
 async def _ban_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     try:
         row, _late = await _find_row(dialog_manager)
-    except Exception as exc:
-        return {"text": f"⚠️ {html.escape(describe_error(exc))}"}
+    except DomainError as exc:
+        return {"text": html.escape(_failure(exc))}
     who = html.escape(row.name) if row else "участника"
     return {
-        "text": f"<b>🚫 Забанить: {who}?</b>\n{_notice(dialog_manager)}\n"
+        "text": f"<b>🚫 Забанить: {who}?</b>\n{notice_block(dialog_manager)}\n"
         f"Пришлите причину (до {REASON_MAX_LEN} символов) или нажмите «{NO_REASON}». "
         "Бан сразу вступит в силу."
     }
@@ -305,7 +292,7 @@ async def _do_ban(manager: DialogManager, comment: str | None) -> None:
     try:
         row, _late = await _find_row(manager)
         if row is None or row.user_id is None:
-            await _to_list(manager, "⚠️ Эту запись забанить нельзя.")
+            await _to_list(manager, f"{WARNING_PREFIX}Эту запись забанить нельзя.")
             return
         await get_services(manager).bans.ban(
             actor_id(manager),
@@ -315,8 +302,8 @@ async def _do_ban(manager: DialogManager, comment: str | None) -> None:
             event_id=_event_id(manager),
         )
         name = row.name
-    except Exception as exc:
-        await _to_list(manager, f"⚠️ {describe_error(exc)}")
+    except DomainError as exc:
+        await _to_list(manager, _failure(exc))
         return
     await _to_list(manager, f"🚫 {name}: забанен(а).")
 
@@ -326,10 +313,13 @@ async def _on_ban_text(message: Message, _: Any, manager: DialogManager) -> None
         return
     comment = (message.text or "").strip()
     if not comment:
-        _set_notice(manager, f"⚠️ Пришлите причину текстом или нажмите «{NO_REASON}».")
+        set_notice(manager, f"{WARNING_PREFIX}Пришлите причину текстом или нажмите «{NO_REASON}».")
         return
     if len(comment) > REASON_MAX_LEN:
-        _set_notice(manager, f"⚠️ Слишком длинно: {len(comment)} из {REASON_MAX_LEN} символов.")
+        set_notice(
+            manager,
+            f"{WARNING_PREFIX}Слишком длинно: {len(comment)} из {REASON_MAX_LEN} символов.",
+        )
         return
     await _do_ban(manager, comment)
 
@@ -344,7 +334,7 @@ async def _on_ban_no_reason(callback: CallbackQuery, _: Any, manager: DialogMana
 
 
 async def _add_choose_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    return {"text": f"<b>➕ Добавить участника</b>\n{_notice(dialog_manager)}\nКого записать?"}
+    return {"text": f"<b>➕ Добавить участника</b>\n{notice_block(dialog_manager)}\nКого записать?"}
 
 
 async def _on_pick_user(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
@@ -352,9 +342,13 @@ async def _on_pick_user(callback: CallbackQuery, _: Any, manager: DialogManager)
         return
     try:
         rows, _result = await _load_rows(manager)
-        exclude = [r.user_id for r in rows if r.user_id is not None]
-    except Exception:
-        exclude = []
+    except DomainError as exc:
+        # Без списка записанных пикер не смог бы исключить их: лучше показать причину
+        logger.warning("не удалось получить участников для выбора: %r", exc)
+        set_notice(manager, _failure(exc))
+        return
+    exclude = [r.user_id for r in rows if r.user_id is not None]
+    set_notice(manager, None)
     await manager.start(
         PickerSG.pick, data={"title": "Кого записать на встречу?", "exclude_ids": exclude}
     )
@@ -363,7 +357,7 @@ async def _on_pick_user(callback: CallbackQuery, _: Any, manager: DialogManager)
 async def _on_manual(callback: CallbackQuery, _: Any, manager: DialogManager) -> None:
     if not await _guard(callback, manager):
         return
-    _set_notice(manager, None)
+    set_notice(manager, None)
     await manager.switch_to(ParticipantsSG.add_manual_name)
 
 
@@ -374,34 +368,25 @@ async def _do_add(
     manual_name: str | None,
     force: bool,
 ) -> None:
-    info = (
-        UserInfo(
-            id=int(user["user_id"]),
-            first_name=str(user.get("first_name") or ""),
-            last_name=user.get("last_name"),
-            username=user.get("username"),
-        )
-        if user
-        else None
-    )
+    """`user` — словарь из результата выбора: в `dialog_data` кладём только простые типы."""
     try:
         await get_services(manager).participants.admin_add(
             actor_id(manager),
             _event_id(manager),
-            user=info,
+            user=picked_user(user),
             manual_name=manual_name,
             force=force,
         )
     except InvalidOperation as exc:
         if exc.code == ErrorCode.OVER_CAPACITY and not force:
             manager.dialog_data[_ADD] = {"user": user, "manual_name": manual_name}
-            _set_notice(manager, None)
+            set_notice(manager, None)
             await manager.switch_to(ParticipantsSG.confirm_over_capacity)
             return
-        await _to_list(manager, f"⚠️ {describe_error(exc)}")
+        await _to_list(manager, _failure(exc))
         return
-    except Exception as exc:
-        await _to_list(manager, f"⚠️ {describe_error(exc)}")
+    except DomainError as exc:
+        await _to_list(manager, _failure(exc))
         return
     label = manual_name or (user or {}).get("first_name") or FALLBACK_NAME
     await _to_list(manager, f"✅ Добавлен(а): {label}.")
@@ -412,24 +397,26 @@ async def _on_manual_name(message: Message, _: Any, manager: DialogManager) -> N
         return
     name = (message.text or "").strip()
     if not name:
-        _set_notice(manager, "⚠️ Имя не может быть пустым. Пример: Анна Петрова.")
+        set_notice(manager, f"{WARNING_PREFIX}Имя не может быть пустым. Пример: Анна Петрова.")
         return
     if len(name) > NAME_MAX_LEN:
-        _set_notice(manager, f"⚠️ Слишком длинно: {len(name)} из {NAME_MAX_LEN} символов.")
+        set_notice(
+            manager, f"{WARNING_PREFIX}Слишком длинно: {len(name)} из {NAME_MAX_LEN} символов."
+        )
         return
     await _do_add(manager, user=None, manual_name=name, force=False)
 
 
 async def _manual_name_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     return {
-        "text": f"<b>✍️ Имя участника</b>\n{_notice(dialog_manager)}\n"
+        "text": f"<b>✍️ Имя участника</b>\n{notice_block(dialog_manager)}\n"
         f"Пришлите имя (до {NAME_MAX_LEN} символов), например: Анна Петрова."
     }
 
 
 async def _on_result(_start: Any, result: Any, manager: DialogManager) -> None:
     """Результат пикера: словарь пользователя; отмена приходит как None."""
-    if not isinstance(result, dict) or "user_id" not in result:
+    if picked_user(result) is None:
         return
     if not await _guard(manager.event, manager):  # type: ignore[arg-type]
         return
@@ -445,7 +432,7 @@ async def _on_force_add(callback: CallbackQuery, _: Any, manager: DialogManager)
         return
     pending = manager.dialog_data.get(_ADD)
     if not pending:
-        await _to_list(manager, "⚠️ Действие устарело, повторите.")
+        await _to_list(manager, f"{WARNING_PREFIX}Действие устарело, повторите.")
         return
     await _do_add(
         manager, user=pending.get("user"), manual_name=pending.get("manual_name"), force=True
@@ -483,19 +470,19 @@ _item_window = Window(
     Column(
         Button(
             Const("Удалить из встречи"),
-            id="ask_remove",
+            id=f"{_ASK_PREFIX}{_REMOVE}",
             on_click=_ask_remove,
             when="found",
         ),
         Button(
             Const("Отменить без штрафа"),
-            id="ask_free",
+            id=f"{_ASK_PREFIX}{_FREE}",
             on_click=_ask_remove,
             when="after_deadline",
         ),
         Button(
             Const("Отменить как неявку"),
-            id="ask_noshow",
+            id=f"{_ASK_PREFIX}{_NOSHOW}",
             on_click=_ask_remove,
             when="can_noshow",
         ),

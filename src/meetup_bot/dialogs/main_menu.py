@@ -13,22 +13,25 @@ from aiogram_dialog.widgets.kbd import Button, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.dialogs._buttons import TO_MENU
-from meetup_bot.dialogs._common import actor_id, get_sessions, is_admin
+from meetup_bot.dialogs._common import guard
+from meetup_bot.dialogs._rights import guard_owner, is_owner
 from meetup_bot.dialogs.states import AdminsSG, BansSG, EventsSG, MainSG, SettingsSG
-from meetup_bot.repositories import admins
-from meetup_bot.telegram.common import check_admin
 from meetup_bot.telegram.errors_text import NO_ACCESS
 
 router = Router(name="dialogs_main_menu")
 router.message.filter(F.chat.type == "private")
 
 
+async def _admin_only(message: Message, manager: DialogManager) -> bool:
+    if message.from_user is None:
+        await message.answer(NO_ACCESS)
+        return False
+    return await guard(message, manager, close=False)
+
+
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, dialog_manager: DialogManager) -> None:
-    if message.from_user is None or not await check_admin(
-        get_sessions(dialog_manager), message.from_user.id
-    ):
-        await message.answer(NO_ACCESS)
+    if not await _admin_only(message, dialog_manager):
         return
     # RESET_STACK: зависший диалог не должен оставаться под новым меню
     await dialog_manager.start(MainSG.menu, mode=StartMode.RESET_STACK)
@@ -36,10 +39,7 @@ async def cmd_menu(message: Message, dialog_manager: DialogManager) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, dialog_manager: DialogManager) -> None:
-    if message.from_user is None or not await check_admin(
-        get_sessions(dialog_manager), message.from_user.id
-    ):
-        await message.answer(NO_ACCESS)
+    if not await _admin_only(message, dialog_manager):
         return
     await dialog_manager.reset_stack()
     # Если был открыт выбор пользователя, reply-клавиатуру при удалении окна не снять
@@ -47,9 +47,7 @@ async def cmd_cancel(message: Message, dialog_manager: DialogManager) -> None:
 
 
 async def _menu_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    async with get_sessions(dialog_manager)() as session:
-        owner = await admins.is_owner(session, actor_id(dialog_manager))
-    return {"is_owner": owner}
+    return {"is_owner": await is_owner(dialog_manager)}
 
 
 async def _howto_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
@@ -61,14 +59,12 @@ def _opener(state: Any, *, owner_only: bool = False) -> Any:
     """Кнопка запускает диалог после повторной проверки прав (скрытая кнопка — не защита)."""
 
     async def on_click(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-        allowed = await is_admin(manager)
-        if allowed and owner_only:
-            async with get_sessions(manager)() as session:
-                allowed = await admins.is_owner(session, actor_id(manager))
-        if not allowed:
-            await callback.answer(NO_ACCESS, show_alert=True)
-            return
-        await manager.start(state)
+        if owner_only:
+            allowed = await guard_owner(callback, manager)
+        else:
+            allowed = await guard(callback, manager, close=False)
+        if allowed:
+            await manager.start(state)
 
     return on_click
 

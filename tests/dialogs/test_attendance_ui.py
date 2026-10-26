@@ -313,11 +313,17 @@ async def test_повторное_готово_того_же_админа_не_�
     app: App, tg: Harness, started: int
 ) -> None:
     mid = await _sheet(tg, started)
+    # После «Готово» правка снимает клавиатуру; запоздавший повтор — это нажатие по старым данным
+    stale = dict((text, data) for text, data in tg.session.buttons(mid))
+    first_row = next(data for text, data in stale.items() if "Участник1" in text)
+    second_row = next(data for text, data in stale.items() if "Участник2" in text)
+    done = next(data for text, data in stale.items() if "Готово" in text)
     await tg.click(OWNER_ID, mid, "Участник1")
     await tg.click(OWNER_ID, mid, "Готово")
     marked = (await _event(app, started)).attendance_marked_at
-    await tg.click(OWNER_ID, mid, "Участник2")
-    await tg.click(OWNER_ID, mid, "Готово")
+    assert first_row and done
+    await tg.feed(callback_update(OWNER_ID, second_row, message_id=mid))
+    await tg.feed(callback_update(OWNER_ID, done, message_id=mid))
     assert (await _event(app, started)).attendance_marked_at == marked
     registrations = await _registrations(app, started)
     assert [r.attendance for r in registrations] == [

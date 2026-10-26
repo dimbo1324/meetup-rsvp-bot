@@ -3,12 +3,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import FakeClock
 from meetup_bot.db.models import Event
 from meetup_bot.renderer.post import render_post
 from meetup_bot.repositories import registrations
+from meetup_bot.services.errors import PermissionDenied
 from meetup_bot.services.events import EventService
 from meetup_bot.services.posts import load_post_data
 from meetup_bot.services.registration import RegisterStatus, RegistrationService, UserInfo
@@ -149,3 +151,21 @@ async def test_load_post_data_передаёт_конец_встречи(app: Ap
     assert (data.starts_at, data.ends_at) == (starts_at, ends_at)
     assert data.ends_at is not None and data.ends_at > data.starts_at
     assert TIME_RANGE_DASH in render_post(data).text.split("\n")[0]
+
+
+async def test_предпросмотр_админу_даёт_тот_же_пост_что_боевой_рендер(app: App) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID, place="Кафе")).event_id
+    rendered = await app.services.posts.preview(ADMIN_ID, event_id)
+    assert rendered is not None
+    assert "Записались: 0 из 10" in rendered.text
+    assert "Кафе" in rendered.text
+
+
+async def test_предпросмотр_несуществующей_встречи_пуст(app: App) -> None:
+    assert await app.services.posts.preview(ADMIN_ID, 404) is None
+
+
+async def test_предпросмотр_недоступен_не_админу(app: App) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID)).event_id
+    with pytest.raises(PermissionDenied):
+        await app.services.posts.preview(999, event_id)

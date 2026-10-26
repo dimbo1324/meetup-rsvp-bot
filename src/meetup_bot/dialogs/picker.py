@@ -23,16 +23,16 @@ from aiogram_dialog.widgets.kbd import Button, Column, Keyboard, Row, Select
 from aiogram_dialog.widgets.markup.reply_keyboard import ReplyKeyboardFactory
 from aiogram_dialog.widgets.text import Const, Format
 
-from meetup_bot.dialogs._buttons import BACK, CANCEL
-from meetup_bot.dialogs._common import get_sessions, is_admin
+from meetup_bot.dialogs._buttons import BACK, CANCEL, LIST_PAGE_SIZE, NEXT_PAGE, PREV_PAGE
+from meetup_bot.dialogs._common import get_services, guard, is_admin
 from meetup_bot.dialogs.states import PickerSG
-from meetup_bot.repositories import users_known
 from meetup_bot.services.names import admin_label
 from meetup_bot.telegram.common import page_count
 from meetup_bot.telegram.errors_text import NO_ACCESS
 
-PAGE_SIZE = 8
 _REQUEST_ID = 1
+_NO_NAME = "Без имени"
+_NOT_ALLOWED = "Этого пользователя выбрать нельзя."
 _DEFAULT_TITLE = "Выберите пользователя"
 _HINT = "Нажмите кнопку «Выбрать пользователя» или перешлите сюда любое сообщение этого человека."
 
@@ -79,7 +79,7 @@ def _result(
     user_id: int, first_name: str | None, last_name: str | None, username: str | None
 ) -> dict[str, Any]:
     # Telegram не всегда отдаёт имя (приватность): подставляем то, что можно показать
-    name = first_name or (f"@{username}" if username else "Без имени")
+    name = first_name or (f"@{username}" if username else _NO_NAME)
     return {"user_id": user_id, "first_name": name, "last_name": last_name, "username": username}
 
 
@@ -100,7 +100,7 @@ async def _accept(
     if is_bot:
         await _hint(message, manager, "Ботов выбирать нельзя.")
     elif user["user_id"] in _exclude_ids(manager):
-        await _hint(message, manager, "Этого пользователя выбрать нельзя.")
+        await _hint(message, manager, _NOT_ALLOWED)
     else:
         await _finish(manager, user)
 
@@ -132,8 +132,7 @@ async def on_message(message: Message, widget: MessageInput, manager: DialogMana
 
 
 async def on_known(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard(callback, manager, close=False):
         return
     manager.dialog_data["page"] = 0
     # Новое сообщение вместо редактирования: так библиотека снимет reply-клавиатуру
@@ -158,16 +157,16 @@ async def known_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str
         return {"text": NO_ACCESS, "users": [], "has_prev": False, "has_next": False}
     exclude = _exclude_ids(dialog_manager)
     page = int(dialog_manager.dialog_data.get("page", 0))
-    async with get_sessions(dialog_manager)() as session:
-        total = await users_known.count_known(session, exclude)
-        pages = page_count(total, PAGE_SIZE)
-        page = min(max(page, 0), pages - 1)
-        dialog_manager.dialog_data["page"] = page
-        rows = await users_known.list_known(session, PAGE_SIZE, page * PAGE_SIZE, exclude)
-    users = []
-    for row in rows:
-        label = admin_label(row.first_name, row.last_name, row.username, row.id)
-        users.append({"id": row.id, "label": label})
+    known = get_services(dialog_manager).users
+    total = await known.count_known(exclude)
+    pages = page_count(total, LIST_PAGE_SIZE)
+    page = min(max(page, 0), pages - 1)
+    dialog_manager.dialog_data["page"] = page
+    rows = await known.list_known(LIST_PAGE_SIZE, page * LIST_PAGE_SIZE, exclude)
+    users = [
+        {"id": row.id, "label": admin_label(row.first_name, row.last_name, row.username, row.id)}
+        for row in rows
+    ]
     text = (
         f"Известные пользователи, страница {page + 1} из {pages}."
         if total
@@ -179,14 +178,11 @@ async def known_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str
 async def on_user_chosen(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: int
 ) -> None:
-    if not await is_admin(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard(callback, manager, close=False):
         return
-    async with get_sessions(manager)() as session:
-        found = await users_known.get_many(session, [item_id])
-    user = found.get(item_id)
+    user = (await get_services(manager).users.get_many([item_id])).get(item_id)
     if user is None or item_id in _exclude_ids(manager):
-        await callback.answer("Этого пользователя выбрать нельзя.", show_alert=True)
+        await callback.answer(_NOT_ALLOWED, show_alert=True)
         return
     await manager.done(result=_result(user.id, user.first_name, user.last_name, user.username))
 
@@ -229,8 +225,8 @@ DIALOGS = [
                 )
             ),
             Row(
-                Button(Const("◀"), id="prev", on_click=on_prev, when="has_prev"),
-                Button(Const("▶"), id="next", on_click=on_next, when="has_next"),
+                Button(Const(PREV_PAGE), id="prev", on_click=on_prev, when="has_prev"),
+                Button(Const(NEXT_PAGE), id="next", on_click=on_next, when="has_next"),
             ),
             Button(Const(BACK), id="back", on_click=on_back),
             Button(Const(CANCEL), id="known_cancel", on_click=on_known_cancel),

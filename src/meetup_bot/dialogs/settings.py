@@ -18,11 +18,15 @@ from aiogram_dialog.widgets.kbd import Button, Cancel, Group, Select, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.dialogs._buttons import BACK, RESET_DEFAULT, TO_MENU
-from meetup_bot.dialogs._common import actor_id, get_services, is_admin
+from meetup_bot.dialogs._common import actor_id, get_services, guard, pop_notice, set_notice
 from meetup_bot.dialogs.settings_view import (
+    GROUP_DEFAULTS,
+    GROUP_RULES,
+    GROUP_SCHEDULE,
     GROUPS,
     PHOTO_KEY,
     POPULAR_TIMEZONES,
+    TIMEZONE_KEY,
     WEEKDAY_KEYS,
     accepts_input,
     button_label,
@@ -32,6 +36,7 @@ from meetup_bot.dialogs.settings_view import (
     with_notice,
 )
 from meetup_bot.dialogs.states import SettingsSG
+from meetup_bot.services.errors import DomainError
 from meetup_bot.services.settings_schema import (
     POPUP_MAX_LEN,
     SAMPLE_VARS,
@@ -39,7 +44,7 @@ from meetup_bot.services.settings_schema import (
     Kind,
     SettingSpec,
 )
-from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
+from meetup_bot.telegram.errors_text import describe_error
 from meetup_bot.texts.defaults import (
     ALLOWED_PLACEHOLDERS,
     DEFAULT_TEXTS,
@@ -49,48 +54,49 @@ from meetup_bot.texts.render import WEEKDAYS_SHORT, clip
 
 _PARSE = "HTML"
 _TEXT_KEYS = tuple(DEFAULT_TEXTS)
+_OK_MARK = "✅ "
+_WARNING_MARK = "⚠️ "
+_WEEKDAYS_PER_ROW = 4
+# Окно показывает шаблон и предпросмотр; целиком длинный текст не влез бы в 4096 символов
+PREVIEW_CLIP = 1200
 
 
 # ---- общие помощники ------------------------------------------------------------------
 
 
 def _set_notice(manager: DialogManager, text: str, *, ok: bool) -> None:
-    manager.dialog_data["notice"] = ("✅ " if ok else "⚠️ ") + html.escape(text)
+    set_notice(manager, (_OK_MARK if ok else _WARNING_MARK) + html.escape(text))
 
 
-def _pop_notice(manager: DialogManager) -> str:
-    notice = manager.dialog_data.pop("notice", "")
-    return str(notice)
+async def _guard(event: CallbackQuery | Message, manager: DialogManager) -> bool:
+    """Права перепроверяются на каждом действии; без них диалог закрывается."""
+    return await guard(event, manager, close=True)
 
 
-async def _deny(manager: DialogManager) -> None:
-    _set_notice(manager, NO_ACCESS, ok=False)
-    await manager.done()
-
-
-async def _save(manager: DialogManager, key: str, value: Any) -> None:
+async def _save(
+    event: CallbackQuery | Message, manager: DialogManager, key: str, value: Any
+) -> None:
     """Сохраняет значение через сервис; результат (или ошибку) кладёт в notice."""
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(event, manager):
         return
     try:
         warnings = await get_services(manager).settings.set(key, value, actor_id(manager))
-    except Exception as exc:
+    except DomainError as exc:
         _set_notice(manager, describe_error(exc), ok=False)
         return
     # Предупреждения не ошибка: значение уже сохранено
-    manager.dialog_data["notice"] = "\n".join(
-        ["✅ Сохранено.", *("⚠️ " + html.escape(w) for w in warnings)]
+    set_notice(
+        manager,
+        "\n".join([f"{_OK_MARK}Сохранено.", *(_WARNING_MARK + html.escape(w) for w in warnings)]),
     )
 
 
-async def _reset(manager: DialogManager, key: str) -> None:
-    if not await is_admin(manager):
-        await _deny(manager)
+async def _reset(event: CallbackQuery | Message, manager: DialogManager, key: str) -> None:
+    if not await _guard(event, manager):
         return
     try:
         await get_services(manager).settings.reset(key, actor_id(manager))
-    except Exception as exc:
+    except DomainError as exc:
         _set_notice(manager, describe_error(exc), ok=False)
         return
     _set_notice(manager, "Возвращено значение по умолчанию.", ok=True)
@@ -105,8 +111,7 @@ def _current_key(manager: DialogManager) -> str:
 
 def _open_group(group: str) -> Any:
     async def handler(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-        if not await is_admin(manager):
-            await _deny(manager)
+        if not await _guard(callback, manager):
             return
         manager.dialog_data["group"] = group
         await manager.switch_to(SettingsSG.group)
@@ -115,7 +120,7 @@ def _open_group(group: str) -> Any:
 
 
 async def group_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    group = str(dialog_manager.dialog_data.get("group", "defaults"))
+    group = str(dialog_manager.dialog_data.get("group", GROUP_DEFAULTS))
     title, hint, keys = GROUPS[group]
     settings = get_services(dialog_manager).settings
     items = []
@@ -126,14 +131,13 @@ async def group_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
     if hint:
         body += f"\n{html.escape(hint)}"
     body += "\n\nВыберите настройку, чтобы изменить."
-    return {"body": with_notice(_pop_notice(dialog_manager), [body]), "items": items}
+    return {"body": with_notice(pop_notice(dialog_manager), [body]), "items": items}
 
 
 async def _pick_setting(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: str
 ) -> None:
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(callback, manager):
         return
     if item_id not in SCHEMA:
         return
@@ -150,9 +154,10 @@ async def edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]
     settings = get_services(dialog_manager).settings
     value = await settings.get(key)
     is_default = await settings.is_default(key)
-    notice = _pop_notice(dialog_manager)
+    notice = pop_notice(dialog_manager)
     weekdays = [
-        (("✅ " if value == i else "") + name.lower(), i) for i, name in enumerate(WEEKDAYS_SHORT)
+        ((_OK_MARK if value == i else "") + name.lower(), i)
+        for i, name in enumerate(WEEKDAYS_SHORT)
     ]
     return {
         "body": edit_body(spec, value, is_default, notice),
@@ -168,23 +173,23 @@ async def edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]
 async def _on_toggle(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
     key = _current_key(manager)
     current = await get_services(manager).settings.get(key)
-    await _save(manager, key, not bool(current))
+    await _save(callback, manager, key, not bool(current))
 
 
 async def _on_weekday(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: int
 ) -> None:
-    await _save(manager, _current_key(manager), item_id)
+    await _save(callback, manager, _current_key(manager), item_id)
 
 
 async def _on_clear(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
     key = _current_key(manager)
     # Необязательная настройка очищается в None, строковые — в пустую строку
-    await _save(manager, key, None if SCHEMA[key].kind is Kind.OPT_STR else "")
+    await _save(callback, manager, key, None if SCHEMA[key].kind is Kind.OPT_STR else "")
 
 
 async def _on_reset(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    await _reset(manager, _current_key(manager))
+    await _reset(callback, manager, _current_key(manager))
 
 
 def _parse_input(spec: SettingSpec, message: Message) -> tuple[bool, Any]:
@@ -210,8 +215,7 @@ def _parse_input(spec: SettingSpec, message: Message) -> tuple[bool, Any]:
 async def _on_input(message: Message, widget: Any, manager: DialogManager) -> None:
     key = _current_key(manager)
     spec = SCHEMA[key]
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(message, manager):
         return
     if not accepts_input(spec):
         _set_notice(manager, "Для этой настройки используйте кнопки.", ok=False)
@@ -220,7 +224,7 @@ async def _on_input(message: Message, widget: Any, manager: DialogManager) -> No
     if not ok:
         _set_notice(manager, value, ok=False)
         return
-    await _save(manager, key, value)
+    await _save(message, manager, key, value)
 
 
 _BACK_TO_GROUP = SwitchTo(Const(BACK), id="edit_back", state=SettingsSG.group)
@@ -237,7 +241,7 @@ edit_window = Window(
             type_factory=int,
             on_click=_on_weekday,
         ),
-        width=4,
+        width=_WEEKDAYS_PER_ROW,
         when="is_weekday",
     ),
     Button(Const("🧹 Очистить"), id="clear", on_click=_on_clear, when="can_clear"),
@@ -260,14 +264,13 @@ async def texts_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any
         mark = "" if await settings.is_default(key) else " ✏️"
         items.append((SCHEMA[key].description + mark, key))
     body = "<b>Тексты сообщений</b>\nВыберите, что именно меняем. Значок ✏️ — текст уже изменён."
-    return {"body": with_notice(_pop_notice(dialog_manager), [body]), "items": items}
+    return {"body": with_notice(pop_notice(dialog_manager), [body]), "items": items}
 
 
 async def _pick_text(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: str
 ) -> None:
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(callback, manager):
         return
     if item_id not in DEFAULT_TEXTS:
         return
@@ -281,10 +284,6 @@ def _placeholders(template: str) -> list[str]:
         if name and "{" + name + "}" not in names:
             names.append("{" + name + "}")
     return names
-
-
-# Окно показывает шаблон и предпросмотр; целиком длинный текст не влез бы в 4096 символов
-PREVIEW_CLIP = 1200
 
 
 async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
@@ -320,24 +319,23 @@ async def text_edit_getter(dialog_manager: DialogManager, **_: Any) -> dict[str,
         "",
         "Отправьте новый текст сообщением.",
     ]
-    return {"body": with_notice(_pop_notice(dialog_manager), lines)}
+    return {"body": with_notice(pop_notice(dialog_manager), lines)}
 
 
 async def _on_text_input(message: Message, widget: Any, manager: DialogManager) -> None:
     key = _current_key(manager)
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(message, manager):
         return
     if not message.text:
         _set_notice(manager, "Отправьте текстовое сообщение.", ok=False)
         return
     # Для сообщений сохраняем форматирование (html_text); всплывающие окна HTML не понимают
     value = message.html_text if key in MESSAGE_TEXT_KEYS else message.text
-    await _save(manager, key, value)
+    await _save(message, manager, key, value)
 
 
 async def _on_text_reset(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    await _reset(manager, _current_key(manager))
+    await _reset(callback, manager, _current_key(manager))
 
 
 texts_window = Window(
@@ -374,33 +372,33 @@ text_edit_window = Window(
 
 async def timezone_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     settings = get_services(dialog_manager).settings
-    current = str(await settings.get("timezone"))
-    mark = " (по умолчанию)" if await settings.is_default("timezone") else ""
+    current = str(await settings.get(TIMEZONE_KEY))
+    mark = " (по умолчанию)" if await settings.is_default(TIMEZONE_KEY) else ""
     lines = [
-        f"<b>{html.escape(label_of('timezone'))}</b>",
+        f"<b>{html.escape(label_of(TIMEZONE_KEY))}</b>",
         f"Сейчас: <b>{html.escape(current)}</b>{mark}",
         "",
         "Выберите из списка или отправьте название в формате IANA, например America/Montevideo.",
     ]
-    zones = [(("✅ " if z == current else "") + z, z) for z in POPULAR_TIMEZONES]
-    return {"body": with_notice(_pop_notice(dialog_manager), lines), "zones": zones}
+    zones = [((_OK_MARK if z == current else "") + z, z) for z in POPULAR_TIMEZONES]
+    return {"body": with_notice(pop_notice(dialog_manager), lines), "zones": zones}
 
 
 async def _on_zone(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: str
 ) -> None:
-    await _save(manager, "timezone", item_id)
+    await _save(callback, manager, TIMEZONE_KEY, item_id)
 
 
 async def _on_zone_input(message: Message, widget: Any, manager: DialogManager) -> None:
     if not message.text:
         _set_notice(manager, "Отправьте название часового пояса текстом.", ok=False)
         return
-    await _save(manager, "timezone", message.text)
+    await _save(message, manager, TIMEZONE_KEY, message.text)
 
 
 async def _on_zone_reset(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    await _reset(manager, "timezone")
+    await _reset(callback, manager, TIMEZONE_KEY)
 
 
 timezone_window = Window(
@@ -429,28 +427,26 @@ timezone_window = Window(
 
 async def menu_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     body = "<b>⚙️ Настройки</b>\nВыберите раздел."
-    return {"body": with_notice(_pop_notice(dialog_manager), [body])}
+    return {"body": with_notice(pop_notice(dialog_manager), [body])}
 
 
 async def _open_texts(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(callback, manager):
         return
     await manager.switch_to(SettingsSG.texts)
 
 
 async def _open_timezone(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_admin(manager):
-        await _deny(manager)
+    if not await _guard(callback, manager):
         return
     await manager.switch_to(SettingsSG.timezone)
 
 
 menu_window = Window(
     Format("{body}"),
-    Button(Const("Встречи по умолчанию"), id="g_defaults", on_click=_open_group("defaults")),
-    Button(Const("Расписание"), id="g_schedule", on_click=_open_group("schedule")),
-    Button(Const("Правила"), id="g_rules", on_click=_open_group("rules")),
+    Button(Const("Встречи по умолчанию"), id="g_defaults", on_click=_open_group(GROUP_DEFAULTS)),
+    Button(Const("Расписание"), id="g_schedule", on_click=_open_group(GROUP_SCHEDULE)),
+    Button(Const("Правила"), id="g_rules", on_click=_open_group(GROUP_RULES)),
     Button(Const("Тексты сообщений"), id="g_texts", on_click=_open_texts),
     Button(Const("Часовой пояс"), id="g_timezone", on_click=_open_timezone),
     Cancel(Const(TO_MENU)),

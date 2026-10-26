@@ -102,9 +102,14 @@ async def test_cancel_сбрасывает_диалог_и_снимает_reply_
 async def test_после_cancel_старые_кнопки_меню_устарели(tg: Harness) -> None:
     await tg.feed(command_update(OWNER_ID, "/menu"))
     mid = _inline(tg)
+    # Кнопку запоминаем до /cancel: после него фейк, как Telegram, клавиатуры уже не хранит
+    stale_data = next(d for t, d in tg.session.buttons(mid) if "Встречи" in t)
+    stale_markup = tg.session.last_markup[mid]
     await tg.feed(command_update(OWNER_ID, "/cancel"))
+    assert not tg.session.buttons(mid)
     edits_before = len(tg.session.of("EditMessageText"))
-    await tg.click(OWNER_ID, mid, "Встречи")
+    # Старое сообщение у человека на экране могло остаться: нажатие приходит в обход Harness.click
+    await tg.feed(callback_update(OWNER_ID, stale_data, message_id=mid, reply_markup=stale_markup))
     assert len(tg.session.of("EditMessageText")) == edits_before
     assert "устарело" in str(tg.session.of("AnswerCallbackQuery")[-1].get("text"))
 

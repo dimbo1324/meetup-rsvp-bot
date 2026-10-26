@@ -5,10 +5,12 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
-from meetup_bot.renderer.post import Participant, PostData
+from meetup_bot.renderer.post import Participant, PostData, RenderedPost, render_post
 from meetup_bot.repositories import event_posts, events, registrations
+from meetup_bot.services import access
 from meetup_bot.services.defaults import DEFAULT_TIMEZONE
 from meetup_bot.services.names import public_name
+from meetup_bot.services.settings import SettingsService
 
 
 async def load_post_data(
@@ -75,3 +77,25 @@ async def register_post(
             has_photo=has_photo,
         )
         return created
+
+
+class PostService:
+    """Предпросмотр поста для админа: тот же рендер, что у боевого поста, по текущим настройкам."""
+
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], settings: SettingsService
+    ) -> None:
+        self._sessions = sessions
+        self._settings = settings
+
+    async def preview(self, actor_id: int, event_id: int) -> RenderedPost | None:
+        async with self._sessions() as session:
+            await access.require_admin(session, actor_id)
+        data = await load_post_data(
+            self._sessions,
+            event_id,
+            timezone=self._settings.timezone_now().key,
+            show_names=self._settings.get_now("show_names_in_post"),
+            plus_one_enabled=self._settings.options_now().plus_one_enabled,
+        )
+        return None if data is None else render_post(data)

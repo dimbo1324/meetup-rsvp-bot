@@ -92,10 +92,11 @@ erDiagram
 | `id` | INTEGER PK | |
 | `status` | TEXT | `open` / `closed` / `finished` / `cancelled` |
 | `starts_at` | DATETIME | |
+| `ends_at` | DATETIME | Конец встречи: `starts_at` + длительность из настроек |
 | `capacity` | INT | |
 | `description_html`, `photo_file_id`, `place`, `place_url` | TEXT | |
 | `cancel_deadline_at`, `registration_closes_at`, `reminder_at`, `attendance_prompt_at` | DATETIME | Вычисляются при создании (5.2) |
-| `reminder_sent_at`, `attendance_prompt_sent_at`, `attendance_reminder_sent_at` | DATETIME NULL | Отметки о выполнении для планировщика |
+| `reminder_sent_at`, `post_reminder_sent_at`, `attendance_prompt_sent_at`, `attendance_reminder_sent_at` | DATETIME NULL | Отметки о выполнении для планировщика |
 | `attendance_marked_at`, `attendance_marked_by` | NULL | |
 | `closed_at`, `cancelled_at`, `cancel_reason` | NULL | |
 | `recurrence_key` | TEXT NULL, UNIQUE | `weekly:2026-10-31` для автосозданных |
@@ -128,7 +129,7 @@ erDiagram
 
 `seats_taken(event) = SUM(1 + guests) WHERE event_id = ? AND status = 'active'`.
 
-**`event_posts`**: `id`, `event_id` FK, `inline_message_id` UNIQUE, `posted_by` (user ID админа), `created_at`, `last_render_hash`, `last_edited_at`, `is_dead`. Колонки `chat_id`/`message_id` (NULL) зарезервированы на будущее, для публикации постов от имени бота.
+**`event_posts`**: `id`, `event_id` FK, `inline_message_id` UNIQUE, `posted_by` (user ID админа), `created_at`, `last_render_hash`, `last_edited_at`, `is_dead`, `has_photo` (пост разослан как фото-результат: подпись ≤ 1024, иначе текст ≤ 4096; рендер идёт под вид конкретного поста), `last_photo_file_id` (какое фото сейчас в посте, чтобы отличить смену фото от правки счётчика). Колонки `chat_id`/`message_id` (NULL) зарезервированы на будущее, для публикации постов от имени бота.
 
 **`bans`**: `id`, `user_id` FK, `active` BOOL, `reason` (`no_show` / `manual`), `comment`, `event_id` NULL FK, `banned_by`, `banned_at`, `unbanned_by`, `unbanned_at`. Частичный уникальный индекс `(user_id) WHERE active`: активный бан у человека максимум один.
 

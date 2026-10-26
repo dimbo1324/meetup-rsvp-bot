@@ -5,29 +5,25 @@ from __future__ import annotations
 import html
 from typing import Any
 
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import Dialog, DialogManager, Window
 from aiogram_dialog.widgets.kbd import Button, Column, Row, ScrollingGroup, Select
 from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.db.models import AdminRole
-from meetup_bot.dialogs._buttons import BACK, NO
-from meetup_bot.dialogs._common import actor_id, get_services, get_sessions
+from meetup_bot.dialogs._buttons import BACK, LIST_PAGE_SIZE, NO
+from meetup_bot.dialogs._common import actor_id, get_bot, get_services, picked_user
+from meetup_bot.dialogs._rights import guard_owner, is_owner
 from meetup_bot.dialogs.states import AdminsSG, PickerSG
-from meetup_bot.repositories import admins as admins_repo
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.admins import AdminEntry
+from meetup_bot.services.errors import DomainError
 from meetup_bot.services.names import admin_label
 from meetup_bot.telegram.commands import set_admin_commands
-from meetup_bot.telegram.common import fit_alert
+from meetup_bot.telegram.common import safe_answer
 from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 
 _ROLES = {AdminRole.OWNER.value: "владелец", AdminRole.ADMIN.value: "админ"}
-
-
-async def is_owner(manager: DialogManager) -> bool:
-    async with get_sessions(manager)() as session:
-        return await admins_repo.is_owner(session, actor_id(manager))
+_PICK_TITLE = "Кого сделать админом?"
 
 
 def _name(entry: AdminEntry) -> str:
@@ -43,7 +39,7 @@ async def list_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
         return {"text": NO_ACCESS, "admins": [], "owner": False}
     try:
         entries = await _entries(dialog_manager)
-    except Exception as exc:
+    except DomainError as exc:
         return {"text": html.escape(describe_error(exc)), "admins": [], "owner": False}
     items = [
         {"id": e.user_id, "label": f"{_name(e)} · {_ROLES.get(e.role, e.role)}"} for e in entries
@@ -57,7 +53,7 @@ async def item_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
         return {"text": NO_ACCESS, "removable": False}
     try:
         entries = await _entries(dialog_manager)
-    except Exception as exc:
+    except DomainError as exc:
         return {"text": html.escape(describe_error(exc)), "removable": False}
     entry = next((e for e in entries if e.user_id == user_id), None)
     if entry is None:
@@ -71,58 +67,52 @@ async def item_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str,
 
 async def confirm_getter(dialog_manager: DialogManager, **kwargs: Any) -> dict[str, Any]:
     user_id = dialog_manager.dialog_data.get("user_id")
-    name = ""
-    if await is_owner(dialog_manager):
-        entry = next((e for e in await _entries(dialog_manager) if e.user_id == user_id), None)
-        name = _name(entry) if entry else f"ID {user_id}"
+    if not await is_owner(dialog_manager) or user_id is None:
+        return {"text": NO_ACCESS}
+    try:
+        entries = await _entries(dialog_manager)
+    except DomainError as exc:
+        return {"text": html.escape(describe_error(exc))}
+    entry = next((e for e in entries if e.user_id == user_id), None)
+    name = _name(entry) if entry else f"ID {user_id}"
     return {"text": f"Удалить из админов: <b>{html.escape(name)}</b>?"}
 
 
 async def on_add(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_owner(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard_owner(callback, manager):
         return
-    await manager.start(PickerSG.pick, data={"title": "Кого сделать админом?", "exclude_ids": []})
+    await manager.start(PickerSG.pick, data={"title": _PICK_TITLE, "exclude_ids": []})
 
 
 async def on_picked(start_data: Any, result: Any, manager: DialogManager) -> None:
-    if not isinstance(result, dict) or "user_id" not in result:
+    info = picked_user(result)
+    if info is None or not await is_owner(manager):
         return
-    if not await is_owner(manager):
-        return
-    info = UserInfo(
-        int(result["user_id"]),
-        str(result.get("first_name") or ""),
-        result.get("last_name"),
-        result.get("username"),
-    )
     try:
         await get_services(manager).admins.add_admin(actor_id(manager), info)
-    except Exception as exc:
+    except DomainError as exc:
         text = describe_error(exc)
     else:
         text = "Админ добавлен."
-        await set_admin_commands(manager.middleware_data["bot"], info.id, is_admin=True)
+        await set_admin_commands(get_bot(manager), info.id, is_admin=True)
     event = manager.event
-    if isinstance(event, CallbackQuery) and event.message is not None:
-        await event.answer(fit_alert(text), show_alert=True)
-    elif hasattr(event, "answer"):
+    if isinstance(event, CallbackQuery):
+        await safe_answer(event, text)
+    elif isinstance(event, Message):
         await event.answer(text)
 
 
 async def on_item(
     callback: CallbackQuery, widget: Any, manager: DialogManager, item_id: int
 ) -> None:
-    if not await is_owner(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard_owner(callback, manager):
         return
     manager.dialog_data["user_id"] = item_id
     await manager.switch_to(AdminsSG.item)
 
 
 async def on_remove(callback: CallbackQuery, button: Button, manager: DialogManager) -> None:
-    if not await is_owner(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if not await guard_owner(callback, manager):
         return
     await manager.switch_to(AdminsSG.confirm_remove)
 
@@ -130,17 +120,19 @@ async def on_remove(callback: CallbackQuery, button: Button, manager: DialogMana
 async def on_remove_confirm(
     callback: CallbackQuery, button: Button, manager: DialogManager
 ) -> None:
+    if not await guard_owner(callback, manager):
+        return
     user_id = manager.dialog_data.get("user_id")
-    if user_id is None or not await is_owner(manager):
-        await callback.answer(NO_ACCESS, show_alert=True)
+    if user_id is None:
+        await manager.switch_to(AdminsSG.list)
         return
     try:
         await get_services(manager).admins.remove_admin(actor_id(manager), int(user_id))
-    except Exception as exc:
-        await callback.answer(fit_alert(describe_error(exc)), show_alert=True)
+    except DomainError as exc:
+        await safe_answer(callback, describe_error(exc))
     else:
-        await callback.answer("Админ удалён.")
-        await set_admin_commands(manager.middleware_data["bot"], int(user_id), is_admin=False)
+        await safe_answer(callback, "Админ удалён.", show_alert=False)
+        await set_admin_commands(get_bot(manager), int(user_id), is_admin=False)
     manager.dialog_data.pop("user_id", None)
     await manager.switch_to(AdminsSG.list)
 
@@ -172,7 +164,7 @@ DIALOGS = [
                 ),
                 id="admins_scroll",
                 width=1,
-                height=8,
+                height=LIST_PAGE_SIZE,
                 hide_on_single_page=True,
             ),
             Button(Const("➕ Добавить админа"), id="admin_add", on_click=on_add, when="owner"),

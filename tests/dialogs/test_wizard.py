@@ -15,6 +15,10 @@ from tests.tg_fake import Harness, chat, command_update, next_id, text_update, t
 FRIDAY_18 = datetime(2026, 10, 23, 21, 0, tzinfo=UTC)
 
 
+DEADLINE_WARNING = (
+    "Время отмены записи уже прошло, поэтому отменить запись без штрафа участники не смогут."
+)
+
 # ---- локальные помощники -------------------------------------------------------------
 
 
@@ -34,6 +38,10 @@ def _screen(tg: Harness) -> str:
             if text:
                 return str(text)
     return ""
+
+
+def _said(tg: Harness, fragment: str) -> bool:
+    return any(fragment in str(data.get("text", "")) for _, data in tg.session.calls)
 
 
 def _alerts(tg: Harness) -> list[str]:
@@ -200,13 +208,39 @@ async def test_непонятное_время_даёт_подсказку_и_ш
     assert "шаг 2 из 6: время" in _screen(tg)
 
 
-async def test_слишком_близкое_время_возвращает_к_выбору_даты(tg: Harness) -> None:
+async def test_время_в_прошлом_возвращает_к_выбору_даты(tg: Harness) -> None:
     await _start(tg)
-    await _press(tg, "22")  # сегодня: дедлайн отмены (вчера, 20:00) уже прошёл
-    await _say(tg, "10:00")
+    await _press(tg, "22")  # сегодня; сейчас 09:00 по Монтевидео
+    await _say(tg, "08:00")
     text = _screen(tg)
     assert "Моменты времени не согласованы" in text
+    assert "Выбранный момент уже прошёл" in text
     assert "шаг 1 из 6: дата" in text
+
+
+async def test_близкое_время_принимается_дедлайн_отмены_зажимается_сервисом(
+    app: App, tg: Harness
+) -> None:
+    await _start(tg)
+    await _press(tg, "22")  # сегодня: расчётный дедлайн отмены (вчера, 20:00) уже прошёл
+    await _say(tg, "10:00")
+    assert "шаг 3 из 6: место" in _screen(tg)
+    await _say(tg, "Парк")
+    await _say(tg, "Текст")
+    await _press(tg, "Пропустить")
+    await _say(tg, "5")
+    await _press(tg, "Создать")
+    (event,) = await _events(app)
+    assert event.starts_at == datetime(2026, 10, 22, 13, 0, tzinfo=UTC)
+    assert event.cancel_deadline_at == app.clock.now()
+    assert _said(tg, DEADLINE_WARNING)
+    assert "Занято: 0 из 5" in _screen(tg)
+
+
+async def test_без_зажатого_дедлайна_предупреждения_нет(app: App, tg: Harness) -> None:
+    await _to_preview(tg)
+    await _press(tg, "Создать")
+    assert not _said(tg, DEADLINE_WARNING)
 
 
 async def test_кнопка_назад_на_времени_возвращает_к_дате(tg: Harness) -> None:

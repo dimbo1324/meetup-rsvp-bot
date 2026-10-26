@@ -42,6 +42,7 @@ from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.participants import ParticipantService
 from meetup_bot.services.ports import Notifier, NullNotifier, NullPostRefresher, PostRefresher
 from meetup_bot.services.post_reminders import PostReminderService
+from meetup_bot.services.posts import PostService
 from meetup_bot.services.registration import RegistrationService
 from meetup_bot.services.reminders import ReminderService
 from meetup_bot.services.safe import BackgroundTasks
@@ -66,6 +67,7 @@ class Services:
     post_refresher: PostRefresher
     notifier: Notifier
     users: UserService
+    posts: PostService
     # Фоновые уведомления; при остановке приложения вызвать `await background.aclose()`
     background: BackgroundTasks
 
@@ -210,5 +212,6 @@ async def build_services(
         post_refresher=post_refresher,
         notifier=notifier,
         users=UserService(sessions, clock),
+        posts=PostService(sessions, settings),
         background=background,
     )

@@ -36,7 +36,17 @@ from aiogram_dialog.widgets.text import Const, Format
 
 from meetup_bot.db.models import EventStatus
 from meetup_bot.dialogs._buttons import BACK, CANCEL, USE_DEFAULT
-from meetup_bot.dialogs._common import actor_id, get_services, is_admin, middleware_value
+from meetup_bot.dialogs._common import (
+    DEADLINE_CLAMPED_WARNING,
+    WARNING_PREFIX,
+    actor_id,
+    error_text,
+    get_clock,
+    get_services,
+    guard,
+    notice_block,
+    set_notice,
+)
 from meetup_bot.dialogs.calendar_ru import RussianCalendar
 from meetup_bot.dialogs.event_wizard_support import Suggestions, length_warnings, suggestions
 from meetup_bot.dialogs.states import CreateEventSG
@@ -47,7 +57,7 @@ from meetup_bot.renderer.post import (
     render_post,
     visible_length,
 )
-from meetup_bot.services.errors import ErrorCode, InvalidOperation, PermissionDenied
+from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation, PermissionDenied
 from meetup_bot.services.event_validation import (
     validate_capacity,
     validate_description,
@@ -55,8 +65,8 @@ from meetup_bot.services.event_validation import (
     validate_url,
 )
 from meetup_bot.services.settings_schema import MAX_CAPACITY, MIN_CAPACITY
-from meetup_bot.services.timing import compute_times, next_event_start, validate_times
-from meetup_bot.telegram.errors_text import ERROR_TEXTS, NO_ACCESS, describe_error
+from meetup_bot.services.timing import compute_times, next_event_start
+from meetup_bot.telegram.errors_text import ERROR_TEXTS, describe_error
 from meetup_bot.texts.render import DATE_INPUT_FORMAT, format_moment
 
 TOTAL_STEPS = 6
@@ -66,8 +76,10 @@ _CALENDAR_ID = "wizard_calendar"
 
 # Ключи dialog_data
 _DATE, _TIME, _PLACE, _URL = "date", "time", "place", "place_url"
-_DESC, _PHOTO, _CAP, _NOTICE = "description_html", "photo", "capacity", "notice"
+_DESC, _PHOTO, _CAP = "description_html", "photo", "capacity"
 _SUGGESTED = "suggested"
+
+TIME_PASSED_HINT = "Выбранный момент уже прошёл. Выберите дату заново."
 
 
 # ---- общие помощники ----------------------------------------------------------------
@@ -78,24 +90,12 @@ def _head(step: int, title: str) -> str:
 
 
 def _notice(manager: DialogManager) -> str:
-    text = manager.dialog_data.get(_NOTICE)
-    return f"\n⚠️ {html.escape(str(text))}\n" if text else ""
-
-
-def _set_notice(manager: DialogManager, text: str | None) -> None:
-    manager.dialog_data[_NOTICE] = text
+    return notice_block(manager, WARNING_PREFIX)
 
 
 async def _guard(event: Message | CallbackQuery, manager: DialogManager) -> bool:
     """False и закрытие мастера, если у нажавшего уже нет прав."""
-    if await is_admin(manager):
-        return True
-    if isinstance(event, CallbackQuery):
-        await event.answer(NO_ACCESS, show_alert=True)
-    else:
-        await event.answer(NO_ACCESS)
-    await manager.done()
-    return False
+    return await guard(event, manager, close=True)
 
 
 def _tz(manager: DialogManager) -> ZoneInfo:
@@ -103,9 +103,7 @@ def _tz(manager: DialogManager) -> ZoneInfo:
 
 
 def _now(manager: DialogManager) -> datetime:
-    clock = middleware_value(manager, "clock")
-    now: datetime = clock.now()
-    return now
+    return get_clock(manager).now()
 
 
 def _starts_at(manager: DialogManager) -> datetime | None:
@@ -168,12 +166,12 @@ def _length_warnings(manager: DialogManager) -> str:
 
 
 async def _go(manager: DialogManager, state: Any) -> None:
-    _set_notice(manager, None)
+    set_notice(manager, None)
     await manager.switch_to(state)
 
 
 async def _clear_notice(_: CallbackQuery, __: Any, manager: DialogManager) -> None:
-    _set_notice(manager, None)
+    set_notice(manager, None)
 
 
 def _back(state: Any, suffix: str) -> SwitchTo:
@@ -215,7 +213,7 @@ async def _accept_date(
     event: Message | CallbackQuery, manager: DialogManager, picked: date
 ) -> None:
     if picked < _now(manager).astimezone(_tz(manager)).date():
-        _set_notice(manager, "Эта дата уже прошла. Выберите сегодняшнюю или будущую.")
+        set_notice(manager, "Эта дата уже прошла. Выберите сегодняшнюю или будущую.")
         return
     manager.dialog_data[_DATE] = picked.isoformat()
     await _go(manager, CreateEventSG.time)
@@ -258,19 +256,11 @@ async def _accept_time(
     manager.dialog_data[_TIME] = f"{hours:02d}:{minutes:02d}"
     starts = _starts_at(manager)
     assert starts is not None
-    services = get_services(manager)
-    now = _now(manager)
-    try:
-        validate_times(compute_times(starts, services.settings.schedule_now()), now)
-    except ValueError:
-        # Дата/время в прошлом либо слишком близко: дедлайны и закрытие записи не помещаются
+    # Близость к началу не мешает: сервис сам приравняет прошедший дедлайн отмены к моменту создания
+    if starts < _now(manager):
         manager.dialog_data.pop(_DATE, None)
         manager.dialog_data.pop(_TIME, None)
-        _set_notice(
-            manager,
-            f"{ERROR_TEXTS[ErrorCode.INVALID_TIMES]} Скорее всего, момент уже прошёл или слишком "
-            "близко (запись закрывается заранее). Выберите дату заново.",
-        )
+        set_notice(manager, f"{ERROR_TEXTS[ErrorCode.INVALID_TIMES]} {TIME_PASSED_HINT}")
         await manager.switch_to(CreateEventSG.date)
         return
     await _go(manager, CreateEventSG.place)
@@ -297,7 +287,7 @@ async def _on_time_text(message: Message, _: Any, manager: DialogManager) -> Non
         return
     match = _TIME_RE.match(message.text or "")
     if not match or int(match.group(1)) > 23 or int(match.group(2)) > 59:
-        _set_notice(manager, "Не удалось разобрать время. Пример: 18:30.")
+        set_notice(manager, "Не удалось разобрать время. Пример: 18:30.")
         return
     await _accept_time(message, manager, int(match.group(1)), int(match.group(2)))
 
@@ -347,9 +337,7 @@ async def _on_place_text(message: Message, _: Any, manager: DialogManager) -> No
         place = validate_place(name.strip())
         link = validate_url(url.strip())
     except InvalidOperation as exc:
-        _set_notice(
-            manager, f"{describe_error(exc)} Пример: Кафе «Утро» | https://maps.example.com/xyz"
-        )
+        set_notice(manager, f"{error_text(exc)} Пример: Кафе «Утро» | https://maps.example.com/xyz")
         return
     manager.dialog_data[_PLACE] = place
     manager.dialog_data[_URL] = link
@@ -394,12 +382,12 @@ async def _on_description_text(message: Message, _: Any, manager: DialogManager)
         return
     text = (message.html_text or "").strip()
     if not text:
-        _set_notice(manager, "Пришлите текст сообщением или выберите кнопку.")
+        set_notice(manager, "Пришлите текст сообщением или выберите кнопку.")
         return
     try:
         validate_description(text)
     except InvalidOperation as exc:
-        _set_notice(manager, describe_error(exc))
+        set_notice(manager, error_text(exc))
         return
     manager.dialog_data[_DESC] = text
     await _go(manager, CreateEventSG.photo)
@@ -447,7 +435,7 @@ async def _on_photo(message: Message, _: Any, manager: DialogManager) -> None:
 async def _on_photo_wrong(message: Message, _: Any, manager: DialogManager) -> None:
     if not await _guard(message, manager):
         return
-    _set_notice(manager, "Это не фото. Пришлите картинку как фото или нажмите «Пропустить».")
+    set_notice(manager, "Это не фото. Пришлите картинку как фото или нажмите «Пропустить».")
 
 
 # ---- шаг 6: лимит --------------------------------------------------------------------
@@ -478,10 +466,10 @@ async def _on_capacity_text(message: Message, _: Any, manager: DialogManager) ->
     try:
         value = validate_capacity(int(raw))
     except ValueError:
-        _set_notice(manager, f"Нужно целое число от {MIN_CAPACITY} до {MAX_CAPACITY}. Пример: 12.")
+        set_notice(manager, f"Нужно целое число от {MIN_CAPACITY} до {MAX_CAPACITY}. Пример: 12.")
         return
     except InvalidOperation as exc:
-        _set_notice(manager, f"{describe_error(exc)} Пример: 12.")
+        set_notice(manager, f"{describe_error(exc)} Пример: 12.")
         return
     manager.dialog_data[_CAP] = value
     await _go(manager, CreateEventSG.preview)
@@ -516,7 +504,7 @@ async def _on_create(callback: CallbackQuery, _: Any, manager: DialogManager) ->
     starts = _starts_at(manager)
     data = manager.dialog_data
     if starts is None or _CAP not in data:
-        _set_notice(manager, "Данные неполные, начните с даты.")
+        set_notice(manager, "Данные неполные, начните с даты.")
         await manager.switch_to(CreateEventSG.date)
         return
     try:
@@ -533,19 +521,22 @@ async def _on_create(callback: CallbackQuery, _: Any, manager: DialogManager) ->
         if exc.code == ErrorCode.INVALID_TIMES:
             data.pop(_DATE, None)
             data.pop(_TIME, None)
-            _set_notice(manager, f"{describe_error(exc)} Выберите дату заново.")
+            set_notice(manager, f"{error_text(exc)} Выберите дату заново.")
             await manager.switch_to(CreateEventSG.date)
             return
-        _set_notice(manager, describe_error(exc))
+        set_notice(manager, error_text(exc))
         return
-    except Exception as exc:
-        _set_notice(manager, describe_error(exc))
+    except DomainError as exc:
+        set_notice(manager, error_text(exc))
         return
-    if created.warnings and callback.message is not None:
-        lines = "\n".join(f"• {html.escape(w)}" for w in created.warnings)
+    warnings = [*created.warnings]
+    if created.deadline_clamped:
+        warnings.append(DEADLINE_CLAMPED_WARNING)
+    if warnings and callback.message is not None:
+        lines = "\n".join(f"• {html.escape(w)}" for w in warnings)
         await callback.message.answer(f"✅ Встреча создана. Обратите внимание:\n{lines}")
     await manager.done(
-        result={"event_id": created.event_id, "warnings": list(created.warnings)},
+        result={"event_id": created.event_id, "warnings": warnings},
         show_mode=ShowMode.SEND,
     )
 
