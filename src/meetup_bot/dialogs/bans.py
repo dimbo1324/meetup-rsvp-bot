@@ -16,13 +16,13 @@ from meetup_bot.db.models import Ban, BanReason
 from meetup_bot.dialogs._buttons import BACK, CANCEL, LIST_PAGE_SIZE, NO, NO_REASON
 from meetup_bot.dialogs._common import actor_id, get_services, guard, is_admin, picked_user
 from meetup_bot.dialogs.states import BansSG, PickerSG
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
 from meetup_bot.services.names import admin_label
 from meetup_bot.services.settings_schema import REASON_MAX_LEN
 from meetup_bot.telegram.common import safe_answer
 from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
 from meetup_bot.texts.render import DATE_INPUT_FORMAT, format_local, format_moment
+from meetup_bot.user_info import UserInfo
 
 _HISTORY_LIMIT = 15
 _REASONS = {BanReason.NO_SHOW.value: "неявка", BanReason.MANUAL.value: "вручную"}

@@ -11,7 +11,6 @@ from sqlalchemy import func, select
 
 from meetup_bot.clock import FakeClock
 from meetup_bot.db.models import AuditLog, Event, EventStatus
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import ErrorCode, InvalidOperation
 from meetup_bot.services.lifecycle import (
     AutoCreateStatus,
@@ -22,6 +21,7 @@ from meetup_bot.services.lifecycle import (
 from meetup_bot.services.locks import EventLocks
 from meetup_bot.services.registration import RegisterStatus
 from meetup_bot.services.rules import RulesSettings
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App, RecordingNotifier, RecordingRefresher, person
 
 # Четверг 2026-10-22 12:00 UTC; встреча по умолчанию — пятница 23.10 16:30 (19:30 UTC),

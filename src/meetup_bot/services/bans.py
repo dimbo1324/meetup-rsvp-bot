@@ -13,7 +13,6 @@ from meetup_bot.db.models import Ban, BanReason, RegistrationStatus
 from meetup_bot.repositories import admins, audit, events, registrations
 from meetup_bot.repositories import bans as bans_repo
 from meetup_bot.repositories import users as users_repo
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
     Provided,
@@ -28,6 +27,7 @@ from meetup_bot.services.provided import resolve_or_default
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule, safe_send_dm
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
+from meetup_bot.user_info import UserInfo
 
 # Повторы на случай, когда между поиском будущих встреч и блокировкой пользователь записался
 _MAX_LOCK_ATTEMPTS = 5

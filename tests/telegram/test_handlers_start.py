@@ -22,10 +22,12 @@ from meetup_bot.handlers.start import (
     ABOUT_TEXT,
     HELP_ADMIN,
     HELP_USER,
+    REMIND_NO_REGISTRATIONS,
     REMIND_ON,
-    REMIND_STATUS_HINT,
+    REMIND_REGISTRATIONS_HEAD,
     WELCOME_ADMIN_EXTRA,
 )
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 from tests.tg_fake import Harness, command_update, next_id, text_update, tg_user
 
@@ -132,9 +134,28 @@ async def test_deep_link_remind(tg: Harness) -> None:
     assert sent_texts(tg)[0].startswith(REMIND_ON)
 
 
-async def test_deep_link_remind_не_теряет_информацию_о_записи(tg: Harness) -> None:
+async def test_deep_link_remind_без_записей_говорит_об_этом(tg: Harness) -> None:
     await tg.feed(command_update(USER, "/start remind"))
-    assert REMIND_STATUS_HINT in sent_texts(tg)[0]
+    assert REMIND_NO_REGISTRATIONS in sent_texts(tg)[0]
+
+
+async def test_deep_link_remind_показывает_запись_с_интервалом_и_местом(
+    app: App, tg: Harness
+) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID, place="Кафе")).event_id
+    await app.services.registration.register(event_id, UserInfo(USER, "Анна"))
+    await tg.feed(command_update(USER, "/start remind"))
+    text = sent_texts(tg)[0]
+    assert REMIND_REGISTRATIONS_HEAD in text
+    assert "пятница, 23 октября, 16:30–18:30, Кафе — вы записаны" in text
+
+
+async def test_deep_link_remind_показывает_номер_в_очереди(app: App, tg: Harness) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID, capacity=1)).event_id
+    await app.services.registration.register(event_id, UserInfo(USER + 1, "Первый"))
+    await app.services.registration.register(event_id, UserInfo(USER, "Анна"))
+    await tg.feed(command_update(USER, "/start remind"))
+    assert "вы в очереди, номер 1" in sent_texts(tg)[0]
 
 
 async def test_deep_link_remind_включает_личку(app: App, tg: Harness) -> None:

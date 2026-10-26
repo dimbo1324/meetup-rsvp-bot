@@ -18,7 +18,6 @@ from meetup_bot.db.models import (
     RegistrationStatus,
 )
 from meetup_bot.repositories import audit, events, events_admin, registrations, users
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
 from meetup_bot.services.admin_support import (
     Provided,
@@ -35,6 +34,7 @@ from meetup_bot.services.provided import resolve_or_default
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.safe import safe_schedule
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
+from meetup_bot.user_info import UserInfo
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,6 @@ from aiogram.methods import SendMessage
 
 from meetup_bot.db.models import User
 from meetup_bot.repositories import users
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.telegram import notifier as notifier_module
 from meetup_bot.telegram.attendance_ui import SheetStatus
 from meetup_bot.telegram.notifier import (
@@ -28,6 +27,7 @@ from meetup_bot.telegram.notifier import (
 )
 from meetup_bot.texts.render import telegram_length
 from meetup_bot.texts.service import BACKUP_CAPTION, SERVICE_CHAT_UNAVAILABLE_TEXT
+from meetup_bot.user_info import UserInfo
 from tests.helpers import App
 from tests.tg_fake import Harness
 

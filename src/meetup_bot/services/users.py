@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import User
-from meetup_bot.repositories import admins, event_posts, users, users_known
-from meetup_bot.repositories.users import UserInfo
+from meetup_bot.repositories import admins, users, users_known
+from meetup_bot.user_info import UserInfo
 
 
 def _info(user: User) -> UserInfo:
@@ -61,21 +61,3 @@ class UserService:
         async with self._sessions() as session:
             found = await users_known.get_many(session, user_ids)
             return {user_id: _info(user) for user_id, user in found.items()}
-
-    async def register_post(
-        self, event_id: int, inline_message_id: str, posted_by: int | None
-    ) -> bool:
-        """Запоминает отправленный inline-пост встречи; True, если пост новый.
-
-        Идемпотентно: и `chosen_inline_result`, и первое нажатие кнопки (lazy registration)
-        регистрируют один и тот же `inline_message_id` без дублей.
-        """
-        async with self._sessions() as session, session.begin():
-            _, created = await event_posts.register(
-                session,
-                event_id=event_id,
-                inline_message_id=inline_message_id,
-                posted_by=posted_by,
-                now=self._clock.now(),
-            )
-            return created

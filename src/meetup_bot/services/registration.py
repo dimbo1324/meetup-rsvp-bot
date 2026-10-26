@@ -24,7 +24,6 @@ from meetup_bot.db.models import (
     User,
 )
 from meetup_bot.repositories import audit, bans, events, registrations, users
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.admin_support import (
     Provided,
     RenderText,
@@ -44,12 +43,14 @@ from meetup_bot.services.timing import ScheduleSettings
 from meetup_bot.services.waitlist import Promotion, promote_waitlist
 from meetup_bot.texts.render import format_moment
 from meetup_bot.texts.service import EVENT_FULL_TEXT, USER_CANCELLED_TEXT
+from meetup_bot.user_info import UserInfo
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CancelResult",
     "CancelStatus",
+    "MyRegistration",
     "RegisterResult",
     "RegisterStatus",
     "RegistrationOptions",
@@ -75,6 +76,18 @@ class CancelStatus(enum.StrEnum):
     NOT_REGISTERED = "not_registered"
     TOO_LATE = "too_late"
     NOT_FOUND = "not_found"
+
+
+@dataclass(frozen=True)
+class MyRegistration:
+    """Запись человека на ближайшую встречу: для ответа в личке, где нет окна с итогом."""
+
+    starts_at: datetime
+    ends_at: datetime
+    place: str
+    guests: int
+    # Место в очереди (с 1); None — человек записан
+    waitlist_position: int | None
 
 
 @dataclass(frozen=True)
@@ -192,6 +205,27 @@ class RegistrationService:
             )
             self._background.spawn(safe_send_service(self._notifier, text))
         return result
+
+    async def my_registrations(self, user_id: int) -> list[MyRegistration]:
+        async with self._sessions() as session:
+            found = await registrations.upcoming_of_user(session, user_id)
+            result: list[MyRegistration] = []
+            for registration, event in found:
+                waiting = registration.status == RegistrationStatus.WAITLIST.value
+                result.append(
+                    MyRegistration(
+                        starts_at=event.starts_at,
+                        ends_at=event.ends_at,
+                        place=event.place,
+                        guests=registration.guests,
+                        waitlist_position=(
+                            await registrations.waitlist_position(session, registration)
+                            if waiting
+                            else None
+                        ),
+                    )
+                )
+            return result
 
     async def cancel(self, event_id: int, user_id: int) -> CancelResult:
         rules = resolve(self._rules_provider)

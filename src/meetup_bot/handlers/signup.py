@@ -18,7 +18,6 @@ from meetup_bot.renderer.post import (
     SIGNUP_PREFIX,
     SIGNUP_SEP,
 )
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError, ErrorCode, InvalidOperation
 from meetup_bot.services.posts import register_post
 from meetup_bot.services.registration import (
@@ -37,6 +36,7 @@ from meetup_bot.telegram.common import (
 )
 from meetup_bot.telegram.post_updater import PostUpdater
 from meetup_bot.texts.render import text_variables
+from meetup_bot.user_info import UserInfo
 
 logger = logging.getLogger(__name__)
 

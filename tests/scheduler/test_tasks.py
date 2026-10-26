@@ -7,7 +7,6 @@ from sqlalchemy import select
 from meetup_bot.container import make_text_renderer
 from meetup_bot.db.models import AuditLog, Event, EventStatus, Registration
 from meetup_bot.repositories import users
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.scheduler.tasks import (
     AttendanceExpireTask,
     AttendancePromptTask,
@@ -27,6 +26,7 @@ from meetup_bot.services.registration import RegisterStatus
 from meetup_bot.services.reminders import ReminderService
 from meetup_bot.services.rules import RulesSettings
 from meetup_bot.services.timing import ScheduleSettings
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App, RecordingNotifier, person
 
 # Четверг 2026-10-22 12:00 UTC; встреча по умолчанию: пятница 23.10 16:30 по Монтевидео,

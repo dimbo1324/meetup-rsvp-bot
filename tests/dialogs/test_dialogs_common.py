@@ -23,9 +23,9 @@ from meetup_bot.dialogs._common import (
     pop_notice,
     set_notice,
 )
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound, PermissionDenied
 from meetup_bot.telegram.errors_text import ERROR_TEXTS, NO_ACCESS, describe_error
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 
 

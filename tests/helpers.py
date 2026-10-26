@@ -14,8 +14,8 @@ from meetup_bot.clock import FakeClock
 from meetup_bot.container import Services, build_services
 from meetup_bot.db.base import Base
 from meetup_bot.db.session import create_engine, create_session_factory
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.safe import BackgroundTasks
+from meetup_bot.user_info import UserInfo
 
 OWNER_ID = 1
 ADMIN_ID = 2

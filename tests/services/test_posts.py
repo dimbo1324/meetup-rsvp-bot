@@ -13,8 +13,9 @@ from meetup_bot.repositories import registrations
 from meetup_bot.services.errors import PermissionDenied
 from meetup_bot.services.events import EventService
 from meetup_bot.services.posts import load_post_data
-from meetup_bot.services.registration import RegisterStatus, RegistrationService, UserInfo
+from meetup_bot.services.registration import RegisterStatus, RegistrationService
 from meetup_bot.texts.render import TIME_RANGE_DASH
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 ROOT = Path(__file__).resolve().parent.parent.parent

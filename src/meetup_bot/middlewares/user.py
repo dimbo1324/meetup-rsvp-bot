@@ -10,7 +10,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import ChosenInlineResult, InlineQuery, TelegramObject
 from aiogram.types import User as TgUser
 
-from meetup_bot.repositories.users import UserInfo
+from meetup_bot.user_info import UserInfo
 
 logger = logging.getLogger(__name__)
 

@@ -10,10 +10,10 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, AuditLog, Ban, BanReason, Event, Registration, User
 from meetup_bot.repositories import events
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation, NotFound, PermissionDenied
 from meetup_bot.services.participants import ParticipantService, display_name
 from meetup_bot.services.registration import RegisterStatus
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App, person
 
 STRANGER = 777

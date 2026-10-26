@@ -6,8 +6,8 @@ from aiogram import F, Router
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.telegram.common import check_admin
+from meetup_bot.user_info import UserInfo
 
 UNKNOWN_ADMIN_TEXT = "Не понял. Меню — /menu, помощь — /help"
 UNKNOWN_USER_TEXT = "Не понял. Помощь — /help"

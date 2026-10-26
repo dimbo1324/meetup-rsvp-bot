@@ -12,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from meetup_bot.clock import Clock
 from meetup_bot.container import Services
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError, InvalidOperation
 from meetup_bot.telegram.attendance_ui import AttendanceUI
 from meetup_bot.telegram.errors_text import NO_ACCESS, describe_error
+from meetup_bot.user_info import UserInfo
 
 NOTICE_KEY = "notice"
 WARNING_PREFIX = "⚠️ "

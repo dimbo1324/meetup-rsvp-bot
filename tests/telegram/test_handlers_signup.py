@@ -12,9 +12,9 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import EventPost
 from meetup_bot.repositories import event_posts
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import DomainError
 from meetup_bot.telegram.common import ALERT_LIMIT, GENERIC_ERROR_TEXT
+from meetup_bot.user_info import UserInfo
 from tests.helpers import OWNER_ID, App
 from tests.tg_fake import Harness, callback_update, command_update
 

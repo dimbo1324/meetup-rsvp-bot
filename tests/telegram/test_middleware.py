@@ -11,7 +11,7 @@ from aiogram.types import User as TgUser
 
 from meetup_bot.db.models import User
 from meetup_bot.middlewares.user import UserMiddleware
-from meetup_bot.repositories.users import UserInfo
+from meetup_bot.user_info import UserInfo
 from tests.helpers import App
 from tests.tg_fake import Harness, callback_update, chat, command_update, next_id, tg_user
 

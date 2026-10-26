@@ -2,22 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from meetup_bot.db.models import User
-
-
-@dataclass(frozen=True)
-class UserInfo:
-    """Данные пользователя Telegram, актуальные на момент взаимодействия."""
-
-    id: int
-    first_name: str
-    last_name: str | None = None
-    username: str | None = None
+from meetup_bot.user_info import UserInfo
 
 
 async def get(session: AsyncSession, user_id: int) -> User | None:

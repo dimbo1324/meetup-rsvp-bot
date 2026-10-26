@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock
 from meetup_bot.db.models import AdminRole
 from meetup_bot.repositories import admins, audit, users
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services import access
 from meetup_bot.services.errors import ErrorCode, InvalidOperation, NotFound
+from meetup_bot.user_info import UserInfo
 
 
 @dataclass(frozen=True)

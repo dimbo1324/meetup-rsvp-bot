@@ -155,7 +155,7 @@ async def _event(app: App, event_id: int) -> Event:
 
 
 async def test_имя_из_эмодзи_и_rtl_сохраняется_как_есть(app: App) -> None:
-    from meetup_bot.repositories.users import UserInfo
+    from meetup_bot.user_info import UserInfo
 
     event_id = await make_event(app)
     weird = UserInfo(77, "🎉👩‍👩‍👧 مرحبا", "​Тест", None)

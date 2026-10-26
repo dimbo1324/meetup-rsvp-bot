@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from meetup_bot.clock import Clock, ShiftableClock
 from meetup_bot.config import Settings
 from meetup_bot.container import Services
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.telegram.commands import set_admin_commands
 from meetup_bot.telegram.common import START_ABOUT, START_REMIND, check_admin
-from meetup_bot.texts.render import format_moment
+from meetup_bot.texts.render import format_interval, format_moment
+from meetup_bot.user_info import UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +35,16 @@ WELCOME_ADMIN_EXTRA = (
     "\n\nВы администратор. Чтобы разослать пост, наберите @{bot} в нужном чате и выберите "
     "встречу. Меню администратора — команда /menu."
 )
+NO_PLACE = "место уточняется"
 REMIND_ON = "Напоминания включены. Я напишу вам перед встречей и если освободится место."
 # Человек мог нажать «Записаться», не успев прочитать всплывающее окно с итогом записи
-REMIND_STATUS_HINT = (
-    "Если вы только что записались, запись сохранена. Чтобы проверить её статус, "
-    "нажмите «Записаться» под постом ещё раз: повторное нажатие ничего не изменит."
+REMIND_NO_REGISTRATIONS = (
+    "Записи на ближайшие встречи нет. Чтобы записаться, нажмите «Записаться» под постом."
 )
+REMIND_REGISTRATIONS_HEAD = "Ваши записи:"
+REMIND_LINE_ACTIVE = "• {when}, {place} — вы записаны{guests}"
+REMIND_LINE_WAITLIST = "• {when}, {place} — вы в очереди, номер {position}"
+REMIND_GUESTS = " (+{count})"
 # Сюда приходят уже нажавшие /start, поэтому просить его нажать ещё раз не нужно
 ABOUT_TEXT = (
     "Я бот записи на встречи клуба. Пост со встречей приходит в чат, а запись и отмена "
@@ -68,6 +72,25 @@ def build_help(*, is_admin: bool, bot: str, plus_one_enabled: bool) -> str:
     return text + HELP_ADMIN_EXTRA.format(bot=bot) if is_admin else text
 
 
+async def _registrations_text(services: Services, user_id: int) -> str:
+    mine = await services.registration.my_registrations(user_id)
+    if not mine:
+        return REMIND_NO_REGISTRATIONS
+    tz = services.settings.timezone_now()
+    lines = [REMIND_REGISTRATIONS_HEAD]
+    for item in mine:
+        when = format_interval(item.starts_at, item.ends_at, tz)
+        place = html.escape(item.place or NO_PLACE, quote=False)
+        if item.waitlist_position is not None:
+            lines.append(
+                REMIND_LINE_WAITLIST.format(when=when, place=place, position=item.waitlist_position)
+            )
+        else:
+            guests = REMIND_GUESTS.format(count=item.guests) if item.guests else ""
+            lines.append(REMIND_LINE_ACTIVE.format(when=when, place=place, guests=guests))
+    return "\n".join(lines)
+
+
 @private.message(Command("start"))
 async def cmd_start(
     message: Message,
@@ -86,7 +109,7 @@ async def cmd_start(
 
     param = (command.args or "").strip()
     if param == START_REMIND:
-        text = f"{REMIND_ON}\n\n{REMIND_STATUS_HINT}"
+        text = f"{REMIND_ON}\n\n{await _registrations_text(services, user_info.id)}"
     elif param == START_ABOUT:
         text = ABOUT_TEXT
     else:

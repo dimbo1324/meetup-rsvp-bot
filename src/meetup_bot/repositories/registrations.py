@@ -131,6 +131,21 @@ async def list_live_of_user(
     return list(rows.all())
 
 
+async def upcoming_of_user(session: AsyncSession, user_id: int) -> list[tuple[Registration, Event]]:
+    """Живые записи пользователя на встречи, которые ещё не завершились, по времени начала."""
+    rows = await session.execute(
+        select(Registration, Event)
+        .join(Event, Registration.event_id == Event.id)
+        .where(
+            Registration.user_id == user_id,
+            Registration.status.in_(LIVE_REGISTRATION_STATUSES),
+            Event.status.in_(UNFINISHED_EVENT_STATUSES),
+        )
+        .order_by(Event.starts_at, Registration.id)
+    )
+    return [(registration, event) for registration, event in rows.all()]
+
+
 async def future_event_ids_of_user(session: AsyncSession, user_id: int, now: datetime) -> set[int]:
     """Незавершённые встречи, которые ещё не начались и где у пользователя живая запись."""
     rows = await session.scalars(

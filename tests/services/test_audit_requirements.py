@@ -9,9 +9,9 @@ from sqlalchemy import select
 
 from meetup_bot.db.models import Attendance, Event, User
 from meetup_bot.repositories import users as users_repo
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation
 from meetup_bot.services.registration import CancelStatus, RegisterStatus
+from meetup_bot.user_info import UserInfo
 from tests.helpers import OWNER_ID, App, person
 from tests.services.test_attendance import (
     FIRST_START,

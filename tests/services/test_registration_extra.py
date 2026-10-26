@@ -390,3 +390,32 @@ async def test_параллельные_отмены_продвигают_каж
     assert await taken(app, event_id) == 3
     for n in (3, 4, 5):
         assert await status_of(app, event_id, 1000 + n) == "active"
+
+
+async def test_мои_записи_пусты_без_записей(app: App) -> None:
+    assert await app.services.registration.my_registrations(77) == []
+
+
+async def test_мои_записи_показывают_запись_гостя_и_очередь(app: App) -> None:
+    first = (await app.services.events.create_event_as_admin(OWNER_ID, capacity=1)).event_id
+    second = (
+        await app.services.events.create_event_as_admin(
+            OWNER_ID, starts_at=app.clock.now() + timedelta(days=8)
+        )
+    ).event_id
+    await app.services.registration.register(first, person(1))
+    await app.services.registration.register(first, person(2))
+    await app.services.registration.register(second, person(2))
+    mine = await app.services.registration.my_registrations(person(2).id)
+    assert [item.waitlist_position for item in mine] == [1, None]
+    assert mine[0].starts_at < mine[1].starts_at
+    assert all(item.ends_at > item.starts_at for item in mine)
+
+
+async def test_мои_записи_не_включают_отменённую_запись_и_чужие(app: App) -> None:
+    event_id = (await app.services.events.create_event_as_admin(OWNER_ID)).event_id
+    await app.services.registration.register(event_id, person(1))
+    await app.services.registration.register(event_id, person(2))
+    await app.services.registration.cancel(event_id, person(1).id)
+    assert await app.services.registration.my_registrations(person(1).id) == []
+    assert len(await app.services.registration.my_registrations(person(2).id)) == 1

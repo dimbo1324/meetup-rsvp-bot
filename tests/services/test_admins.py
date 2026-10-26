@@ -4,8 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from meetup_bot.db.models import Admin, AuditLog, User
-from meetup_bot.repositories.users import UserInfo
 from meetup_bot.services.errors import InvalidOperation, NotFound, PermissionDenied
+from meetup_bot.user_info import UserInfo
 from tests.helpers import ADMIN_ID, OWNER_ID, App
 
 STRANGER_ID = 777
