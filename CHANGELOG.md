@@ -5,6 +5,12 @@ AI-ассистентов записываются отдельно в `.ai/CHAN
 
 ## [Не выпущено]
 
+### Документация
+
+- README и памятка ведущего переписаны проще и живее; в README ссылка на группу сообщества
+  [@mvdamor](https://t.me/mvdamor) и QR-код; в проект добавлено руководство по боту в PDF
+  (`docs/bot-guide.pdf`).
+
 ### Добавлено
 
 - **Каркас (M0).** `pyproject.toml` (Python 3.14, uv), `config`, `clock`, `db`, Alembic, Dockerfile, compose,
