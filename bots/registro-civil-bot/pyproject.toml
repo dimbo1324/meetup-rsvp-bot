@@ -1,0 +1,67 @@
+[project]
+name = "registro-civil-bot"
+version = "0.1.0"
+description = "Наблюдатель за свободными датами записи в Registro Civil (Уругвай) с уведомлением владельца"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+# Стек — SPEC.md, раздел 2.1. Нижние границы — версии из ТЗ, точные версии — в uv.lock.
+dependencies = [
+    "aiohttp>=3.14.5,<4",
+    "aiogram>=3.31,<4",
+    "aiogram-dialog>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.1.6,<2.2",
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.1",
+    "pydantic>=2.13.5,<3",
+    "pydantic-settings>=2.16.1",
+    "tzdata>=2026.5",
+    "sentry-sdk>=2.73",
+    "uvloop>=0.23; sys_platform == 'linux'",
+    "playwright>=1.65",
+    "keyring>=25.7",
+]
+
+# Общие инструменты (pytest, ruff, mypy, pip-audit) — в dev-группе корня монорепозитория.
+[dependency-groups]
+dev = [
+    "aioresponses>=0.7.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rcbot"]
+
+# Контракт бота для dev.py (docs/monorepo.md).
+[tool.monorepo]
+package = "rcbot"
+platform = "windows-desktop"
+# Chromium для Playwright живёт в каталоге бота (SPEC.md, 2.7), а не в профиле пользователя.
+env = { PLAYWRIGHT_BROWSERS_PATH = "./.browsers" }
+setup = [["playwright", "install", "chromium"]]
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["DTZ"]
+
+# SPEC.md, 3.4: mypy --strict для всего кода бота.
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "src"
+files = ["src"]
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["src/rcbot"]
+branch = true

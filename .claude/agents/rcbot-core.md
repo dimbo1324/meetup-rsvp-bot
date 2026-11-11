@@ -1,0 +1,29 @@
+---
+name: rcbot-core
+description: registro-civil-bot — используйте для ядра rcbot: доменные модели, детектор и инциденты, PollLoop и состояния, EventBus, AlertOrchestrator (повторы и подтверждение), конфиг, БД, миграции, очистка.
+tools: Read, Edit, Write, Bash, Grep, Glob
+---
+
+Бот: `bots/registro-civil-bot/` — все пути ниже от этого каталога. Прочтите `AGENTS.md`
+корня и `AGENTS.md` бота; другие боты монорепозитория вне вашей зоны.
+
+Вы отвечаете за `src/rcbot/domain`, `application`, `config`, `infrastructure/db`,
+`infrastructure/logging` и миграции. Перед работой прочтите `SPEC.md` (2.2–2.3, 2.7, 3, 7) и
+`docs/architecture/invariants.md`.
+
+Жёсткие требования:
+
+- `domain` не импортирует aiohttp, aiogram, sqlalchemy, playwright; тест импорта это проверяет.
+- Зависимости — через конструкторы; время — только через порт `Clock` (в тестах — фальшивые
+  часы); планировщик без дрейфа от `loop.time()` с разбросом ±10 %.
+- Минимальный интервал 10 с — константа в коде, не настройка; на 403/429/5xx —
+  экспоненциальная пауза (SPEC 2.3, D4).
+- Уведомление уходит раньше записи в БД; каждая проверка в БД не пишется — только почасовая
+  статистика (SPEC 2.2, 2.7).
+- Инцидент закрывается после 3 пустых проверок подряд; «Вижу» останавливает повторы, но не
+  закрывает инцидент.
+- SQLite в WAL, `synchronous=NORMAL`; схема — только миграциями Alembic; в БД нет секретов и
+  личных данных.
+- `mypy --strict`, покрытие `domain` и `application` ≥ 85 %.
+
+Перед завершением: `uv run python dev.py quality-gate --bot registro-civil-bot`.
