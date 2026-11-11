@@ -117,6 +117,9 @@ class PollLoop:
         await self._runtime_store.save(self.runtime)
         return self.runtime.months_ahead
 
+    async def save_runtime(self) -> None:
+        await self._runtime_store.save(self.runtime)
+
     def manual_done(self) -> None:
         """Владелец прошёл шаг 1 сам и нажал «Готово» (D3): проверка — сразу."""
         self.wake()
