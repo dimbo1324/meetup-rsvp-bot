@@ -11,6 +11,7 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from rcbot import __version__
+from rcbot.application.session_manager import SessionManager
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
 from rcbot.config.settings import Settings, load_settings
@@ -25,8 +26,11 @@ from rcbot.infrastructure.db.repositories import (
     SqlStatsRepository,
     SqlTargetRepository,
 )
+from rcbot.infrastructure.gubuy.api_source import ApiSource
 from rcbot.infrastructure.gubuy.auth import PlaywrightAuthenticator
 from rcbot.infrastructure.gubuy.browser import BrowserOptions
+from rcbot.infrastructure.gubuy.dom_source import DomSource
+from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.infrastructure.logging.setup import setup_logging
 from rcbot.infrastructure.sentry import init_sentry
@@ -124,6 +128,28 @@ def build_authenticator(core: Core) -> PlaywrightAuthenticator:
         credentials=core.secrets.credentials,
         options=browser_options(core),
     )
+
+
+def build_api_source(core: Core) -> ApiSource:
+    s = core.settings
+    http = SafeHttp(s.allowed_hosts(), timeout_sec=s.request_timeout_sec)
+    return ApiSource(http, s.api_url, s.agenda_url, core.paths.quarantine, core.clock)
+
+
+def build_dom_source(core: Core) -> DomSource:
+    s = core.settings
+    return DomSource(
+        s.agenda_url, s.location_text, browser_options(core), core.paths.shots, core.clock
+    )
+
+
+def build_session(core: Core) -> SessionManager:
+    return SessionManager(build_authenticator(core), core.clock, core.settings.relogin_max_per_hour)
+
+
+def transient_target(core: Core) -> WatchTarget:
+    s = core.settings
+    return WatchTarget(0, TARGET_NAME, s.agenda_url, s.location_text, s.months_ahead)
 
 
 async def ensure_target(
