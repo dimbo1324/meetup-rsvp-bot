@@ -13,7 +13,7 @@ dev = [
     "pytest>=9.1",
     "pytest-asyncio>=1.4",
     "pytest-cov",
-    "ruff>=0.17",
+    "ruff>=0.17.4",
     "mypy",
     "pre-commit",
     "pip-audit>=2.10",
