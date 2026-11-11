@@ -144,7 +144,9 @@ def cmd_sync_agents(args: list[str]) -> int:
 
 
 def cmd_format(_: list[str]) -> int:
-    return uv("ruff", "check", "--fix", ".") or uv("ruff", "format", ".")
+    # Оба шага всегда: оставшиеся ошибки линтера не должны отменять форматирование
+    fixed = uv("ruff", "check", "--fix", ".")
+    return uv("ruff", "format", ".") or fixed
 
 
 def cmd_lint(_: list[str]) -> int:

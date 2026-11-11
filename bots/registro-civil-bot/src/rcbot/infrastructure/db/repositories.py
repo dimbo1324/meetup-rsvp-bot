@@ -1,0 +1,280 @@
+"""Репозитории SQLAlchemy — реализации портов хранения из `application/ports.py`."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, time
+from typing import ClassVar
+
+from sqlalchemy import delete, desc, select, text, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import InstrumentedAttribute
+
+from rcbot.domain.models import (
+    AppEvent,
+    Channel,
+    DeliveryResult,
+    Incident,
+    IncidentStatus,
+    PollStatsHour,
+    Slot,
+    WatchTarget,
+)
+from rcbot.infrastructure.db.tables import (
+    AppEventRow,
+    Base,
+    DeliveryRow,
+    IncidentRow,
+    IncidentSlotRow,
+    KvSettingRow,
+    PollStatsHourRow,
+    WatchTargetRow,
+)
+
+_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+
+
+def _slot_rows(incident_id: int, slots: frozenset[Slot]) -> list[IncidentSlotRow]:
+    return [
+        IncidentSlotRow(
+            incident_id=incident_id,
+            day=slot.day.isoformat(),
+            at=None if slot.at is None else slot.at.strftime("%H:%M"),
+        )
+        for slot in sorted(slots)
+    ]
+
+
+def _slot(row: IncidentSlotRow) -> Slot:
+    return Slot(date.fromisoformat(row.day), None if row.at is None else time.fromisoformat(row.at))
+
+
+class SqlTargetRepository:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def ensure(
+        self, name: str, agenda_url: str, location_text: str, months_ahead: int
+    ) -> WatchTarget:
+        async with self._sessions.begin() as session:
+            row = await session.scalar(select(WatchTargetRow).where(WatchTargetRow.name == name))
+            if row is None:
+                row = WatchTargetRow(name=name)
+                session.add(row)
+            row.agenda_url = agenda_url
+            row.location_text = location_text
+            row.months_ahead = months_ahead
+            await session.flush()
+            return WatchTarget(
+                row.id, row.name, row.agenda_url, row.location_text, row.months_ahead
+            )
+
+
+class SqlIncidentRepository:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def _load(self, session: AsyncSession, row: IncidentRow) -> Incident:
+        slots = await session.scalars(
+            select(IncidentSlotRow).where(IncidentSlotRow.incident_id == row.id)
+        )
+        return Incident(
+            id=row.id,
+            target_id=row.target_id,
+            opened_at=row.opened_at,
+            slots=frozenset(_slot(s) for s in slots),
+            status=IncidentStatus(row.status),
+            closed_at=row.closed_at,
+            acked_at=row.acked_at,
+        )
+
+    async def open(self, target_id: int, opened_at: datetime, slots: frozenset[Slot]) -> Incident:
+        async with self._sessions.begin() as session:
+            row = IncidentRow(target_id=target_id, opened_at=opened_at, status=IncidentStatus.OPEN)
+            session.add(row)
+            await session.flush()
+            session.add_all(_slot_rows(row.id, slots))
+            return Incident(row.id, target_id, opened_at, slots)
+
+    async def update_slots(self, incident_id: int, slots: frozenset[Slot]) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(IncidentSlotRow).where(IncidentSlotRow.incident_id == incident_id)
+            )
+            session.add_all(_slot_rows(incident_id, slots))
+
+    async def close(self, incident_id: int, closed_at: datetime) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                update(IncidentRow)
+                .where(IncidentRow.id == incident_id)
+                .values(status=IncidentStatus.CLOSED, closed_at=closed_at)
+            )
+
+    async def ack(self, incident_id: int, acked_at: datetime) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                update(IncidentRow)
+                .where(IncidentRow.id == incident_id, IncidentRow.acked_at.is_(None))
+                .values(acked_at=acked_at)
+            )
+
+    async def current(self, target_id: int) -> Incident | None:
+        async with self._sessions() as session:
+            row = await session.scalar(
+                select(IncidentRow)
+                .where(
+                    IncidentRow.target_id == target_id, IncidentRow.status == IncidentStatus.OPEN
+                )
+                .order_by(desc(IncidentRow.id))
+                .limit(1)
+            )
+            return None if row is None else await self._load(session, row)
+
+    async def last(self, limit: int) -> list[Incident]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(IncidentRow).order_by(desc(IncidentRow.id)).limit(limit)
+            )
+            return [await self._load(session, row) for row in rows]
+
+    async def record_delivery(self, result: DeliveryResult, at: datetime) -> None:
+        async with self._sessions.begin() as session:
+            session.add(
+                DeliveryRow(
+                    incident_id=result.incident_id,
+                    at=at,
+                    channel=result.channel,
+                    ok=result.ok,
+                    latency_ms=result.latency_ms,
+                    attempt=result.attempt,
+                    error=result.error[:300],
+                )
+            )
+
+    async def deliveries_for(self, incident_id: int) -> list[DeliveryResult]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(DeliveryRow)
+                .where(DeliveryRow.incident_id == incident_id)
+                .order_by(DeliveryRow.id)
+            )
+            return [
+                DeliveryResult(
+                    Channel(r.channel), r.ok, r.latency_ms, r.attempt, r.error, r.incident_id
+                )
+                for r in rows
+            ]
+
+
+class SqlStatsRepository:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def save_hour(self, stats: PollStatsHour) -> None:
+        async with self._sessions.begin() as session:
+            row = await session.get(PollStatsHourRow, stats.hour)
+            if row is None:
+                row = PollStatsHourRow(hour=stats.hour)
+                session.add(row)
+            row.checks = stats.checks
+            row.errors = stats.errors
+            row.relogins = stats.relogins
+            row.p50_ms = stats.percentile(0.50)
+            row.p95_ms = stats.percentile(0.95)
+
+    async def since(self, since: datetime) -> list[PollStatsHour]:
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(PollStatsHourRow)
+                .where(PollStatsHourRow.hour >= since)
+                .order_by(PollStatsHourRow.hour)
+            )
+            result = []
+            for row in rows:
+                hour = PollStatsHour(row.hour, row.checks, row.errors, row.relogins)
+                # Перцентили хранятся готовыми: восстанавливаем их как две точки распределения
+                hour.latencies_ms = [row.p50_ms, row.p95_ms]
+                result.append(hour)
+            return result
+
+
+class SqlEventLog:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def write(self, event: AppEvent) -> None:
+        async with self._sessions.begin() as session:
+            session.add(
+                AppEventRow(ts=event.ts, level=event.level, code=event.code, message=event.message)
+            )
+
+    async def last(self, limit: int, min_level: str = "WARNING") -> list[AppEvent]:
+        levels = [name for name, value in _LEVELS.items() if value >= _LEVELS.get(min_level, 30)]
+        async with self._sessions() as session:
+            rows = await session.scalars(
+                select(AppEventRow)
+                .where(AppEventRow.level.in_(levels))
+                .order_by(desc(AppEventRow.id))
+                .limit(limit)
+            )
+            return [AppEvent(r.ts, r.level, r.code, r.message) for r in rows]
+
+
+class SqlKeyValueStore:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def get(self, key: str) -> str | None:
+        async with self._sessions() as session:
+            row = await session.get(KvSettingRow, key)
+            return None if row is None else row.value
+
+    async def set(self, key: str, value: str) -> None:
+        async with self._sessions.begin() as session:
+            row = await session.get(KvSettingRow, key)
+            if row is None:
+                session.add(KvSettingRow(key=key, value=value))
+            else:
+                row.value = value
+
+    async def all(self) -> dict[str, str]:
+        async with self._sessions() as session:
+            return {row.key: row.value for row in await session.scalars(select(KvSettingRow))}
+
+
+class SqlMaintenance:
+    """Удаление по срокам хранения и уплотнение файла БД (SPEC 2.7)."""
+
+    _TABLES: ClassVar[dict[str, tuple[type[Base], InstrumentedAttribute[datetime]]]] = {
+        "incidents": (IncidentRow, IncidentRow.opened_at),
+        "poll_stats_hourly": (PollStatsHourRow, PollStatsHourRow.hour),
+        "app_events": (AppEventRow, AppEventRow.ts),
+    }
+
+    def __init__(self, engine: AsyncEngine, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._engine = engine
+        self._sessions = sessions
+
+    async def delete_older_than(self, cutoffs: dict[str, datetime]) -> dict[str, int]:
+        removed: dict[str, int] = {}
+        async with self._sessions.begin() as session:
+            for name, cutoff in cutoffs.items():
+                model, column = self._TABLES[name]
+                stmt = delete(model).where(column < cutoff)
+                if model is IncidentRow:
+                    # Открытый инцидент не удаляется, сколько бы он ни длился
+                    stmt = stmt.where(IncidentRow.status == IncidentStatus.CLOSED)
+                result = await session.execute(stmt)
+                removed[name] = int(getattr(result, "rowcount", 0) or 0)
+        return removed
+
+    async def compact(self) -> None:
+        async with self._engine.connect() as conn:
+            await conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            await conn.commit()
+        # VACUUM нельзя выполнять внутри транзакции
+        async with self._engine.connect() as conn:
+            raw = await conn.get_raw_connection()
+            driver = raw.driver_connection
+            if driver is not None:
+                await driver.execute("VACUUM")

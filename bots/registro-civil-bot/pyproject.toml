@@ -21,6 +21,9 @@ dependencies = [
     "keyring>=25.7",
 ]
 
+[project.scripts]
+rcbot = "rcbot.cli:main"
+
 # Общие инструменты (pytest, ruff, mypy, pip-audit) — в dev-группе корня монорепозитория.
 [dependency-groups]
 dev = [
@@ -48,6 +51,8 @@ src = ["src", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["DTZ"]
+# Файлы миграций генерирует Alembic
+"src/rcbot/infrastructure/db/migrations/versions/*" = ["E501", "I001", "UP", "RUF"]
 
 # SPEC.md, 3.4: mypy --strict для всего кода бота.
 [tool.mypy]
