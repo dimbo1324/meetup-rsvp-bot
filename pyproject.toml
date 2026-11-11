@@ -10,7 +10,7 @@ members = ["bots/*", "packages/*"]
 # в dev-группе этого бота.
 [dependency-groups]
 dev = [
-    "pytest>=9.1",
+    "pytest>=9.2.0",
     "pytest-asyncio>=1.4",
     "pytest-cov",
     "ruff>=0.17",
