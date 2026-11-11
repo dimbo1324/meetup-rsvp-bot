@@ -31,6 +31,14 @@ class ReloginBudgetExceeded(RcbotError):
     """Больше разрешённого числа входов в час."""
 
 
+class ReloginDeferred(RcbotError):
+    """Вход отложен: после тревоги бот 10 минут не входит, чтобы не мешать владельцу (D5)."""
+
+
+class LoginFailed(RcbotError):
+    """Вход не завершился: страница не та, что ожидалась, или сайт отказал."""
+
+
 class SourceNotConfigured(RcbotError):
     """Источник нельзя использовать: нет нужной настройки (например, адреса API до разведки)."""
 

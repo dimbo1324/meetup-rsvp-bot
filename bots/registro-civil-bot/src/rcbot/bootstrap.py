@@ -25,6 +25,8 @@ from rcbot.infrastructure.db.repositories import (
     SqlStatsRepository,
     SqlTargetRepository,
 )
+from rcbot.infrastructure.gubuy.auth import PlaywrightAuthenticator
+from rcbot.infrastructure.gubuy.browser import BrowserOptions
 from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.infrastructure.logging.setup import setup_logging
 from rcbot.infrastructure.sentry import init_sentry
@@ -102,6 +104,25 @@ async def open_storage(core: Core) -> Storage:
         events=SqlEventLog(sessions),
         kv=SqlKeyValueStore(sessions),
         maintenance=SqlMaintenance(engine, sessions),
+    )
+
+
+def browser_options(
+    core: Core, *, headless: bool | None = None, channel: str = ""
+) -> BrowserOptions:
+    return BrowserOptions(
+        headless=core.settings.headless if headless is None else headless, channel=channel
+    )
+
+
+def build_authenticator(core: Core) -> PlaywrightAuthenticator:
+    s = core.settings
+    return PlaywrightAuthenticator(
+        login_url=s.login_url,
+        doc_country=s.doc_country,
+        doc_type=s.doc_type,
+        credentials=core.secrets.credentials,
+        options=browser_options(core),
     )
 
 
