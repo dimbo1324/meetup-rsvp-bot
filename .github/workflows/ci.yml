@@ -17,8 +17,8 @@ jobs:
   quality-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Установка Python 3.14 и зависимостей
@@ -36,8 +36,8 @@ jobs:
       matrix:
         bot: [registro-civil-bot]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Установка Python 3.14 и зависимостей
@@ -55,6 +55,6 @@ jobs:
       matrix:
         bot: [meetup-rsvp-bot]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Сборка образа
         run: docker build -f bots/${{ matrix.bot }}/Dockerfile -t ${{ matrix.bot }}:ci .
