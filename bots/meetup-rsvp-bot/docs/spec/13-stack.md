@@ -30,7 +30,8 @@
 - **Не фиксировать pydantic 2.14 вручную.** aiogram 3.31 требует `pydantic<2.14` и `aiohttp<3.15`. uv сам выберет совместимые версии (pydantic 2.13.5).
 - Точные версии всех пакетов фиксируются в `uv.lock`, который коммитится в репозиторий. Обновлять зависимости — отдельным PR.
 
-Ключевые части `pyproject.toml` (полный файл — в корне репозитория):
+Ключевые части `pyproject.toml` бота (полный файл — `bots/meetup-rsvp-bot/pyproject.toml`;
+инструменты разработки и базовая конфигурация ruff — в корневом `pyproject.toml` монорепозитория):
 
 ```toml
 [project]
@@ -49,18 +50,15 @@ dependencies = [
     "sentry-sdk>=2.73",
 ]
 
-[dependency-groups]
-dev = ["pytest>=9.1", "pytest-asyncio>=1.4", "pytest-cov", "ruff>=0.17", "mypy", "pre-commit"]
+[tool.monorepo]
+package = "meetup_bot"
+platform = "linux-docker"
 
 [tool.ruff]
-line-length = 100
-target-version = "py314"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF", "DTZ"]   # DTZ ловит naive datetime
+extend = "../../pyproject.toml"   # линия 100, правила E F I B UP SIM ASYNC RUF DTZ (DTZ ловит naive datetime)
 
 [tool.mypy]
-files = ["src", "scripts", "dev.py"]   # тесты mypy не проверяет
+files = ["src"]   # тесты mypy не проверяет
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

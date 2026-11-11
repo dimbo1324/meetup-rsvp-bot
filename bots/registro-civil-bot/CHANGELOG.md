@@ -13,3 +13,6 @@
   SQLAlchemy 2.1 + aiosqlite, Alembic, Pydantic 2.13, pydantic-settings, tzdata, sentry-sdk,
   Playwright 1.65, keyring 25.7; для тестов — aioresponses.
 - Дымовой тест стека `tests/test_stack.py` (включая запуск Chromium без сети).
+- Настройка `RCBOT_TRAMITE_ID` (номер заявки для текста уведомления) в `.env.example`.
+- План работ по пяти этапам владельца (решение R5): бизнес-логика, тесты, подключение, аудит,
+  работа.

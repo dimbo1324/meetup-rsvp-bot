@@ -75,8 +75,8 @@ _Обновлено: 2026-10-26 (ветка `feat/m6-2-launch-ready`: вехи M
   единственность определений, нет пользовательских текстов в сервисах, нет записи в БД из
   диалогов и обработчиков, коды ошибок только из `ErrorCode`), `test_alembic.py` (миграции на чистой
   базе и на базе с дочерними строками, откаты `0004`–`0006`), `test_infra.py` (ограничения контейнера, `ENV=prod` в `.env.example`,
-  `entrypoint.sh`), `test_config.py`, `test_db.py`, `test_clock.py`, `test_sync_agents.py`,
-  `test_tg_fake.py`.
+  `entrypoint.sh`), `test_config.py`, `test_db.py`, `test_clock.py`, `test_tg_fake.py`. Тест синхронизации
+  `AGENTS.md` переехал в `tests/` корня монорепозитория.
 - Инфраструктура: `tests/helpers.py` (приложение на фейковых часах с записывающими портами,
   `person`, `make_app`), `tests/tg_fake.py` (фейковая сессия бота, построители обновлений, `Harness`
   с настоящими роутерами и диалогами), фикстуры `app` и `tg` в `tests/conftest.py`.
