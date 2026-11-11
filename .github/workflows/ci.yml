@@ -8,7 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Полный шлюз монорепозитория на Linux: правила, раскладка, lint, mypy и тесты всех ботов.
   quality-gate:
     runs-on: ubuntu-latest
     steps:
@@ -19,6 +24,37 @@ jobs:
       - name: Установка Python 3.14 и зависимостей
         run: |
           uv python install 3.14
-          uv sync --frozen
+          uv sync --frozen --all-packages --all-groups
       - name: Шлюз качества
         run: uv run python dev.py quality-gate
+
+  # Боты с платформой windows-desktop работают только на Windows: их проверяем там же.
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bot: [registro-civil-bot]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Установка Python 3.14 и зависимостей
+        run: |
+          uv python install 3.14
+          uv sync --frozen --all-packages --all-groups
+      - name: Шлюз качества бота
+        run: uv run python dev.py quality-gate --bot ${{ matrix.bot }}
+
+  # Образы ботов с платформой linux-docker собираются из корня монорепозитория.
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bot: [meetup-rsvp-bot]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка образа
+        run: docker build -f bots/${{ matrix.bot }}/Dockerfile -t ${{ matrix.bot }}:ci .

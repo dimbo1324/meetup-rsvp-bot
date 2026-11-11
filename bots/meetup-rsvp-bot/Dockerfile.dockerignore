@@ -1,0 +1,13 @@
+# Контекст сборки — весь монорепозиторий, поэтому список разрешающий: в образ не попадают
+# другие боты, документы, тесты, .env и данные. BuildKit берёт этот файл вместо корневого
+# .dockerignore, потому что он лежит рядом с Dockerfile и называется <Dockerfile>.dockerignore.
+*
+!pyproject.toml
+!uv.lock
+!bots/meetup-rsvp-bot/pyproject.toml
+!bots/meetup-rsvp-bot/README.md
+!bots/meetup-rsvp-bot/src
+!bots/meetup-rsvp-bot/alembic
+!bots/meetup-rsvp-bot/alembic.ini
+!bots/meetup-rsvp-bot/docker/entrypoint.sh
+**/__pycache__

@@ -1,10 +1,12 @@
 # Конфигурация Codex
 
-Проектная конфигурация Codex для meetup-rsvp-bot. Главный ассистент проекта — Claude Code;
-Codex — равноправный помощник, подчиняющийся тем же правилам.
+Проектная конфигурация Codex для монорепозитория чат-ботов. Главный ассистент проекта —
+Claude Code; Codex — равноправный помощник, подчиняющийся тем же правилам.
 
-Правила лежат в общих модулях `.ai/`. Codex читает их через генерируемый `AGENTS.md` в корне —
-собранный единый набор правил. Claude Code получает те же правила через `CLAUDE.md`.
+Правила лежат в общих модулях `.ai/` и в `bots/<бот>/.ai/`. Codex читает их через
+генерируемые `AGENTS.md`: корневой — общие правила, `bots/<бот>/AGENTS.md` — правила бота
+(Codex склеивает файлы от корня до рабочего каталога). Claude Code получает те же правила
+через `CLAUDE.md` корня и бота.
 
 `AGENTS.md` **генерируется** и не правится руками. После изменения любого модуля `.ai/`:
 
@@ -16,23 +18,25 @@ uv run python dev.py sync-agents
 
 - `config.toml` — модель и параметры агентов уровня проекта. Секретов здесь нет; личные
   переопределения — в игнорируемом `config.local.toml`.
-- `agents/` — агенты проекта; зеркало `.claude/agents/` по именам (`<имя>.toml` ↔
-  `meetup-<имя>.md`).
+- `agents/` — агенты проекта; зеркало `.claude/agents/`: `<имя>.toml` ↔ `<имя>.md`, поле
+  `name` совпадает с именем файла.
 - `skills/` — повторяемые рабочие процессы; зеркало `.claude/skills/`.
 
 ## Агенты
 
-`milestone-planner`, `core`, `telegram`, `platform`, `security`, `quality-reviewer`,
-`ci-triage`, `repo-maintainer` (в Codex имена приведены к `meetup-<имя>`).
+Общие: `milestone-planner`, `platform`, `quality-reviewer`, `ci-triage`, `repo-maintainer`.
+`meetup-rsvp-bot`: `meetup-core`, `meetup-telegram`, `meetup-security`.
+`registro-civil-bot`: `rcbot-core`, `rcbot-integrations`, `rcbot-privacy`.
 
 ## Навыки
 
-`milestone-episode`, `code-review`, `ci-fix`, `project-maintenance`, `rules-evolution`.
+`milestone-episode`, `code-review`, `ci-fix`, `project-maintenance`, `rules-evolution`, `new-bot`.
 
 ## Зеркала
 
-`.codex/agents|skills` и `.claude/agents|skills` совпадают по именам. Правка одной стороны
-требует эквивалентной правки другой в той же задаче; `dev.py quality-gate` проверяет паритет.
+`.codex/agents|skills` и `.claude/agents|skills` совпадают по именам файлов. Правка одной
+стороны требует эквивалентной правки другой в той же задаче; `dev.py quality-gate` проверяет
+паритет.
 
 ## Ветки
 

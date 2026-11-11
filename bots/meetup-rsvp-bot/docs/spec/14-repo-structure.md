@@ -2,6 +2,13 @@
 
 Состояние на 26 октября 2026 года. Реальная картина слоёв и модулей — `docs/architecture/overview.md`.
 
+С 11 ноября 2026 года репозиторий — монорепозиторий нескольких ботов (`docs/monorepo.md` в
+корне), а этот бот лежит в `bots/meetup-rsvp-bot/`. Из дерева ниже в **корне** монорепозитория
+остались `CONTRIBUTING.md`, `dev.py`, `task-checklist.md`, `.ai/`, `.claude/`, `.codex/`,
+`scripts/`, `.pre-commit-config.yaml`, `.github/`, `uv.lock` и общие `CLAUDE.md`/`AGENTS.md`;
+остальное — в каталоге бота, где добавились свои `CLAUDE.md`, `AGENTS.md`, `.ai/` (правила
+бота) и `Dockerfile.dockerignore` (контекст сборки образа — корень монорепозитория).
+
 ```
 meetup-rsvp-bot/
 ├── README.md                    # что умеет бот, запуск, развёртывание, обновление, откат, бэкапы

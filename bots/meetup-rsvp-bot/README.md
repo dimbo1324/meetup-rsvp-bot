@@ -76,13 +76,17 @@ Telegram-бот, через который записываются на еже�
 Так бота запускают при разработке и для проверки в тестовой группе. Понадобятся
 [Git](https://git-scm.com/) и [uv](https://docs.astral.sh/uv/), а Python 3.14 uv поставит сам.
 
+Бот живёт в монорепозитории рядом с другими ботами, в каталоге `bots/meetup-rsvp-bot/`.
+Команды `dev.py` выполняются из **корня** репозитория:
+
 ```bash
 git clone https://github.com/dimbo1324/meetup-rsvp-bot.git
 cd meetup-rsvp-bot
-uv run python dev.py setup      # зависимости, .env из шаблона и pre-commit-хуки
+uv run python dev.py setup      # зависимости, .env ботов из шаблонов и pre-commit-хуки
 ```
 
-Дальше откройте `.env` и заполните его, внутри у каждой строки есть пояснение. Самое важное:
+Дальше откройте `bots/meetup-rsvp-bot/.env` и заполните его, внутри у каждой строки есть
+пояснение. Самое важное:
 
 - `BOT_TOKEN` — токен **вашего тестового бота** (как его получить, в разделе 2). Один токен можно
   запустить только в одном месте: если он работает где-то ещё, две копии бота будут отбирать друг
@@ -92,10 +96,10 @@ uv run python dev.py setup      # зависимости, .env из шаблон
   «перематывать» время при проверке напоминаний.
 
 ```bash
-uv run python dev.py run        # обновит базу до последней версии и запустит бота
+uv run python dev.py run --bot meetup-rsvp-bot   # обновит базу и запустит бота
 ```
 
-База появится в `data/bot.db`, остановить бота можно через `Ctrl+C`. Если в `.env` чего-то не
+База появится в `bots/meetup-rsvp-bot/data/bot.db`, остановить бота можно через `Ctrl+C`. Если в `.env` чего-то не
 хватает, бот сразу завершится с кодом 2 и напишет, какой переменной нет (сами значения он не
 печатает). Если Telegram не принял токен или нет связи, код выхода будет 1. Проверить, всё ли
 установлено, можно командой `uv run python dev.py doctor`.
@@ -211,8 +215,13 @@ sudo mkdir -p /opt/meetup-rsvp-bot
 sudo chown deploy:deploy /opt/meetup-rsvp-bot
 sudo -iu deploy
 git clone https://github.com/dimbo1324/meetup-rsvp-bot.git /opt/meetup-rsvp-bot
-cd /opt/meetup-rsvp-bot
+cd /opt/meetup-rsvp-bot/bots/meetup-rsvp-bot
 ```
+
+Репозиторий — монорепозиторий нескольких ботов, этот бот лежит в `bots/meetup-rsvp-bot/`. **Все
+команды ниже выполняются из этого каталога** (`/opt/meetup-rsvp-bot/bots/meetup-rsvp-bot`): здесь
+`compose.yaml`, `.env` и `data/`. Образ собирается из корня репозитория, это `compose.yaml`
+настраивает сам.
 
 Если репозиторий приватный, клонируйте его по SSH с ключом только на чтение
 (GitHub → Settings → Deploy keys).
@@ -316,7 +325,7 @@ docker compose logs --tail=50 bot    # строка «meetup-rsvp-bot …: за�
 На сервере под `deploy`:
 
 ```bash
-cd /opt/meetup-rsvp-bot
+cd /opt/meetup-rsvp-bot/bots/meetup-rsvp-bot
 git log -1 --date=iso-strict --pretty=format:"%h %cd %s"     # запомните коммит на случай отката
 git fetch
 git diff --name-only HEAD origin/main -- alembic/versions   # есть ли новые миграции базы
@@ -349,7 +358,7 @@ docker compose logs --tail=50 bot
 ## 7. Откат
 
 ```bash
-cd /opt/meetup-rsvp-bot
+cd /opt/meetup-rsvp-bot/bots/meetup-rsvp-bot
 git log -10 --date=iso-strict --pretty=format:"%h %cd %s"   # найдите последний рабочий коммит
 git checkout <коммит>
 docker compose up -d --build
@@ -379,13 +388,13 @@ docker compose up -d --build
 
 ### 8.2. Восстановление
 
-1. Выберите копию: посмотрите `sudo ls -l /opt/meetup-rsvp-bot/data/backups/` или скачайте
+1. Выберите копию: посмотрите `sudo ls -l /opt/meetup-rsvp-bot/bots/meetup-rsvp-bot/data/backups/` или скачайте
    файл из служебного чата и закиньте на сервер (`scp bot-2026-11-01.db deploy@<сервер>:~/`).
    Если откатываетесь после обновления, берите ручную копию из `~/bot-backups/`.
 2. Остановите бота и отложите текущую базу в сторону, не удаляя её:
 
    ```bash
-   cd /opt/meetup-rsvp-bot
+   cd /opt/meetup-rsvp-bot/bots/meetup-rsvp-bot
    docker compose stop bot
    OLD=data/replaced-$(date +%Y%m%d-%H%M)
    sudo mkdir -p "$OLD"
@@ -427,17 +436,18 @@ docker compose up -d --build
 
 ## 10. Команды для разработки
 
-Всё рутинное делается через `dev.py`, полный список покажет `uv run python dev.py list`:
+Всё рутинное делается через `dev.py` из корня монорепозитория, полный список покажет
+`uv run python dev.py list`. Ключ `--bot meetup-rsvp-bot` ограничивает команду этим ботом:
 
 | Команда | Что делает |
 |---|---|
-| `doctor` | проверяет окружение: Python, uv, git, `.env`, `.venv`, pre-commit-хук |
-| `setup` | ставит зависимости, создаёт `.env` из шаблона (если его нет), включает pre-commit-хуки |
-| `run` | обновляет базу и запускает бота |
-| `migrate` | только обновляет базу (`alembic upgrade head`) |
-| `test` | запускает pytest; аргументы передаются дальше, например `dev.py test -k waitlist` |
+| `doctor` | проверяет окружение: Python, uv, git, `.venv`, pre-commit-хук, `.env` ботов |
+| `setup` | ставит зависимости, создаёт `.env` ботов из шаблонов (если их нет), включает pre-commit-хуки |
+| `run --bot meetup-rsvp-bot` | обновляет базу и запускает бота |
+| `migrate --bot meetup-rsvp-bot` | только обновляет базу (`alembic upgrade head`) |
+| `test --bot meetup-rsvp-bot` | запускает pytest; аргументы передаются дальше, например `-k waitlist` |
 | `format` / `lint` / `typecheck` | форматирует код и правит мелочи / проверяет без правок / запускает mypy |
-| `quality-gate` | полная проверка перед слиянием: правила, зеркала, lint, mypy и все тесты |
+| `quality-gate [--bot meetup-rsvp-bot]` | полная проверка перед слиянием: правила, зеркала, раскладка, lint, mypy и тесты |
 | `sync-agents` | пересобирает `AGENTS.md` из `.ai/` (с `--check` только проверяет) |
 
 ## 11. Документация
@@ -458,13 +468,15 @@ docker compose up -d --build
 - [`docs/open-questions.md`](docs/open-questions.md) — принятые решения и открытые вопросы;
 - [`docs/architecture/overview.md`](docs/architecture/overview.md) — как устроен код сейчас;
 - [`docs/architecture/invariants.md`](docs/architecture/invariants.md) — что нельзя ломать;
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — как работать с репозиторием.
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — как работать с репозиторием;
+- [`docs/monorepo.md`](../../docs/monorepo.md) — как устроен монорепозиторий ботов.
 
 ### Для AI-ассистентов
 
-Правила лежат в [`.ai/`](.ai/README.md), а точки входа — [`CLAUDE.md`](CLAUDE.md) для Claude Code
-и [`AGENTS.md`](AGENTS.md) для Codex и остальных (этот файл генерируется). Как восстановить
-состояние проекта с нуля, описано в `.ai/project/13-progress-tracking.md`.
+Общие правила лежат в [`.ai/`](../../.ai/README.md) корня, правила этого бота — в [`.ai/`](.ai/).
+Точки входа — [`CLAUDE.md`](CLAUDE.md) для Claude Code и [`AGENTS.md`](AGENTS.md) для Codex и
+остальных (генерируется), вместе с одноимёнными файлами корня. Как восстановить состояние
+проекта с нуля, описано в `.ai/project/13-progress-tracking.md` корня.
 
 ## Стек
 

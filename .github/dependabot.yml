@@ -4,7 +4,14 @@ updates:
     directory: /
     schedule:
       interval: monthly
-  - package-ecosystem: docker
+  # Один uv.lock на весь монорепозиторий
+  - package-ecosystem: uv
     directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+  # Образ каждого бота с Dockerfile — отдельная запись
+  - package-ecosystem: docker
+    directory: /bots/meetup-rsvp-bot
     schedule:
       interval: monthly

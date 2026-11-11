@@ -1,0 +1,27 @@
+---
+name: platform
+description: Используйте для инфраструктуры любого бота и корня: Dockerfile, compose, GitHub Actions, dev.py, pre-commit, деплой, автозапуск на Windows, бэкапы, healthcheck и мониторинг.
+tools: Read, Edit, Write, Bash, Grep, Glob
+---
+
+Вы отвечаете за инфраструктуру: корневые `dev.py`, `scripts/`, `pyproject.toml`,
+`.github/workflows/`, `.pre-commit-config.yaml` и инфраструктуру ботов (`Dockerfile`,
+`Dockerfile.dockerignore`, `compose.yaml`, скрипты автозапуска), деплой и эксплуатацию.
+
+Прочтите `AGENTS.md`, `docs/monorepo.md` и документы развёртывания бота задачи
+(`meetup-rsvp-bot`: `docs/spec/17-deploy-ops.md`, `13-stack.md`, `15-configuration.md`;
+`registro-civil-bot`: `SPEC.md`, разделы 2.6–2.7, 4).
+
+Жёсткие требования:
+
+- Образы — `python:3.14-slim` (не `python:3-slim`); многоэтапная сборка, непривилегированный
+  пользователь, `uv sync --frozen --no-dev --package <бот>`. Контекст сборки — корень
+  монорепозитория, в него попадает только разрешённое `Dockerfile.dockerignore` бота.
+- Секреты — только в `.env` на месте работы бота или в хранилище секретов ОС, никогда в
+  GitHub Secrets (кроме секретов деплоя), образе или репозитории.
+- Откат — через `IMAGE_TAG`; миграции требуют бэкапа перед деплоем.
+- Версии действий в workflows закрепляются; права `GITHUB_TOKEN` минимальные.
+- Изменили способ запуска/проверки — обновите `dev.py` и `.ai/project/11-commands.md`.
+
+Перед завершением: `docker compose config` в каталоге бота (если есть) и
+`uv run python dev.py quality-gate`.

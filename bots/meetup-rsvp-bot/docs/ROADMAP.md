@@ -219,7 +219,7 @@ CSV), мастер создания встречи, участники встр�
 
 1. Тестовый бот в @BotFather: `/setinline`, `/setinlinefeedback` → Enabled, `/setjoingroups`.
 2. Тестовые группы: «служебная» (с ботом) и «сообщество»; 2–3 аккаунта участников.
-3. `.env` (`BOT_TOKEN`, `OWNER_IDS`, `SERVICE_CHAT_ID`, `ENV=dev`), `uv run python dev.py run`, проход по чек-листу 3.4; найденное — в доработку.
+3. `.env` (`BOT_TOKEN`, `OWNER_IDS`, `SERVICE_CHAT_ID`, `ENV=dev`), `uv run python dev.py run --bot meetup-rsvp-bot`, проход по чек-листу 3.4; найденное — в доработку.
 4. Боевой бот, VPS, служебная закрытая группа, `.env` с `ENV=prod`, запуск по README.
 5. В `/menu`: место, описание и фото по умолчанию; проверка inline-ботов в трёх чатах; первая встреча.
 6. Пилот M8: 1–2 недели с живыми участниками.

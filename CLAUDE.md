@@ -1,4 +1,4 @@
-# meetup-rsvp-bot — рабочие заметки для Claude Code
+# Монорепозиторий чат-ботов — рабочие заметки для Claude Code
 
 Это точка входа для Claude Code — главного AI-ассистента проекта. Все правила лежат в общих
 модулях `.ai/` — едином источнике истины для каждого ассистента в этом репозитории. Codex и
@@ -8,14 +8,19 @@
 Более поздние модули перекрывают более ранние; явное указание владельца в текущем диалоге
 главнее всего. Документацию и комментарии в коде пишем **по-русски**.
 
+## Боты
+
+Репозиторий — монорепозиторий независимых ботов в `bots/<бот>/` (список — `10-project-map.md`,
+устройство — `docs/monorepo.md`). У каждого бота свой `CLAUDE.md` с доменными правилами:
+Claude Code подгружает его, когда работа касается каталога бота. Прочтите его до работы
+с ботом.
+
 ## Начало новой сессии
 
 Сессии часто начинаются без контекста. Перед любой работой выполните **ритуал ориентации**
-из `@.ai/project/13-progress-tracking.md`: git status и log → `docs/ROADMAP.md` (первая веха
-без строки `**Статус.**` — следующая) → `docs/architecture/overview.md` → `task-checklist.md`
-→ `docs/open-questions.md`.
-
-Продуктовое намерение — в `docs/spec/README.md` (индекс спецификации).
+из `@.ai/project/13-progress-tracking.md`: git status и log → `task-checklist.md` → бот задачи
+и его `CLAUDE.md` → его `docs/ROADMAP.md` (первая веха без строки `**Статус.**` — следующая) →
+`docs/architecture/overview.md` → `docs/open-questions.md` бота.
 
 **Рутинные задачи — через `dev.py`**, а не собранные вручную команды:
 `uv run python dev.py list` печатает каталог. Подробнее и обязанность поддерживать команды
@@ -40,16 +45,18 @@
 - @.ai/universal/08-rules-evolution.md
 - @.ai/universal/09-time-and-timestamps.md
 
-## Правила проекта (meetup-rsvp-bot)
+## Правила монорепозитория
 
 - @.ai/project/10-project-map.md
 - @.ai/project/11-commands.md
-- @.ai/project/12-domain-rules.md
+- @.ai/project/12-monorepo.md
 - @.ai/project/13-progress-tracking.md
 
 ## Рабочая область Claude Code
 
 - `.claude/settings.json` — списки разрешённых и запрещённых команд.
-- `.claude/agents/` — субагенты проекта (`meetup-*`); зеркало `.codex/agents/` один к одному.
+- `.claude/agents/` — субагенты; зеркало `.codex/agents/` один к одному по именам файлов.
+  Без префикса — общие для репозитория (`milestone-planner`, `platform`, `quality-reviewer`,
+  `ci-triage`, `repo-maintainer`); с префиксом бота — его специалисты (`meetup-*`, `rcbot-*`).
 - `.claude/skills/` — повторяемые рабочие процессы (`milestone-episode`, `code-review`,
-  `ci-fix`, `project-maintenance`, `rules-evolution`); зеркало `.codex/skills/`.
+  `ci-fix`, `project-maintenance`, `rules-evolution`, `new-bot`); зеркало `.codex/skills/`.

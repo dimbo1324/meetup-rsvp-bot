@@ -1,11 +1,16 @@
-# Многоэтапная сборка: зависимости ставятся в builder, в runtime копируется только .venv и код.
+# Контекст сборки — корень монорепозитория (общий uv.lock): compose.yaml бота задаёт его сам,
+# вручную: docker build -f bots/meetup-rsvp-bot/Dockerfile .
+# Что попадает в контекст, решает Dockerfile.dockerignore рядом с этим файлом.
+# Многоэтапная сборка: зависимости ставятся в builder, в runtime копируется только .venv.
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
-COPY src ./src
-RUN uv sync --frozen --no-dev
+COPY pyproject.toml uv.lock ./
+COPY bots/meetup-rsvp-bot/pyproject.toml bots/meetup-rsvp-bot/README.md bots/meetup-rsvp-bot/
+RUN uv sync --frozen --no-dev --package meetup-rsvp-bot --no-install-project
+COPY bots/meetup-rsvp-bot/src bots/meetup-rsvp-bot/src
+# Пакет ставится в .venv целиком (не editable): runtime не зависит от раскладки исходников
+RUN uv sync --frozen --no-dev --package meetup-rsvp-bot --no-editable
 
 FROM python:3.14-slim AS runtime
 # Версия для сообщения «Бот запущен»: APP_VERSION=$(git rev-parse --short HEAD) docker compose build
@@ -15,10 +20,9 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 APP
 WORKDIR /app
 RUN useradd --create-home --uid 10001 bot && mkdir -p /app/data && chown bot:bot /app/data
 COPY --from=builder --chown=bot:bot /app/.venv ./.venv
-COPY --chown=bot:bot src ./src
-COPY --chown=bot:bot alembic ./alembic
-COPY --chown=bot:bot alembic.ini ./
-COPY --chown=bot:bot --chmod=755 docker/entrypoint.sh ./entrypoint.sh
+COPY --chown=bot:bot bots/meetup-rsvp-bot/alembic ./alembic
+COPY --chown=bot:bot bots/meetup-rsvp-bot/alembic.ini ./
+COPY --chown=bot:bot --chmod=755 bots/meetup-rsvp-bot/docker/entrypoint.sh ./entrypoint.sh
 USER bot
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import os,sys,time; p='/app/data/heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<180 else 1)"

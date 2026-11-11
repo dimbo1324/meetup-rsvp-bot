@@ -11,6 +11,11 @@ venv/
 *.sqlite3
 data/
 data-*/
+# Локальное состояние ботов (registro-civil-bot: SPEC.md, 2.7): логи, браузер Playwright, кеши
+logs/
+.browsers/
+.cache/
+.venv-browser/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

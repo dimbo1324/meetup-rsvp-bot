@@ -1,17 +1,21 @@
+# Запасной фильтр контекста для сборок из корня монорепозитория. Основной фильтр каждого бота —
+# разрешающий bots/<бот>/Dockerfile.dockerignore (BuildKit предпочитает его этому файлу);
+# этот файл защищает от утечки секретов и данных, если сборка пойдёт без BuildKit.
 .git
 .github
 .venv
-.env
-.env.*
-!.env.example
-data
-data-*
-tests
-docs
-.ai
-.claude
-.codex
+**/.env
+**/.env.*
+!**/.env.example
+**/data
+**/data-*
+**/logs
+**/.browsers
+**/.cache
 **/__pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.ai
+.claude
+.codex

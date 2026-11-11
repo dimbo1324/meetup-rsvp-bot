@@ -15,6 +15,8 @@
       "Bash(uv run python dev.py test:*)",
       "Bash(uv run python dev.py quality-gate:*)",
       "Bash(uv run python dev.py sync-agents:*)",
+      "Bash(uv run python dev.py bots:*)",
+      "Bash(uv run python dev.py check-layout:*)",
       "Bash(uv sync:*)",
       "Bash(uv lock --check:*)",
       "Bash(uv run pytest:*)",

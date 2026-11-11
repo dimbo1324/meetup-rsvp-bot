@@ -1,10 +1,13 @@
 # Одна локация — один сервис: свой бот в @BotFather, свой .env, свой каталог с БД.
-# Запуск и обновление на сервере: docker compose up -d --build (подробно — README.md).
+# Запуск и обновление на сервере — из каталога бота bots/meetup-rsvp-bot/:
+# docker compose up -d --build (подробно — README.md). .env и data/ лежат рядом с этим файлом.
 services:
   bot:
     image: ghcr.io/dimbo1324/meetup-rsvp-bot:${IMAGE_TAG:-latest}
     build:
-      context: .
+      # Контекст — корень монорепозитория: там общий uv.lock
+      context: ../..
+      dockerfile: bots/meetup-rsvp-bot/Dockerfile
       args:
         APP_VERSION: ${APP_VERSION:-}
     restart: unless-stopped
@@ -37,7 +40,9 @@ services:
   #
   # bot-<локация>:
   #   image: ghcr.io/dimbo1324/meetup-rsvp-bot:${IMAGE_TAG:-latest}
-  #   build: .
+  #   build:
+  #     context: ../..
+  #     dockerfile: bots/meetup-rsvp-bot/Dockerfile
   #   restart: unless-stopped
   #   env_file: .env.<локация>
   #   environment:

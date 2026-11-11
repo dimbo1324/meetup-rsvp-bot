@@ -21,7 +21,14 @@ repos:
         entry: uv run --no-sync python -m scripts.sync_agents --check
         language: system
         pass_filenames: false
-        files: ^(\.ai/|AGENTS\.md$|scripts/sync_agents\.py$)
+        files: ^(\.ai/|AGENTS\.md$|bots/[^/]+/(\.ai/|AGENTS\.md$)|scripts/sync_agents\.py$)
+      - id: check-layout
+        name: раскладка и границы ботов
+        entry: uv run --no-sync python dev.py check-layout
+        language: system
+        pass_filenames: false
+        files: ^(bots/|packages/|scripts/monorepo\.py$)
+        types: [python]
       - id: forbid-env-files
         name: запрет коммита .env
         entry: python -c "import sys; print('.env нельзя коммитить:', *sys.argv[1:]); sys.exit(1)"

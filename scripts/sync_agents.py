@@ -1,8 +1,11 @@
 """Сборка AGENTS.md из модулей правил `.ai/` и проверка его актуальности.
 
 AGENTS.md никогда не правится руками: меняется модуль, затем запускается синхронизация.
-Шлюз качества вызывает проверку (`--check`), поэтому изменение модуля без перегенерации
-`AGENTS.md` ломает сборку.
+Цели две: корневой AGENTS.md (модули `.ai/universal` и `.ai/project`) и вложенный
+`bots/<бот>/AGENTS.md` для каждого бота с каталогом `.ai/` (его модули). Codex читает
+AGENTS.md от корня до рабочего каталога и склеивает их, поэтому бюджет размера считается
+для пары «корень + бот».
+Шлюз качества вызывает проверку (`--check`): изменение модуля без перегенерации ломает сборку.
 """
 
 from __future__ import annotations
@@ -10,29 +13,43 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GROUPS = (".ai/universal", ".ai/project")
+ROOT_GROUPS = (".ai/universal", ".ai/project")
 TARGET = "AGENTS.md"
 SIZE_LIMIT_KIB = 30.0
 
-BANNER = """<!--
+ROOT_BANNER = """<!--
 ГЕНЕРИРУЕМЫЙ ФАЙЛ — НЕ РЕДАКТИРОВАТЬ.
 Источник истины: .ai/universal/*.md и .ai/project/*.md.
 Измените модуль и выполните: uv run python dev.py sync-agents
 -->
 
-# meetup-rsvp-bot — рабочие заметки для AI-ассистентов
+# Монорепозиторий чат-ботов — рабочие заметки для AI-ассистентов
 
 Это точка входа для Codex и любых ассистентов, читающих `AGENTS.md` (Cursor, Copilot,
 Gemini и др.). Файл собран из тех же модулей правил `.ai/`, что и `CLAUDE.md` для
 Claude Code, поэтому все ассистенты следуют одинаковым правилам. Более поздние разделы
 главнее более ранних; явное указание владельца в текущем диалоге главнее всего.
 
-Начиная сессию с нуля, выполните ритуал ориентации из `13-progress-tracking.md` ниже.
+У каждого бота в `bots/<бот>/` есть свой `AGENTS.md` с правилами этого бота: работая в
+боте, прочтите и его. Начиная сессию с нуля, выполните ритуал ориентации из
+`13-progress-tracking.md` ниже.
 Модули уровня «extended» приведены здесь краткой сутью — полный текст по указанному пути
 обязателен к прочтению, когда задача их касается."""
+
+BOT_BANNER = """<!--
+ГЕНЕРИРУЕМЫЙ ФАЙЛ — НЕ РЕДАКТИРОВАТЬ.
+Источник истины: {rel}/.ai/*.md.
+Измените модуль и выполните: uv run python dev.py sync-agents
+-->
+
+# {name} — правила бота для AI-ассистентов
+
+Дополняет корневой `AGENTS.md` монорепозитория: сначала действуют общие правила, затем эти.
+Правила бота главнее общих там, где они строже или конкретнее."""
 
 TIER_RE = re.compile(r"<!--\s*tier:\s*extended\s*-->")
 ESSENCE_RE = re.compile(r"^>\s*\*\*Суть\.\*\*\s*(.+)$", re.M)
@@ -42,20 +59,44 @@ class SyncError(Exception):
     """Ошибка структуры модулей правил."""
 
 
+@dataclass(frozen=True)
+class Target:
+    """Один собираемый AGENTS.md: откуда берутся модули и куда пишется результат."""
+
+    directory: Path
+    groups: tuple[str, ...]
+    banner: str
+
+    @property
+    def output(self) -> Path:
+        return self.directory / TARGET
+
+
 def normalize(text: str) -> str:
     """Приводит переводы строк к LF и убирает хвостовые пробелы файла."""
     return text.replace("\r\n", "\n").strip("\n") + "\n"
 
 
-def collect_modules(root: Path) -> list[Path]:
+def discover_targets(root: Path) -> list[Target]:
+    targets = [Target(root, ROOT_GROUPS, ROOT_BANNER)]
+    bots = root / "bots"
+    if bots.is_dir():
+        for bot in sorted(path for path in bots.iterdir() if (path / ".ai").is_dir()):
+            rel = bot.relative_to(root).as_posix()
+            banner = BOT_BANNER.format(rel=rel, name=bot.name)
+            targets.append(Target(bot, (".ai",), banner))
+    return targets
+
+
+def collect_modules(target: Target) -> list[Path]:
     modules: list[Path] = []
-    for group in GROUPS:
-        directory = root / group
+    for group in target.groups:
+        directory = target.directory / group
         if not directory.is_dir():
-            raise SyncError(f"нет каталога модулей: {group}")
+            raise SyncError(f"нет каталога модулей: {directory}")
         found = sorted(directory.glob("*.md"))
         if not found:
-            raise SyncError(f"в каталоге {group} нет модулей")
+            raise SyncError(f"в каталоге {directory} нет модулей")
         modules.extend(found)
     return modules
 
@@ -80,10 +121,35 @@ def render_module(root: Path, path: Path) -> str:
     )
 
 
-def render(root: Path) -> str:
-    parts = [BANNER]
-    parts.extend(render_module(root, path) for path in collect_modules(root))
+def render_target(root: Path, target: Target) -> str:
+    parts = [target.banner]
+    parts.extend(render_module(root, path) for path in collect_modules(target))
     return normalize("\n\n---\n\n".join(parts))
+
+
+def render(root: Path) -> str:
+    """Корневой AGENTS.md."""
+    return render_target(root, discover_targets(root)[0])
+
+
+def kib(text: str) -> float:
+    return len(text.encode("utf-8")) / 1024
+
+
+def check_budget(rendered: dict[Path, str], root: Path) -> list[str]:
+    """Корень отдельно и каждая пара «корень + бот» укладываются в бюджет Codex."""
+    base = kib(rendered[root / TARGET])
+    problems = []
+    for path, content in rendered.items():
+        size = base if path == root / TARGET else base + kib(content)
+        if size > SIZE_LIMIT_KIB:
+            rel = path.relative_to(root).as_posix()
+            problems.append(
+                f"{rel}: {size:.1f} КиБ (с корневым) при лимите {SIZE_LIMIT_KIB:.0f} КиБ. "
+                "Сократите модуль или переведите ситуативный в `<!-- tier: extended -->` "
+                "со строкой `> **Суть.** ...`."
+            )
+    return problems
 
 
 def main(argv: list[str]) -> int:
@@ -97,41 +163,34 @@ def main(argv: list[str]) -> int:
         stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
     try:
-        content = render(ROOT)
+        rendered = {t.output: render_target(ROOT, t) for t in discover_targets(ROOT)}
     except SyncError as error:
         print(f"ОШИБКА: {error}", file=sys.stderr)
         return 1
 
-    size = len(content.encode("utf-8")) / 1024
-    if size > SIZE_LIMIT_KIB:
-        print(
-            f"ОШИБКА: AGENTS.md занимает {size:.1f} КиБ при лимите {SIZE_LIMIT_KIB:.0f} КиБ. "
-            "Сократите модуль или переведите ситуативный в `<!-- tier: extended -->` "
-            "со строкой `> **Суть.** ...`.",
-            file=sys.stderr,
-        )
+    problems = check_budget(rendered, ROOT)
+    for problem in problems:
+        print(f"ОШИБКА: {problem}", file=sys.stderr)
+    if problems:
         return 1
 
-    target = ROOT / TARGET
-    current = normalize(target.read_text(encoding="utf-8")) if target.exists() else ""
-
-    if args.check:
+    failed = False
+    for path, content in rendered.items():
+        rel = path.relative_to(ROOT).as_posix()
+        current = normalize(path.read_text(encoding="utf-8")) if path.exists() else ""
         if current == content:
-            print(f"OK: AGENTS.md соответствует модулям .ai/ ({size:.1f} КиБ).")
-            return 0
-        print(
-            "ОШИБКА: AGENTS.md разошёлся с модулями .ai/. "
-            "Выполните: uv run python dev.py sync-agents",
-            file=sys.stderr,
-        )
-        return 1
-
-    if current == content:
-        print(f"AGENTS.md уже актуален ({size:.1f} КиБ).")
-        return 0
-    target.write_text(content, encoding="utf-8", newline="\n")
-    print(f"AGENTS.md перегенерирован ({size:.1f} из {SIZE_LIMIT_KIB:.0f} КиБ).")
-    return 0
+            print(f"OK: {rel} актуален ({kib(content):.1f} КиБ).")
+        elif args.check:
+            print(
+                f"ОШИБКА: {rel} разошёлся с модулями .ai/. "
+                "Выполните: uv run python dev.py sync-agents",
+                file=sys.stderr,
+            )
+            failed = True
+        else:
+            path.write_text(content, encoding="utf-8", newline="\n")
+            print(f"{rel} перегенерирован ({kib(content):.1f} КиБ).")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

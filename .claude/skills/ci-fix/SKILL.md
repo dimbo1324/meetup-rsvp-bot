@@ -8,15 +8,18 @@ description: Используйте, когда локальный шлюз ка
 ## 1. Воспроизведите
 
 ```powershell
-uv run python dev.py quality-gate
+uv run python dev.py quality-gate [--bot <бот>]
 ```
 
-Или точечно: `dev.py lint`, `dev.py typecheck`, `dev.py test -k <имя>`, `dev.py sync-agents --check`.
+Или точечно: `dev.py lint`, `dev.py typecheck --bot <бот>`, `dev.py test --bot <бот> -k <имя>`,
+`dev.py sync-agents --check`, `dev.py check-layout`. В CI бот с платформой
+`windows-desktop` проверяется отдельным заданием на Windows.
 
 ## 2. Найдите первопричину
 
-Различайте: ошибка в коде / устаревший тест / окружение (версия Python, `uv.lock` не
-синхронизирован — `uv sync`; `AGENTS.md` не синхронизирован — `sync-agents`).
+Различайте: ошибка в коде / устаревший тест / окружение (версия Python; `uv.lock` не
+синхронизирован; `.venv` сужен до одного бота — `uv sync --all-packages --all-groups`;
+`AGENTS.md` не синхронизирован — `sync-agents`; нет Chromium — `dev.py setup --bot <бот>`).
 
 ## 3. Исправьте минимально
 
@@ -27,4 +30,4 @@ uv run python dev.py quality-gate
 ## 4. Подтвердите
 
 Полный `quality-gate` зелёный. В отчёте: первопричина, правка, чем подтверждено.
-При необходимости делегируйте субагенту `meetup-ci-triage`.
+При необходимости делегируйте субагенту `ci-triage`.

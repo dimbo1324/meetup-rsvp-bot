@@ -46,11 +46,11 @@ _Обновлено: 2026-10-26 (ветка `feat/m6-2-launch-ready`: вехи M
 | Планировщик | Тик раз в минуту, 10 задач в порядке: `auto_create`, `reminder`, `post_reminder`, `close_registration`, `finish_events`, `attendance_prompt`, `attendance_reminder`, `attendance_expire`, `ban_recheck`, `backup`; таймаут задачи 120 с; пульс в `data/heartbeat` | `scheduler/` |
 | Бэкап | Ежедневно с 04:00 по времени из настроек: копия через SQLite backup API, проверка целостности, права 0600/0700, хранятся 14 копий, отправка документом в служебный чат | `scheduler/backup.py` |
 | Корень сборки | `build_services(...)` связывает сервисы: один `EventLocks`, один снимок настроек, порядок задач | `container.py` |
-| Запуск | `python -m meetup_bot` / `dev.py run`: миграции → бот → планировщик → long polling; при запуске догоняются посты встреч последних 14 дней (`POST_REFRESH_WINDOW`), при остановке дожидаются фоновые уведомления (`services.background.aclose()`); Sentry с вычисткой токена из событий | `app.py`, `__main__.py` |
-| Контейнер | Многоэтапный `Dockerfile` (пользователь UID 10001, `APP_VERSION` при сборке), `docker/entrypoint.sh` (`umask 077`, проверка прав на `data`, миграции, запуск), `compose.yaml` (`read_only`, `cap_drop: ALL`, `no-new-privileges`, `tmpfs /tmp`, `mem_limit`, ротация логов, шаблон второй локации), healthcheck по файлу-пульсу | `Dockerfile`, `compose.yaml`, `docker/` |
-| CI | `ci.yml`: `dev.py quality-gate` на PR и push в `main`. `deploy.yml` нет (M7) | `.github/workflows/` |
-| Инструменты | `dev.py`, pre-commit, ruff (`DTZ`), mypy (строгий режим для `services/`, `repositories/`, `renderer/`, `telegram/`, `db/`, `clock`, `config`; тесты mypy не проверяет), pytest | корень, `pyproject.toml` |
-| Система агентов | `.ai/`, `CLAUDE.md`, `AGENTS.md` (генерируется), `.claude/`, `.codex/` | корень |
+| Запуск | `python -m meetup_bot` / `dev.py run --bot meetup-rsvp-bot`: миграции → бот → планировщик → long polling; при запуске догоняются посты встреч последних 14 дней (`POST_REFRESH_WINDOW`), при остановке дожидаются фоновые уведомления (`services.background.aclose()`); Sentry с вычисткой токена из событий | `app.py`, `__main__.py` |
+| Контейнер | Многоэтапный `Dockerfile` с контекстом сборки — корнем монорепозитория (пользователь UID 10001, `APP_VERSION` при сборке), `docker/entrypoint.sh` (`umask 077`, проверка прав на `data`, миграции, запуск), `compose.yaml` (`read_only`, `cap_drop: ALL`, `no-new-privileges`, `tmpfs /tmp`, `mem_limit`, ротация логов, шаблон второй локации), healthcheck по файлу-пульсу | `Dockerfile`, `compose.yaml`, `docker/` |
+| CI | `ci.yml` монорепозитория: `dev.py quality-gate` на PR и push в `main`, сборка образа бота. `deploy.yml` нет (M7) | `.github/workflows/` корня |
+| Инструменты | `dev.py`, pre-commit, ruff (`DTZ`), mypy (строгий режим для `services/`, `repositories/`, `renderer/`, `telegram/`, `db/`, `clock`, `config`; тесты mypy не проверяет), pytest | `dev.py` корня, `pyproject.toml` бота (ruff наследует корень) |
+| Система агентов | Общие `.ai/`, `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.codex/` в корне; правила бота — `.ai/`, `CLAUDE.md`, `AGENTS.md` (генерируется) в каталоге бота | корень, каталог бота |
 
 Что не построено: автодеплой (`deploy.yml`), анонимизация данных по запросу, внешний мониторинг,
 публикация постов от имени бота. Бот ни разу не запускался на реальном Telegram: это работа пилота.
@@ -91,5 +91,5 @@ _Обновлено: 2026-10-26 (ветка `feat/m6-2-launch-ready`: вехи M
 
 ## Целевые слои
 
-Описаны в `docs/spec/09-architecture.md` и `.ai/project/12-domain-rules.md`:
+Описаны в `docs/spec/09-architecture.md` и `.ai/10-domain-rules.md` бота:
 `handlers/dialogs → services → repositories → db`; `renderer`, `telegram`, `scheduler`.

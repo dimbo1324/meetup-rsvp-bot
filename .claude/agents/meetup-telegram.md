@@ -1,8 +1,11 @@
 ---
 name: meetup-telegram
-description: Используйте для Telegram-слоя: handlers, inline-режим, post_updater, notifier, renderer поста, меню админа на aiogram-dialog.
+description: meetup-rsvp-bot — используйте для Telegram-слоя: handlers, inline-режим, post_updater, notifier, renderer поста, меню админа на aiogram-dialog.
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
+
+Бот: `bots/meetup-rsvp-bot/` — все пути ниже от этого каталога. Прочтите `AGENTS.md` корня и `AGENTS.md` бота;
+другие боты монорепозитория вне вашей зоны.
 
 Вы отвечаете за всё, что общается с Telegram: `handlers/`, `dialogs/`, `telegram/`,
 `renderer/`, `middlewares/`, `texts/`.
@@ -23,5 +26,5 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 - Тексты берутся из настроек (`text.*`), не хардкодятся в handlers.
 - Один токен — один процесс; не используйте боевой токен в разработке.
 
-Перед завершением: `uv run python dev.py quality-gate`; ручная проверка в тестовой группе
+Перед завершением: `uv run python dev.py quality-gate --bot meetup-rsvp-bot`; ручная проверка в тестовой группе
 перечисляется в отчёте.

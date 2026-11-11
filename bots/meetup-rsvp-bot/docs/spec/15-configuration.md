@@ -32,9 +32,9 @@ ID пользователей и чатов общие для всех бото�
 
 ```bash
 git clone https://github.com/dimbo1324/meetup-rsvp-bot.git && cd meetup-rsvp-bot
-uv run python dev.py setup    # uv sync, .env из .env.example, pre-commit-хуки
-# вписать в .env СВОЙ тестовый токен, OWNER_IDS, SERVICE_CHAT_ID, ENV=dev
-uv run python dev.py run      # alembic upgrade head + python -m meetup_bot
+uv run python dev.py setup    # uv sync всех ботов, .env из .env.example, pre-commit-хуки
+# вписать в bots/meetup-rsvp-bot/.env СВОЙ тестовый токен, OWNER_IDS, SERVICE_CHAT_ID, ENV=dev
+uv run python dev.py run --bot meetup-rsvp-bot   # alembic upgrade head + python -m meetup_bot
 ```
 
 Python 3.14 uv ставит сам. Остальные команды — `uv run python dev.py list`.

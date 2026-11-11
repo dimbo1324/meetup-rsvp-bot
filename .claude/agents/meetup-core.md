@@ -1,8 +1,11 @@
 ---
 name: meetup-core
-description: Используйте для ядра бота: db, repositories, services (запись, отмена, лимиты, баны, явка), расчёт времени, планировщик, миграции Alembic.
+description: meetup-rsvp-bot — используйте для ядра бота: db, repositories, services (запись, отмена, лимиты, баны, явка), расчёт времени, планировщик, миграции Alembic.
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
+
+Бот: `bots/meetup-rsvp-bot/` — все пути ниже от этого каталога. Прочтите `AGENTS.md` корня и `AGENTS.md` бота;
+другие боты монорепозитория вне вашей зоны.
 
 Вы отвечаете за ядро: `src/meetup_bot/db`, `repositories`, `services`, `scheduler`,
 `clock.py`, `config.py` и миграции в `alembic/`.
@@ -22,4 +25,4 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 - Покрытие сервисов тестами не ниже 85%, `mypy --strict` для `services/`, `repositories/`.
 - Комментарии и докстринги на русском, только про неочевидное «почему».
 
-Перед завершением: `uv run python dev.py quality-gate`.
+Перед завершением: `uv run python dev.py quality-gate --bot meetup-rsvp-bot`.

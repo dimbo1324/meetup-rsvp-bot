@@ -1,0 +1,47 @@
+# Корень монорепозитория: виртуальный корень uv workspace, самостоятельного пакета у него нет.
+# Каждый бот — член workspace в bots/<имя>/ со своим pyproject.toml; общие библиотеки — в
+# packages/<имя>/. Один uv.lock на весь репозиторий: версии зависимостей у ботов совпадают.
+# Устройство и решения — docs/monorepo.md.
+
+[tool.uv.workspace]
+members = ["bots/*", "packages/*"]
+
+# Общие инструменты разработки. Тестовые зависимости, нужные только одному боту, объявляются
+# в dev-группе этого бота.
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "pytest-cov",
+    "ruff>=0.17",
+    "mypy",
+    "pre-commit",
+    "pip-audit>=2.10",
+]
+
+# Базовая конфигурация ruff для всего репозитория. Бот наследует её строкой
+# `extend = "../../pyproject.toml"` в своём [tool.ruff] и добавляет свои исключения.
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["."]
+extend-exclude = ["bots/*/.browsers", "bots/*/.cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF", "DTZ"]
+# Кириллица в комментариях и строках — норма проекта, а не «похожие символы»
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["DTZ"]
+
+# mypy корня проверяет только инструменты репозитория; код ботов — конфигурацией каждого бота.
+[tool.mypy]
+python_version = "3.14"
+files = ["scripts", "dev.py"]
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
