@@ -11,7 +11,7 @@ dependencies = [
     "aiosqlite>=0.22",
     "alembic>=1.20",
     "pydantic-settings>=2.16",
-    "tzdata>=2026.5",
+    "tzdata>=2026.6",
     "uvloop>=0.23; sys_platform == 'linux'",
     "sentry-sdk>=2.73",
 ]
