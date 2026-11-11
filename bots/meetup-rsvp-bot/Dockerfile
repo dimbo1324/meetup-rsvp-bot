@@ -12,7 +12,7 @@ COPY bots/meetup-rsvp-bot/src bots/meetup-rsvp-bot/src
 # Пакет ставится в .venv целиком (не editable): runtime не зависит от раскладки исходников
 RUN uv sync --frozen --no-dev --package meetup-rsvp-bot --no-editable
 
-FROM python:3.14-slim AS runtime
+FROM python:3.15-slim AS runtime
 # Версия для сообщения «Бот запущен»: APP_VERSION=$(git rev-parse --short HEAD) docker compose build
 ARG APP_VERSION=
 # Корневая ФС контейнера только для чтения: байт-код не пишем
