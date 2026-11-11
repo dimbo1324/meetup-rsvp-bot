@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 
 from playwright.async_api import Error as PlaywrightError
 
@@ -22,10 +24,13 @@ from rcbot.bootstrap import (
 )
 from rcbot.config.secrets import SecretKey
 from rcbot.domain.errors import ManualStepRequired, RcbotError, SessionExpired
-from rcbot.domain.models import AvailabilitySnapshot, Slot
+from rcbot.domain.models import AvailabilitySnapshot, DeliveryResult, Slot
 from rcbot.infrastructure.gubuy.discovery import DiscoveryRecorder
 from rcbot.infrastructure.gubuy.pages import PageKind
 from rcbot.infrastructure.gubuy.probe import probe_agenda
+from rcbot.infrastructure.win.power import KeepAwake
+from rcbot.infrastructure.win.single_instance import AlreadyRunning, SingleInstance
+from rcbot.runner import run_app
 
 PROBE_MESSAGES = {
     PageKind.AGENDA: (True, "Шаг «Agenda» открыт напрямую: календарь доступен."),
@@ -38,11 +43,6 @@ PROBE_MESSAGES = {
     PageKind.BLOCKED: (False, "Сайт ответил отказом защитного шлюза: подождите и не повторяйте."),
     PageKind.UNKNOWN: (False, "Страница не распознана: признаки шага «Agenda» не найдены."),
 }
-
-
-def _not_yet(name: str) -> int:
-    print(f"Команда `rcbot {name}` ещё не реализована (этап 1 в работе).", file=sys.stderr)
-    return 1
 
 
 def cmd_discover(_: argparse.Namespace) -> int:
@@ -130,9 +130,53 @@ def cmd_check(_: argparse.Namespace) -> int:
     return 0
 
 
+def _loop_factory() -> Callable[[], asyncio.AbstractEventLoop] | None:
+    """uvloop — только на Linux; на Windows нужен стандартный ProactorEventLoop (SPEC 2.1)."""
+    if sys.platform != "linux":
+        return None
+    try:
+        # Динамический импорт: на Windows пакета нет, и проверка типов не должна его искать
+        uvloop = importlib.import_module("uvloop")
+    except ImportError:
+        return None
+    factory: Callable[[], asyncio.AbstractEventLoop] = uvloop.new_event_loop
+    return factory
+
+
+def _exclusive(core: Core, body: Callable[[], int]) -> int:
+    lock = SingleInstance(core.paths.lock_file)
+    try:
+        lock.acquire()
+    except AlreadyRunning as error:
+        print(f"{error}. Остановите работающий экземпляр.", file=sys.stderr)
+        return 3
+    try:
+        with KeepAwake():
+            return body()
+    finally:
+        lock.release()
+
+
 def cmd_run(_: argparse.Namespace) -> int:
-    return _not_yet("run")
+    # pythonw.exe (Планировщик) запускается без консоли: пишем только в файл лога
+    core = build_core(console=sys.stderr is not None)
+    return _exclusive(core, lambda: asyncio.run(run_app(core), loop_factory=_loop_factory()))
 
 
-def cmd_simulate(_: argparse.Namespace) -> int:
-    return _not_yet("simulate")
+def _print_delivery(result: DeliveryResult) -> None:
+    mark = "✅" if result.ok else "❌"
+    error = f" — {result.error}" if result.error else ""
+    channel, attempt = result.channel.value, result.attempt
+    print(f"{mark} {channel}, попытка {attempt}: {result.latency_ms:.0f} мс{error}")
+
+
+def cmd_simulate(args: argparse.Namespace) -> int:
+    core = build_core()
+
+    def body() -> int:
+        return asyncio.run(
+            run_app(core, simulate_wait_sec=args.wait, on_delivery=_print_delivery),
+            loop_factory=_loop_factory(),
+        )
+
+    return _exclusive(core, body)

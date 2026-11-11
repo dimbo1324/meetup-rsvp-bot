@@ -1,0 +1,265 @@
+"""Сборка и запуск бота целиком: `rcbot run` и `rcbot simulate`.
+
+Порядок остановки (SPEC 3.4): опрос → сообщение «остановлен» → фоновые задачи → рассылка →
+источники и браузер → каналы → Telegram → БД.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from aiogram import Bot
+
+from rcbot.application.alerting import AlertOrchestrator, RepeatPolicy
+from rcbot.application.bus import EventBus
+from rcbot.application.control import Controller
+from rcbot.application.health import HealthMonitor
+from rcbot.application.housekeeping import Housekeeping
+from rcbot.application.incidents import IncidentBook
+from rcbot.application.messages import MessageComposer
+from rcbot.application.poll_loop import PollLoop
+from rcbot.application.ports import AvailabilitySource, NoopCoordinator, Notifier
+from rcbot.application.runtime import RuntimeStore
+from rcbot.application.supervisor import Supervisor
+from rcbot.bootstrap import (
+    Core,
+    build_api_source,
+    build_dom_source,
+    build_session,
+    ensure_target,
+    open_storage,
+)
+from rcbot.bot import texts
+from rcbot.bot.app import build_dispatcher, run_polling
+from rcbot.config.secrets import SecretKey
+from rcbot.config.settings import CALLMEBOT_HOST
+from rcbot.domain.detector import Detector
+from rcbot.domain.events import (
+    ManualActionRequired,
+    PollerStateChanged,
+    SlotsAppeared,
+    SlotsChanged,
+    SlotsGone,
+    SourceSwitched,
+    UnconfirmedSlotsSeen,
+)
+from rcbot.domain.models import Channel, DeliveryResult
+from rcbot.infrastructure.files import FileJanitor
+from rcbot.infrastructure.http.client import SafeHttp
+from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
+from rcbot.infrastructure.notify.ntfy import NtfyNotifier
+from rcbot.infrastructure.notify.telegram import TelegramNotifier
+from rcbot.infrastructure.notify.watchdog import HttpWatchdog
+
+logger = logging.getLogger(__name__)
+
+STOP_MESSAGE_TIMEOUT_SEC = 10.0
+
+
+@dataclass
+class Closers:
+    """Что закрыть при остановке, в порядке добавления."""
+
+    items: list[Callable[[], Awaitable[Any]]] = field(default_factory=list)
+
+    def add(self, closer: Callable[[], Awaitable[Any]]) -> None:
+        self.items.append(closer)
+
+    async def close_all(self) -> None:
+        for closer in self.items:
+            try:
+                await closer()
+            except Exception:
+                logger.exception("ошибка при закрытии ресурса")
+
+
+def _notifiers(core: Core, bot: Bot, chat_id: int) -> dict[Channel, Notifier]:
+    s = core.settings
+    notifiers: dict[Channel, Notifier] = {Channel.TELEGRAM: TelegramNotifier(bot, chat_id)}
+    if topic := core.secrets.get(SecretKey.NTFY_TOPIC):
+        http = SafeHttp(s.allowed_hosts(), timeout_sec=10)
+        notifiers[Channel.NTFY] = NtfyNotifier(http, s.ntfy_server, topic.get_secret_value())
+    if user := core.secrets.get(SecretKey.CALLMEBOT_USER):
+        http = SafeHttp([CALLMEBOT_HOST], timeout_sec=15)
+        notifiers[Channel.CALL] = CallMeBotNotifier(http, user.get_secret_value(), s.call_lang)
+    return notifiers
+
+
+def _policies(core: Core) -> dict[Channel, RepeatPolicy]:
+    s = core.settings
+    return {
+        Channel.TELEGRAM: RepeatPolicy(s.tg_repeat_sec, s.tg_repeat_max),
+        Channel.NTFY: RepeatPolicy(s.ntfy_repeat_sec, s.ntfy_repeat_max),
+        Channel.CALL: RepeatPolicy(s.call_repeat_sec, s.call_repeat_max),
+    }
+
+
+async def run_app(
+    core: Core,
+    *,
+    simulate_wait_sec: int | None = None,
+    on_delivery: Callable[[DeliveryResult], None] | None = None,
+) -> int:
+    s = core.settings
+    clock = core.clock
+    closers = Closers()
+    supervisor = Supervisor(clock)
+    loop: PollLoop | None = None
+    alerts: AlertOrchestrator | None = None
+    storage = await open_storage(core)
+    try:
+        token = core.secrets.require(SecretKey.TELEGRAM_TOKEN).get_secret_value()
+        chat_id = int(core.secrets.require(SecretKey.TELEGRAM_CHAT_ID).get_secret_value())
+        target = await ensure_target(core, storage)
+        runtime_store = RuntimeStore(storage.kv)
+        runtime = await runtime_store.load(s.poll_interval_sec, s.months_ahead, clock.now())
+
+        bot = Bot(token)
+        notifiers = _notifiers(core, bot, chat_id)
+        session = build_session(core)
+        api, dom = build_api_source(core), build_dom_source(core)
+        primary: AvailabilitySource = api if api.configured else dom
+        fallback: AvailabilitySource | None = dom if api.configured else None
+        if not api.configured:
+            await api.close()
+        sources = [src for src in (primary, fallback) if src is not None]
+        for source in sources:
+            session.subscribe(source.use_cookies)
+
+        book = IncidentBook(storage.incidents, clock, target.id)
+        detector = Detector()
+        if (restored := await book.restore()) is not None:
+            detector.restore(restored.slots)
+            logger.info("продолжается открытый инцидент %d", restored.id)
+
+        bus = EventBus()
+        composer = MessageComposer(s.tz, s.agenda_url, s.tramite_id)
+        alerts = AlertOrchestrator(
+            notifiers, _policies(core), composer, book, session, runtime, clock, NoopCoordinator()
+        )
+        alerts.on_delivery = on_delivery
+        loop = PollLoop(
+            primary=primary,
+            fallback=fallback,
+            session=session,
+            detector=detector,
+            bus=bus,
+            clock=clock,
+            runtime=runtime,
+            runtime_store=runtime_store,
+            stats=storage.stats,
+            journal=storage.events,
+            target=target,
+            jitter=s.poll_jitter,
+        )
+        _wire(bus, alerts, book)
+
+        housekeeping = Housekeeping(storage.maintenance, FileJanitor(core.paths), storage.kv, clock)
+        controller = Controller(
+            loop,
+            alerts,
+            book,
+            storage.incidents,
+            storage.events,
+            session,
+            clock,
+            cleanup=housekeeping.run_once,
+            folder_size=housekeeping.folder_size,
+        )
+        watchdog = None
+        if s.watchdog_url:
+            watchdog = HttpWatchdog(SafeHttp(s.allowed_hosts(), timeout_sec=10), s.watchdog_url)
+        health = HealthMonitor(
+            storage.stats,
+            storage.incidents,
+            clock,
+            s.tz,
+            s.daily_report_hour,
+            alerts.service,
+            loop.current_hour,
+            housekeeping.folder_size,
+            watchdog,
+        )
+        dispatcher = build_dispatcher(controller, s.tz, chat_id)
+        # Порядок закрытия: рассылка → подписчики событий → браузер и HTTP → каналы → Telegram
+        closers.add(alerts.close)
+        closers.add(bus.drain)
+        for source in sources:
+            closers.add(source.close)
+        for notifier in notifiers.values():
+            closers.add(notifier.close)
+        if watchdog is not None:
+            closers.add(watchdog.close)
+        closers.add(bot.session.close)
+
+        housekeeping.start()
+        supervisor.start("telegram", lambda: run_polling(bot, dispatcher))
+        supervisor.start("warmup", alerts.keep_warm)
+        if simulate_wait_sec is not None:
+            return await _simulate(alerts, clock_sleep=clock.sleep, wait_sec=simulate_wait_sec)
+
+        supervisor.start("housekeeping", housekeeping.run_forever)
+        supervisor.start("reports", health.daily_reports)
+        supervisor.start("watchdog", health.watchdog)
+        supervisor.start("poll", loop.run)
+        interval = loop.current_interval(clock.now())
+        await alerts.service(
+            texts.STARTED.format(source=primary.kind.value.upper(), interval=interval)
+        )
+        await supervisor.wait_any()
+        return 0
+    finally:
+        await _shutdown(loop, alerts, supervisor, closers)
+        await storage.close()
+
+
+def _wire(bus: EventBus, alerts: AlertOrchestrator, book: IncidentBook) -> None:
+    # Рассылка и запись в БД — разные подписчики: тревога не ждёт базу (SPEC 2.2, п. 4)
+    bus.subscribe(SlotsAppeared, alerts.on_appeared)
+    bus.subscribe(SlotsAppeared, book.on_appeared)
+    bus.subscribe(SlotsChanged, alerts.on_changed)
+    bus.subscribe(SlotsChanged, book.on_changed)
+    bus.subscribe(SlotsGone, alerts.on_gone)
+    bus.subscribe(SlotsGone, book.on_gone)
+    bus.subscribe(ManualActionRequired, alerts.on_manual)
+    bus.subscribe(SourceSwitched, alerts.on_source_switched)
+    bus.subscribe(PollerStateChanged, alerts.on_state_changed)
+    bus.subscribe(UnconfirmedSlotsSeen, alerts.on_unconfirmed)
+
+
+async def _simulate(
+    alerts: AlertOrchestrator, clock_sleep: Callable[[float], Awaitable[None]], wait_sec: int
+) -> int:
+    """Тестовая тревога со всеми повторами; успех — если владелец нажал «Вижу» до таймаута."""
+    print(f"Тестовая тревога отправлена. Нажмите «✅ Вижу» в Telegram (жду до {wait_sec} с).")
+    await alerts.simulate()
+    waited = 0
+    while alerts.repeating() and waited < wait_sec:
+        await clock_sleep(1)
+        waited += 1
+    if alerts.repeating():
+        print("«Вижу» не нажата: повторы остановлены по таймауту.")
+        return 1
+    print("«Вижу» получено: повторы во всех каналах остановлены.")
+    return 0
+
+
+async def _shutdown(
+    loop: PollLoop | None,
+    alerts: AlertOrchestrator | None,
+    supervisor: Supervisor,
+    closers: Closers,
+) -> None:
+    if loop is not None:
+        loop.stop()
+    if alerts is not None:
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(STOP_MESSAGE_TIMEOUT_SEC):
+                await alerts.service(texts.STOPPED)
+    await supervisor.stop()
+    await closers.close_all()

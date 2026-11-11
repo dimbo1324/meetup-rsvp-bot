@@ -1,0 +1,56 @@
+"""Супервизор фоновых задач: упавшая задача перезапускается с паузой, остановка — по порядку."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+
+from rcbot.application.ports import Clock
+
+logger = logging.getLogger(__name__)
+
+RESTART_MIN_SEC = 5.0
+RESTART_MAX_SEC = 300.0
+
+
+class Supervisor:
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+
+    def start(
+        self, name: str, factory: Callable[[], Awaitable[None]], *, restart: bool = True
+    ) -> None:
+        self._tasks[name] = asyncio.create_task(self._guard(name, factory, restart), name=name)
+
+    async def _guard(
+        self, name: str, factory: Callable[[], Awaitable[None]], restart: bool
+    ) -> None:
+        delay = RESTART_MIN_SEC
+        while True:
+            try:
+                await factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("задача «%s» упала", name)
+                if not restart:
+                    raise
+            await self._clock.sleep(delay)
+            delay = min(delay * 2, RESTART_MAX_SEC)
+            logger.warning("задача «%s» перезапускается", name)
+
+    async def wait_any(self) -> str:
+        """Ждёт завершения любой задачи (обычно — цикла опроса при остановке)."""
+        done, _ = await asyncio.wait(set(self._tasks.values()), return_when=asyncio.FIRST_COMPLETED)
+        task = next(iter(done))
+        return task.get_name()
+
+    async def stop(self, wait_sec: float = 10.0) -> None:
+        for task in self._tasks.values():
+            task.cancel()
+        if self._tasks:
+            await asyncio.wait(set(self._tasks.values()), timeout=wait_sec)
+        self._tasks.clear()

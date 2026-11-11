@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from rcbot.domain.models import (
@@ -123,6 +123,20 @@ class Maintenance(Protocol):
     async def delete_older_than(self, cutoffs: dict[str, datetime]) -> dict[str, int]: ...
 
     async def compact(self) -> None: ...
+
+
+class FileStore(Protocol):
+    """Файлы бота на диске: дампы, карантин, снимки, временные данные, логи."""
+
+    def prune(
+        self, name: str, max_age: timedelta, now: datetime, max_files: int | None = None
+    ) -> int: ...
+
+    def clear(self, name: str) -> int: ...
+
+    def prune_logs(self, max_age: timedelta, now: datetime) -> int: ...
+
+    def folder_size(self) -> int: ...
 
 
 class WatchdogPinger(Protocol):
