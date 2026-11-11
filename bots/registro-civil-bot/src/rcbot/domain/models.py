@@ -103,12 +103,23 @@ class Incident:
         return self.acked_at is not None
 
 
+class AlertAction(StrEnum):
+    """Кнопка под сообщением в Telegram."""
+
+    NONE = "none"
+    ACK = "ack"
+    MANUAL_DONE = "manual_done"
+
+
 @dataclass(frozen=True)
 class Alert:
     kind: AlertKind
     text: str
     call_text: str = ""
+    push_title: str = ""
+    push_text: str = ""
     click_url: str = ""
+    action: AlertAction = AlertAction.NONE
     incident_id: int | None = None
     # Сервисные и неподтверждённые сообщения идут только в Telegram, без звонка (SPEC 2.3–2.4)
     channels: frozenset[Channel] = frozenset(Channel)
