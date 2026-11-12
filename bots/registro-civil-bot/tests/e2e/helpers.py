@@ -17,6 +17,7 @@ from tests.e2e.site import FakeSite
 from tests.e2e.stand import Stand
 from tests.fakes import FakeNotifier
 
+MIN_GAP = 10.0  # минимум между проверками для ApiSource (SPEC 0.3), действует и после входа
 D23 = ["2027-02-23T10:30", "2027-02-23T10:45", "2027-02-23T11:00"]
 D24 = ["2027-02-24T09:00"]
 D25 = ["2027-02-25T09:30"]

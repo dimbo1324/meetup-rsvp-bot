@@ -50,7 +50,7 @@ from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, Storage, ensure_target, open_storage
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import Settings
+from rcbot.config.settings import MIN_POLL_INTERVAL_SEC, Settings
 from rcbot.domain.detector import Detector
 from rcbot.domain.models import Alert, Channel, DeliveryResult, SourceKind, WatchTarget
 from rcbot.infrastructure.files import FileJanitor
@@ -71,6 +71,8 @@ TRAMITE_ID = "TEST-TRAMITE-0001"
 NTFY_TOPIC = "test-topic-random-0123456789abcdefghijklmnop"
 CALL_USER = "@test_owner"
 STOP_MESSAGE_CODE = "bot.stop"
+# Сколько подряд «тихих» оборотов цикла нужно: задача опроса после побудки проходит десяток уступок
+CALM_SPINS = 40
 
 
 # --- журнал и каналы под наблюдением ---
@@ -393,7 +395,17 @@ class Stand:
         if start:
             stand.start()
             await stand.quiesce()
+            if site is not None and "tick" not in stand.ignore and "login" not in stand.ignore:
+                await stand.settle_login()
         return stand
+
+    async def settle_login(self) -> None:
+        """Первая проверка без cookies → 302 → вход; повторная идёт не раньше минимума (10 с).
+
+        После неё `t0` переставляется: сценарии отсчитывают расписание от первой успешной проверки.
+        """
+        await self.advance(MIN_POLL_INTERVAL_SEC)
+        self.t0 = self.clock.monotonic()
 
     def start(
         self,
@@ -440,7 +452,7 @@ class Stand:
         """Крутить цикл событий, пока стенд не затихнет (сокеты и потоки SQLite заканчивают)."""
         deadline = time.perf_counter() + limit
         calm = 0
-        while calm < 5:
+        while calm < CALM_SPINS:
             await asyncio.sleep(0)
             if self.busy():
                 calm = 0

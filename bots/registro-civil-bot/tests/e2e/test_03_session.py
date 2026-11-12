@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from rcbot.domain.models import Channel, PollState
-from tests.e2e.helpers import D23, collect_events
+from tests.e2e.helpers import D23, MIN_GAP, collect_events
 from tests.e2e.site import FakeSite
 
 
@@ -18,8 +18,15 @@ async def test_302_на_вход_ведёт_к_повторному_входу_�
 
     site.expire_sessions()
     await stand.next_check()
+    # вход выполнен сразу, но повторный запрос не раньше минимума между проверками
+    assert stand.session.logins == 2 and site.calls[-1].cookie.endswith("SESSION-1-0")
+    t_302 = site.calls[-1].mono
+    await stand.advance(MIN_GAP - 0.5)
+    assert site.calls[-1].mono == t_302
+    await stand.advance(0.5)
 
     # старая cookie → 302; вход; повторный запрос уже с новой cookie и она принята
+    assert site.calls[-1].mono - t_302 == MIN_GAP
     assert [c.cookie for c in site.calls[-2:]] == [
         "simple_bpm_session=SESSION-1-0",
         "simple_bpm_session=SESSION-2-1",
@@ -47,6 +54,7 @@ async def exhaust_login_budget(stand, site: FakeSite) -> None:
     for _ in range(5):
         site.expire_sessions()
         await stand.next_check()
+        await stand.advance(MIN_GAP)  # повторная проверка после входа
     assert stand.session.logins == 6
     assert stand.loop.status.state is PollState.RUNNING
     site.expire_sessions()
@@ -79,13 +87,6 @@ async def test_после_часа_лимит_освобождается_и_вх
     assert stand.loop.status.state is PollState.RUNNING
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: poll_loop.py:_reauth — после BACKOFF из-за лимита входов переход идёт через "
-        "REAUTH → RUNNING, а on_state_changed сообщает «снова работает» только из BACKOFF"
-    ),
-)
 async def test_после_лимита_входов_владелец_узнаёт_что_опрос_снова_работает(
     make_stand, site: FakeSite
 ) -> None:
@@ -96,13 +97,6 @@ async def test_после_лимита_входов_владелец_узнаё�
     assert any("снова работает" in m for m in stand.texts(Channel.TELEGRAM))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: poll_loop.py:_reauth — каждые 15 минут при исчерпанном лимите входов состояние "
-        "прыгает BACKOFF → REAUTH → BACKOFF, и alerting.on_state_changed шлёт «замедлился» заново"
-    ),
-)
 async def test_исчерпанный_лимит_входов_даёт_одно_сообщение_а_не_по_одному_на_попытку(
     make_stand, site: FakeSite
 ) -> None:
@@ -129,8 +123,9 @@ async def test_после_тревоги_десять_минут_без_вход
 
     await stand.advance(t_alert + 600 - stand.elapsed - 1)  # t = тревога + 599 с
     assert stand.session.logins == 1 and len(site.calls) == requests
-    await stand.advance(1)  # ровно тревога + 600 с
-    assert stand.session.logins == 2
+    await stand.advance(1)  # ровно тревога + 600 с: вход, но запрос — не раньше минимума
+    assert stand.session.logins == 2 and len(site.calls) == requests + 1
+    await stand.advance(MIN_GAP)
     assert site.calls[-1].cookie == "simple_bpm_session=SESSION-2-1"
     assert stand.loop.status.state is PollState.RUNNING
     # отложенный вход не считался неудачей: «замедлился» не прозвучало
