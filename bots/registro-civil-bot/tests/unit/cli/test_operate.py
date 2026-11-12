@@ -375,7 +375,7 @@ def test_discover_печатает_итог_и_сводку(
 def test_discover_открывает_видимое_окно_и_пишет_в_каталог_разведки(
     recorder: type[FakeRecorder], paths: Paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("RCBOT_DISCOVER_CHANNEL", "msedge")
+    monkeypatch.setenv("RCBOT_BROWSER", "msedge")  # разведка идёт в выбранном браузере (R8)
     cli.main(["discover"])
     login_url, _agenda_url, location, months, out_dir, options = recorder.instances[0].args
     assert login_url.startswith("https://bpmgob.mec.gub.uy/autenticacion/login")

@@ -55,7 +55,7 @@ def cmd_discover(_: argparse.Namespace) -> int:
         s.location_text,
         s.months_ahead,
         core.paths.discovery,
-        browser_options(core, headless=False, channel=s.discover_channel),
+        browser_options(core, headless=False),
     )
     try:
         result = asyncio.run(recorder.run(core.clock.now()))

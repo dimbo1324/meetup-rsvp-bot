@@ -20,6 +20,9 @@ from aiogram.exceptions import TelegramAPIError
 from rcbot.bootstrap import Core, build_core
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey
 from rcbot.config.settings import Settings
+from rcbot.infrastructure.gubuy.browser import CHROME, EDGE
+from rcbot.infrastructure.gubuy.browser import NAMES as BROWSER_NAMES
+from rcbot.infrastructure.gubuy.browser import survey as browser_survey
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.files import FileJournal
 
@@ -168,6 +171,29 @@ def _doctor_journal(core: Core) -> None:
         _line(None, "Журнал лежит в OneDrive: он будет синхронизироваться в облако")
 
 
+def _doctor_browsers(choice: str) -> bool:
+    """Какие браузеры нашлись и какой будет использован; нет ни одного — `False`."""
+    bundled_ready, where = _playwright_ready()
+    found = browser_survey(choice, Path(where) if bundled_ready else None)
+    for channel in (CHROME, EDGE):
+        path = found.found[channel]
+        _line(
+            True if path else None,
+            f"{BROWSER_NAMES[channel]}: {path or 'не найден'}",
+        )
+    _line(
+        True if bundled_ready else (None if found.chosen else False),
+        f"Chromium для Playwright: {where}",
+    )
+    if found.chosen is None:
+        _line(False, f"Браузер для работы (RCBOT_BROWSER={choice}): ничего не найдено")
+        print("    Установите Google Chrome (рекомендуется) или Microsoft Edge,")
+        print("    либо выполните: uv run python dev.py setup --bot registro-civil-bot")
+        return False
+    _line(True, f"Браузер для работы: {BROWSER_NAMES[found.chosen]} (RCBOT_BROWSER={choice})")
+    return True
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     core = build_core(console=False, command="doctor")
     ok = True
@@ -177,11 +203,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for package in ("aiohttp", "aiogram", "aiogram-dialog", "sqlalchemy", "playwright", "keyring"):
         _line(True, f"{package} {importlib.metadata.version(package)}")
 
-    ready, where = _playwright_ready()
-    ok &= ready
-    _line(ready, f"Chromium для Playwright: {where}")
-    if not ready:
-        print("    Установка: uv run python dev.py setup --bot registro-civil-bot")
+    ok &= _doctor_browsers(core.settings.browser)
 
     _line(True, f"Хранилище секретов: {core.secrets.backend_name()}")
     for key, present in core.secrets.present().items():

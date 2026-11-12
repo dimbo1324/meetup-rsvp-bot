@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -64,7 +65,8 @@ class Settings(BaseSettings):
     sae_source_enabled: bool = False
     sae_url: str = "https://sae.mec.gub.uy/sae/agendarReserva/Paso1.xhtml?e=9&a=82"
     headless: bool = True
-    discover_channel: str = ""
+    # Браузер (решение R8): auto — Chrome, затем Edge, затем встроенный Chromium Playwright
+    browser: Literal["auto", "chrome", "msedge", "chromium"] = "auto"
 
     # Журнал наблюдения (решение R6): пусто — папка rcbot-journal на рабочем столе
     journal_enabled: bool = True

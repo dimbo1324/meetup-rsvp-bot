@@ -18,6 +18,7 @@ from rcbot.cli import setup
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import REQUIRED, SecretKey, SecretStore
 from rcbot.config.settings import Settings
+from rcbot.infrastructure.gubuy import browser
 from rcbot.infrastructure.http.client import SafeHttp
 
 ETAPA_URL = "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA/1"
@@ -27,10 +28,16 @@ def args(*, offline: bool = True, full: bool = False) -> argparse.Namespace:
     return argparse.Namespace(offline=offline, full=full)
 
 
+def no_installed_browsers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """На машине разработчика может стоять настоящий Chrome: тест от него не зависит."""
+    monkeypatch.setattr(browser, "installed_path", lambda channel, env=None: None)
+
+
 @pytest.fixture
 def ready(monkeypatch: pytest.MonkeyPatch, paths: Paths) -> None:
     """Исправное окружение: Chromium на месте, адрес заявки и все секреты заданы."""
     monkeypatch.setattr(setup, "_playwright_ready", lambda: (True, "chromium.exe"))
+    no_installed_browsers(monkeypatch)
     write_env(paths, agenda_url=ETAPA_URL, tramite_id="TEST-TRAMITE", api_url=ETAPA_URL)
     store = SecretStore()
     for key in REQUIRED:
@@ -128,6 +135,58 @@ def test_нет_chromium_даёт_код_1_и_подсказку_по_устан
     assert code == 1
     assert mark_of(out, "Chromium для Playwright") == "НЕТ"
     assert "dev.py setup --bot registro-civil-bot" in out
+
+
+def test_достаточно_chrome_встроенный_chromium_не_нужен(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], ready: None
+) -> None:
+    monkeypatch.setattr(setup, "_playwright_ready", lambda: (False, "C:/нет/chromium.exe"))
+    monkeypatch.setattr(
+        browser,
+        "installed_path",
+        lambda channel, env=None: Path("C:/chrome.exe") if channel == "chrome" else None,
+    )
+    code = setup.cmd_doctor(args())
+    out = capsys.readouterr().out
+    assert code == 0
+    assert mark_of(out, "Google Chrome:") == "OK "
+    assert mark_of(out, "Microsoft Edge:") == "-- "
+    assert mark_of(out, "Chromium для Playwright") == "-- "
+    assert mark_of(out, "Браузер для работы:") == "OK "
+    assert "Браузер для работы: Google Chrome (RCBOT_BROWSER=auto)" in out
+
+
+def test_edge_берётся_когда_chrome_нет(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], ready: None
+) -> None:
+    monkeypatch.setattr(
+        browser,
+        "installed_path",
+        lambda channel, env=None: Path("C:/edge.exe") if channel == "msedge" else None,
+    )
+    assert setup.cmd_doctor(args()) == 0
+    assert "Браузер для работы: Microsoft Edge" in capsys.readouterr().out
+
+
+def test_явный_chrome_без_chrome_это_код_1_даже_если_есть_edge(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    ready: None,
+    paths: Paths,
+) -> None:
+    write_env(
+        paths, agenda_url=ETAPA_URL, tramite_id="TEST-TRAMITE", api_url=ETAPA_URL, browser="chrome"
+    )
+    monkeypatch.setattr(
+        browser,
+        "installed_path",
+        lambda channel, env=None: Path("C:/edge.exe") if channel == "msedge" else None,
+    )
+    code = setup.cmd_doctor(args())
+    out = capsys.readouterr().out
+    assert code == 1
+    assert mark_of(out, "Браузер для работы") == "НЕТ"
+    assert "RCBOT_BROWSER=chrome" in out
 
 
 def test_playwright_ready_сообщает_о_сломанной_установке_без_падения(

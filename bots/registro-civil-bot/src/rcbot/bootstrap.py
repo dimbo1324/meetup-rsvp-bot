@@ -152,10 +152,11 @@ async def open_storage(core: Core) -> Storage:
 
 
 def browser_options(
-    core: Core, *, headless: bool | None = None, channel: str = ""
+    core: Core, *, headless: bool | None = None, channel: str | None = None
 ) -> BrowserOptions:
     return BrowserOptions(
-        headless=core.settings.headless if headless is None else headless, channel=channel
+        headless=core.settings.headless if headless is None else headless,
+        channel=core.settings.browser if channel is None else channel,
     )
 
 
