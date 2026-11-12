@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from itertools import pairwise
 
 import pytest
 
 from rcbot.application.runtime import K_LADDER_START
 from rcbot.domain.models import Channel, PollState
 from tests.e2e import site as fake
+from tests.e2e.helpers import gaps
 from tests.e2e.site import FakeSite
-
-
-def gaps(site: FakeSite, last: int) -> list[float]:
-    times = [c.mono for c in site.calls[-last:]]
-    return [b - a for a, b in pairwise(times)]
 
 
 @pytest.mark.parametrize("code", [429, 403])
