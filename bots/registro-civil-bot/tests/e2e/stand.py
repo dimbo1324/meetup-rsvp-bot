@@ -232,6 +232,7 @@ class Stand:
         journal_trim_bytes: int = 5 * 2**30,
         incidents_open_hook: Callable[[], Awaitable[None]] | None = None,
         start: bool = True,
+        ignore: set[str] | None = None,
         **settings_overrides: Any,
     ) -> Stand:
         paths.ensure()
@@ -387,6 +388,7 @@ class Stand:
             notifiers=spies,
             auth=auth,
             t0=clock.monotonic(),
+            ignore=set(ignore or ()),
         )
         if start:
             stand.start()
