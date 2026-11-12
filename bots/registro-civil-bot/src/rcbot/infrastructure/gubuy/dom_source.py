@@ -17,6 +17,7 @@ from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from rcbot.application.ports import Clock, SessionCookie
 from rcbot.domain.errors import (
@@ -151,10 +152,14 @@ class DomSource:
             if index == months - 1 or not view.has_next:
                 break
             await page.locator(NEXT_MONTH).first.click()
-            await page.wait_for_function(
-                "t => (document.querySelector('.ui-datepicker-title') || {}).textContent !== t",
-                arg=view.title,
-            )
+            try:
+                await page.wait_for_function(
+                    "t => (document.querySelector('.ui-datepicker-title') || {}).textContent !== t",
+                    arg=view.title,
+                )
+            except PlaywrightTimeout:
+                # Стрелка была, нажатие её отработало, а месяц не сменился: страница устроена не так
+                raise UnexpectedResponse("календарь не перелистнулся на следующий месяц") from None
         return frozenset(found)
 
     async def _shot(self, page: Page, at: datetime) -> None:
@@ -166,7 +171,8 @@ class DomSource:
             )
             for old in sorted(self._shots_dir.glob("*.png"))[:-MAX_SHOTS]:
                 old.unlink(missing_ok=True)
-        except PlaywrightError as error:
+        except (PlaywrightError, OSError) as error:
+            # Снимок вспомогательный: сбой диска или браузера не должен терять найденные слоты
             logger.warning("снимок календаря не сохранён: %s", type(error).__name__)
 
     async def close(self) -> None:
