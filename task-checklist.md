@@ -32,5 +32,14 @@ Google Chrome, затем Microsoft Edge, затем встроенный Chromi
 ## Завершение
 
 - [+] Документы: README, `.env.example`, `docs/open-questions.md` (R8 выполнено, Q-M2), `ROADMAP`, `overview.md`, `CHANGELOG`
-- [ ] Слияние в `main` fast-forward, пуш, CI зелёный, ветка удалена
-- [ ] Итоговый отчёт
+- [+] Слияние в `main` fast-forward, пуш, CI зелёный (Linux, Windows, Docker), ветка удалена
+- [+] Итоговый отчёт (в чате)
+
+## Оговорки
+
+- [-] `dev.py setup` по-прежнему ставит Chromium Playwright (около 740 МБ): он нужен тестам и запасной
+      ветке `auto`; отказ от этого шага — отдельное решение (Q-M2)
+- [-] Поиск Chrome и Edge рассчитан на Windows; на других ОС `doctor` их не найдёт, а `auto` упадёт
+      на встроенный Chromium
+- [-] Настоящий `rcbot doctor` на этой машине не запускался (он пишет в журнал на рабочем столе);
+      проверен тестами, а запуск Chrome и Edge — отдельным скриптом на локальной странице
