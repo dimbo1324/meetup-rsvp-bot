@@ -87,6 +87,7 @@ async def login(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Login]:
         )
         monkeypatch.setattr(browser, "launch", routed_launch(site))
         monkeypatch.setattr(auth, "STEP_TIMEOUT_MS", 1500)
+        monkeypatch.setattr(browser, "NAVIGATION_TIMEOUT_MS", 1500)  # клик по скрытому элементу
         monkeypatch.setattr(auth, "RETURN_TIMEOUT_MS", 2500)
         yield state
         for opened in site.browsers:
