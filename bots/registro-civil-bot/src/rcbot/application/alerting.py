@@ -138,15 +138,17 @@ class AlertOrchestrator:
 
     async def _campaign(self, alert: Alert, *, record: bool = True) -> None:
         self._cancel_repeats()
-        try:
-            await self._wave(alert, attempt=1, record=record)
-        except Exception:  # сбой первой волны не должен лишать тревогу повторов
-            logger.exception("первая волна тревоги %s не удалась, повторы запускаются", alert.kind)
+        # Повторы создаются до волны: «Вижу», пропажа мест или новая тревога, пришедшие пока идёт
+        # первая отправка, должны их отменить, а срок первого повтора считается от начала волны
         for channel in alert.channels:
             policy = self._policies.get(channel)
             if policy and policy.max_repeats > 0 and channel in self._notifiers:
                 task = asyncio.create_task(self._repeat(channel, alert, policy, record))
                 self._repeats.append(task)
+        try:
+            await self._wave(alert, attempt=1, record=record)
+        except Exception:  # сбой первой волны не должен лишать тревогу повторов
+            logger.exception("первая волна тревоги %s не удалась, повторы идут", alert.kind)
 
     async def _repeat(
         self, channel: Channel, alert: Alert, policy: RepeatPolicy, record: bool
