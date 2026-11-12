@@ -1,20 +1,24 @@
-"""Подставной сайт для браузерных тестов: страницы отдаются через `context.route`, сети нет.
+"""Подставной сайт для браузерных тестов: локальный HTTPS-сервер вместо bpmgob и ID Uruguay.
 
-Вся «сеть» Chromium — это обработчик `FakeSite.handle`: запросы к bpmgob и mi.iduruguay получают
-подставные страницы, любой другой адрес отклоняется и попадает в `foreign` (тест проверяет, что
-он пуст). Так ни один тест не ходит на живой сайт (SPEC 6.4).
+Chromium запускается с правилом `--host-resolver-rules`: имена bpmgob.mec.gub.uy и
+mi.iduruguay.gub.uy отображаются на локальный сервер, ВСЕ остальные имена не разрешаются вовсе.
+Так настоящие переадресации 302, Set-Cookie и заголовки работают по-настоящему, а до живого сайта
+запрос дойти не может (SPEC 6.4, инвариант 9). Сертификат самоподписанный: контексту передаётся
+`ignore_https_errors`.
 """
 
 from __future__ import annotations
 
 import json
+import ssl
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-from playwright.async_api import Browser, BrowserContext, Route
+import trustme
+from aiohttp import web
+from playwright.async_api import Browser, BrowserContext, Playwright
 
 BPM_HOST = "bpmgob.mec.gub.uy"
 ID_HOST = "mi.iduruguay.gub.uy"
@@ -40,30 +44,47 @@ class Seen:
     headers: dict[str, str]
     body: str
 
+    def header(self, name: str) -> str:
+        return next((v for k, v in self.headers.items() if k.lower() == name.lower()), "")
+
     @property
     def path(self) -> str:
         return urlparse(self.url).path
 
+    @property
+    def host(self) -> str:
+        return urlparse(self.url).hostname or ""
+
 
 @dataclass
 class FakeSite:
-    handlers: dict[str, Handler] = field(default_factory=dict)
+    handlers: dict[tuple[str, str], Handler] = field(default_factory=dict)
     requests: list[Seen] = field(default_factory=list)
-    foreign: list[str] = field(default_factory=list)
+    port: int = 0
+    _runner: web.AppRunner | None = None
+
+    # --- описание страниц ---
+
+    @staticmethod
+    def _key(url: str) -> tuple[str, str]:
+        parsed = urlparse(url)
+        return (parsed.hostname or "", parsed.path)
 
     def page(self, url: str, body: str, status: int = 200, **headers: str) -> None:
-        reply = (status, body, {"content-type": "text/html; charset=utf-8", **headers})
-        self.handlers[url] = lambda _: reply
+        reply = (status, body, {"Content-Type": "text/html; charset=utf-8", **headers})
+        self.handlers[self._key(url)] = lambda _: reply
 
     def redirect(self, url: str, to: str, status: int = 302) -> None:
-        self.handlers[url] = lambda _: (status, "", {"location": to})
+        self.handlers[self._key(url)] = lambda _: (status, "", {"Location": to})
 
     def json(self, url: str, payload: object, status: int = 200) -> None:
-        reply = (status, json.dumps(payload), {"content-type": "application/json"})
-        self.handlers[url] = lambda _: reply
+        reply = (status, json.dumps(payload), {"Content-Type": "application/json"})
+        self.handlers[self._key(url)] = lambda _: reply
 
     def on(self, url: str, handler: Handler) -> None:
-        self.handlers[url] = handler
+        self.handlers[self._key(url)] = handler
+
+    # --- что видел сервер ---
 
     def gets(self) -> list[str]:
         return [r.url for r in self.requests if r.method == "GET"]
@@ -71,58 +92,78 @@ class FakeSite:
     def non_get(self) -> list[Seen]:
         return [r for r in self.requests if r.method != "GET"]
 
-    async def handle(self, route: Route) -> None:
-        request = route.request
-        parsed = urlparse(request.url)
-        if parsed.hostname not in (BPM_HOST, ID_HOST):
-            self.foreign.append(request.url)
-            await route.abort()
-            return
+    def hosts(self) -> set[str]:
+        return {r.host for r in self.requests}
+
+    # --- сервер ---
+
+    @property
+    def chromium_args(self) -> list[str]:
+        rules = (
+            f"MAP {BPM_HOST} 127.0.0.1:{self.port}, MAP {ID_HOST} 127.0.0.1:{self.port}, "
+            "MAP * ~NOTFOUND"
+        )
+        return [f"--host-resolver-rules={rules}"]
+
+    async def _dispatch(self, request: web.Request) -> web.StreamResponse:
+        host = request.host.split(":")[0].lower()
         seen = Seen(
-            request.method, request.url, await request.all_headers(), request.post_data or ""
+            request.method,
+            f"https://{host}{request.path_qs}",
+            dict(request.headers),
+            (await request.read()).decode("utf-8", errors="replace"),
         )
         self.requests.append(seen)
-        key = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-        handler = self.handlers.get(request.url) or self.handlers.get(key)
+        handler = self.handlers.get((host, request.path))
         if handler is None:
-            await route.fulfill(status=404, body="no encontrado", content_type="text/plain")
-            return
+            return web.Response(status=404, text="no encontrado")
         reply = handler(seen)
         if not isinstance(reply, tuple):
             reply = await reply
         status, body, headers = reply
-        await route.fulfill(status=status, body=body, headers=headers)
+        if status < 0:  # обрыв соединения: сеть недоступна
+            request.transport.abort()  # type: ignore[union-attr]
+            return web.Response()
+        response = web.Response(status=status, body=body.encode("utf-8"))
+        for name, value in headers.items():
+            if name.lower() == "set-cookie":
+                response.headers.add(name, value)
+            else:
+                response.headers[name] = value
+        return response
+
+    async def __aenter__(self) -> FakeSite:
+        app = web.Application()
+        app.router.add_route("*", "/{tail:.*}", self._dispatch)
+        server_ssl = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        trustme.CA().issue_cert(BPM_HOST, ID_HOST).configure_cert(server_ssl)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0, ssl_context=server_ssl)
+        await site.start()
+        self.port = int(site._server.sockets[0].getsockname()[1])  # type: ignore[union-attr]
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
 
 
-def attach(site: FakeSite, browser: Browser) -> None:
-    """Каждый новый контекст браузера получает подставной сайт (код сам создаёт контексты)."""
-    real = browser.new_context
+def routed_launch(site: FakeSite) -> Callable[[Playwright, Any], Awaitable[Browser]]:
+    """Замена `launch` из browser.py: тот же Chromium, но имена сайта ведут на `site`."""
 
-    async def new_context(*args: Any, **kwargs: Any) -> BrowserContext:
-        context = await real(*args, **kwargs)
-        await context.route("**/*", site.handle)
-        return context
+    async def launch(pw: Playwright, options: Any) -> Browser:
+        browser = await pw.chromium.launch(headless=options.headless, args=site.chromium_args)
+        real = browser.new_context
 
-    browser.new_context = new_context  # type: ignore[method-assign]
+        async def new_context(*args: Any, **kwargs: Any) -> BrowserContext:
+            kwargs.setdefault("ignore_https_errors", True)
+            return await real(*args, **kwargs)
 
-
-def routed_launch(site: FakeSite, real_launch: Callable[..., Awaitable[Browser]]) -> Any:
-    async def launch(pw: Any, options: Any) -> Browser:
-        browser = await real_launch(pw, options)
-        attach(site, browser)
+        browser.new_context = new_context  # type: ignore[method-assign]
         return browser
 
     return launch
-
-
-def routed_temporary_context(site: FakeSite, real: Callable[..., Any]) -> Any:
-    @asynccontextmanager
-    async def temporary_context(options: Any) -> Any:
-        async with real(options) as context:
-            await context.route("**/*", site.handle)
-            yield context
-
-    return temporary_context
 
 
 # --- макет календаря jQuery UI Datepicker ---
