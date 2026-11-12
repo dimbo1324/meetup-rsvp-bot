@@ -20,6 +20,7 @@ from rcbot.domain.models import Channel
 
 INTERVALS = ("20", "30", "45", "60", "120", "300")
 MONTHS = ("3", "6", "9", "12")
+CHANNEL_IDS = frozenset(c.value for c in Channel)
 PAUSES = (("30", "30 мин"), ("60", "1 ч"), ("180", "3 ч"), ("0", "до /resume"))
 
 
@@ -70,16 +71,27 @@ async def _maintenance_getter(dialog_manager: DialogManager, **_: Any) -> dict[s
     return {"size": texts.human_size(view.folder_bytes), "errors": errors}
 
 
+async def _stale(callback: CallbackQuery) -> None:
+    """Значения в кнопке нет среди готовых: кнопка от старой версии меню или подделана."""
+    await callback.answer(texts.MENU_STALE)
+
+
 async def _on_interval(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in INTERVALS:
+        return await _stale(callback)
     value = await _controller(manager).set_interval(float(item))
     await callback.answer(f"Интервал {value:.0f} с")
 
 
 async def _on_months(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in MONTHS:
+        return await _stale(callback)
     await callback.answer(f"Месяцев вперёд: {await _controller(manager).set_months(int(item))}")
 
 
 async def _on_pause(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in {minutes for minutes, _label in PAUSES}:
+        return await _stale(callback)
     await _controller(manager).pause(int(item) or None)
     await callback.answer("Пауза включена")
 
@@ -90,11 +102,15 @@ async def _on_resume(callback: CallbackQuery, _: Button, manager: DialogManager)
 
 
 async def _on_toggle(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in CHANNEL_IDS:
+        return await _stale(callback)
     enabled = await _controller(manager).toggle_channel(Channel(item))
     await callback.answer("Канал включён" if enabled else "Канал выключен")
 
 
 async def _on_test(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in CHANNEL_IDS:
+        return await _stale(callback)
     results = await _controller(manager).test(Channel(item))
     await callback.answer(texts.deliveries_text(results)[:200], show_alert=True)
 
@@ -113,95 +129,97 @@ async def _on_cleanup(callback: CallbackQuery, _: Button, manager: DialogManager
     await callback.answer(texts.cleanup_text(removed)[:200], show_alert=True)
 
 
-TO_MAIN = SwitchTo(Const("⬅️ Назад"), id="to_main", state=MenuSG.main)
+def build_menu_dialog() -> Dialog:
+    """Новый экземпляр на каждый Dispatcher: роутер aiogram нельзя подключить дважды."""
+    to_main = SwitchTo(Const("⬅️ Назад"), id="to_main", state=MenuSG.main)
 
-menu_dialog = Dialog(
-    Window(
-        Const("Меню rcbot"),
-        Column(
-            SwitchTo(Const("📊 Статус"), id="status", state=MenuSG.status),
-            SwitchTo(Const("🔎 Сканирование"), id="scan", state=MenuSG.scan),
-            SwitchTo(Const("🔔 Уведомления"), id="notify", state=MenuSG.notify),
-            SwitchTo(Const("🛠 Обслуживание"), id="maint", state=MenuSG.maintenance),
-            Cancel(Const("✖️ Закрыть")),
+    return Dialog(
+        Window(
+            Const("Меню rcbot"),
+            Column(
+                SwitchTo(Const("📊 Статус"), id="status", state=MenuSG.status),
+                SwitchTo(Const("🔎 Сканирование"), id="scan", state=MenuSG.scan),
+                SwitchTo(Const("🔔 Уведомления"), id="notify", state=MenuSG.notify),
+                SwitchTo(Const("🛠 Обслуживание"), id="maint", state=MenuSG.maintenance),
+                Cancel(Const("✖️ Закрыть")),
+            ),
+            state=MenuSG.main,
         ),
-        state=MenuSG.main,
-    ),
-    Window(
-        Format("{text}"),
-        Row(SwitchTo(Const("🔄 Обновить"), id="refresh", state=MenuSG.status), TO_MAIN),
-        state=MenuSG.status,
-        getter=_status_getter,
-    ),
-    Window(
-        Format(
-            "Интервал: {interval} с (фактически ≈ {effective} с)\n"
-            "Месяцев вперёд: {months}\nПауза: {paused}\n\nИнтервал, с:"
+        Window(
+            Format("{text}"),
+            Row(SwitchTo(Const("🔄 Обновить"), id="refresh", state=MenuSG.status), to_main),
+            state=MenuSG.status,
+            getter=_status_getter,
         ),
-        Row(
-            Select(
-                Format("{item}"),
-                id="iv",
-                item_id_getter=str,
-                items="intervals",
-                on_click=_on_interval,
-            )
+        Window(
+            Format(
+                "Интервал: {interval} с (фактически ≈ {effective} с)\n"
+                "Месяцев вперёд: {months}\nПауза: {paused}\n\nИнтервал, с:"
+            ),
+            Row(
+                Select(
+                    Format("{item}"),
+                    id="iv",
+                    item_id_getter=str,
+                    items="intervals",
+                    on_click=_on_interval,
+                )
+            ),
+            Const("Месяцев вперёд:"),
+            Row(
+                Select(
+                    Format("{item}"),
+                    id="mo",
+                    item_id_getter=str,
+                    items="month_options",
+                    on_click=_on_months,
+                )
+            ),
+            Const("Пауза:"),
+            Row(
+                Select(
+                    Format("{item[1]}"),
+                    id="pz",
+                    item_id_getter=lambda item: item[0],
+                    items="pauses",
+                    on_click=_on_pause,
+                )
+            ),
+            Button(Const("▶️ Продолжить"), id="resume", on_click=_on_resume),
+            to_main,
+            state=MenuSG.scan,
+            getter=_scan_getter,
         ),
-        Const("Месяцев вперёд:"),
-        Row(
-            Select(
-                Format("{item}"),
-                id="mo",
-                item_id_getter=str,
-                items="month_options",
-                on_click=_on_months,
-            )
+        Window(
+            Const("Каналы (нажмите, чтобы включить или выключить):"),
+            Column(
+                Select(
+                    Format("{item[1]}"),
+                    id="ch",
+                    item_id_getter=lambda item: item[0],
+                    items="channels",
+                    on_click=_on_toggle,
+                )
+            ),
+            Column(
+                Select(
+                    Format("{item[1]}"),
+                    id="tst",
+                    item_id_getter=lambda item: item[0],
+                    items="tests",
+                    on_click=_on_test,
+                )
+            ),
+            to_main,
+            state=MenuSG.notify,
+            getter=_notify_getter,
         ),
-        Const("Пауза:"),
-        Row(
-            Select(
-                Format("{item[1]}"),
-                id="pz",
-                item_id_getter=lambda item: item[0],
-                items="pauses",
-                on_click=_on_pause,
-            )
+        Window(
+            Format("Размер папки: {size}\n\nПоследние ошибки:\n{errors}"),
+            Button(Const("🔑 Войти заново"), id="relogin", on_click=_on_relogin),
+            Button(Const("🧹 Очистить сейчас"), id="cleanup", on_click=_on_cleanup),
+            to_main,
+            state=MenuSG.maintenance,
+            getter=_maintenance_getter,
         ),
-        Button(Const("▶️ Продолжить"), id="resume", on_click=_on_resume),
-        TO_MAIN,
-        state=MenuSG.scan,
-        getter=_scan_getter,
-    ),
-    Window(
-        Const("Каналы (нажмите, чтобы включить или выключить):"),
-        Column(
-            Select(
-                Format("{item[1]}"),
-                id="ch",
-                item_id_getter=lambda item: item[0],
-                items="channels",
-                on_click=_on_toggle,
-            )
-        ),
-        Column(
-            Select(
-                Format("{item[1]}"),
-                id="tst",
-                item_id_getter=lambda item: item[0],
-                items="tests",
-                on_click=_on_test,
-            )
-        ),
-        TO_MAIN,
-        state=MenuSG.notify,
-        getter=_notify_getter,
-    ),
-    Window(
-        Format("Размер папки: {size}\n\nПоследние ошибки:\n{errors}"),
-        Button(Const("🔑 Войти заново"), id="relogin", on_click=_on_relogin),
-        Button(Const("🧹 Очистить сейчас"), id="cleanup", on_click=_on_cleanup),
-        TO_MAIN,
-        state=MenuSG.maintenance,
-        getter=_maintenance_getter,
-    ),
-)
+    )

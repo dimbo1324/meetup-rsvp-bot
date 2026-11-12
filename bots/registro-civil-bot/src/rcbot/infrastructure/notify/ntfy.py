@@ -12,6 +12,10 @@ from rcbot.infrastructure.http.client import SafeHttp
 
 logger = logging.getLogger(__name__)
 
+# ntfy — сторонний сервис (SPEC 2.4): без `push_text` полный `alert.text` с номером заявки и
+# ссылкой туда не уходит, только общая фраза
+GENERIC_PUSH_TEXT = "Есть новости от бота. Подробности — в Telegram."
+
 
 class NtfyNotifier:
     def __init__(self, http: SafeHttp, server: str, topic: str) -> None:
@@ -28,7 +32,7 @@ class NtfyNotifier:
         payload: dict[str, object] = {
             "topic": self._topic,
             "title": alert.push_title or "rcbot",
-            "message": alert.push_text or alert.text,
+            "message": alert.push_text or GENERIC_PUSH_TEXT,
             "priority": 5,
             "tags": ["rotating_light"],
         }

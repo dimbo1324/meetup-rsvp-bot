@@ -11,12 +11,9 @@ from rcbot.application.control import Controller
 from rcbot.bot import texts
 from rcbot.infrastructure.notify.telegram import CALLBACK_ACK, CALLBACK_MANUAL_DONE
 
-router = Router(name="ack")
-
 OK_WORDS = re.compile(r"^\s*(ок|окей|ok|okay|вижу|да)[.!]*\s*$", re.I)
 
 
-@router.callback_query(F.data == CALLBACK_ACK)
 async def on_ack_button(callback: CallbackQuery, controller: Controller) -> None:
     acked = await controller.ack()
     await callback.answer("Принято" if acked else "Тревоги нет")
@@ -24,12 +21,19 @@ async def on_ack_button(callback: CallbackQuery, controller: Controller) -> None
         await callback.message.answer(texts.ACKED)
 
 
-@router.callback_query(F.data == CALLBACK_MANUAL_DONE)
 async def on_manual_done(callback: CallbackQuery, controller: Controller) -> None:
     controller.manual_done()
     await callback.answer(texts.MANUAL_THANKS)
 
 
-@router.message(F.text.regexp(OK_WORDS))
 async def on_ok_word(message: Message, controller: Controller) -> None:
     await message.answer(texts.ACKED if await controller.ack() else texts.NOT_ACKED)
+
+
+def build_router() -> Router:
+    """Новый роутер на каждый Dispatcher: один роутер нельзя подключить к двум."""
+    router = Router(name="ack")
+    router.callback_query.register(on_ack_button, F.data == CALLBACK_ACK)
+    router.callback_query.register(on_manual_done, F.data == CALLBACK_MANUAL_DONE)
+    router.message.register(on_ok_word, F.text.regexp(OK_WORDS))
+    return router
