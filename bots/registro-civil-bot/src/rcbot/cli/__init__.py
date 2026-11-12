@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable, Sequence
 
@@ -10,6 +11,8 @@ from pydantic import ValidationError
 
 from rcbot import __version__
 from rcbot.config.secrets import SecretMissing
+
+logger = logging.getLogger(__name__)
 
 Handler = Callable[[argparse.Namespace], int]
 
@@ -66,11 +69,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _handlers()[args.command](args)
     except SecretMissing as error:
-        print(f"Ошибка: {error}", file=sys.stderr)
+        _fail(f"Ошибка: {error}")
         return 2
     except ValidationError as error:
         problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors())
-        print(f"Ошибка настроек в .env: {problems}", file=sys.stderr)
+        _fail(f"Ошибка настроек в .env: {problems}")
         return 2
     except KeyboardInterrupt:
         return 130
+    except Exception as error:
+        # Под pythonw.exe (Планировщик) консоли нет: причина падения должна остаться в логе
+        logger.critical("необработанная ошибка в команде %s", args.command, exc_info=True)
+        print(
+            f"Неожиданная ошибка {type(error).__name__}: подробности в logs/rcbot.log",
+            file=sys.stderr,
+        )
+        return 1
+
+
+def _fail(message: str) -> None:
+    logger.error(message)
+    print(message, file=sys.stderr)
