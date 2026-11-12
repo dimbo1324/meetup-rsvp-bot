@@ -473,8 +473,9 @@ class Stand:
         await self.quiesce()
 
     async def next_check(self) -> None:
-        """Дойти до ближайшей запланированной проверки и дождаться её конца."""
-        wait = max(0.0, self.loop.next_due - self.clock.monotonic())
+        """Дойти до ближайшей возможной проверки (срок и минимум между проверками)."""
+        due = max(self.loop.next_due, self.loop._not_before)
+        wait = max(0.0, due - self.clock.monotonic())
         await self.advance(wait)
 
     async def checks(self, count: int) -> None:
