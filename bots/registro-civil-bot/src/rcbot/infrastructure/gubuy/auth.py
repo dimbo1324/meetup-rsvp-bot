@@ -78,9 +78,11 @@ class PlaywrightAuthenticator:
         self._doc_type = doc_type
         self._credentials = credentials
         self._options = options
+        self._step = ""
 
     async def login(self) -> list[SessionCookie]:
         creds = self._credentials()
+        self._step = "открытие страницы входа"
         try:
             async with temporary_context(self._options) as context:
                 page = await context.new_page()
@@ -89,11 +91,16 @@ class PlaywrightAuthenticator:
                     page.url, await page.content(), response.status if response else None
                 )
                 await self._fill_identity(page, creds)
+                self._step = "возврат на bpmgob"
                 await page.wait_for_url(is_bpmgob_session_url, timeout=RETURN_TIMEOUT_MS)
                 cookies = await session_cookies(context, [BPMGOB_HOST])
         except PlaywrightError as error:
             # Текст ошибки Playwright может содержать адрес и селектор, но не введённые значения
-            raise SiteUnavailable(f"вход не завершился: {type(error).__name__}") from None
+            # Название шага — единственное, что видно в журнале при сбое: на живом сайте именно
+            # по нему станет ясно, где вход застрял
+            raise SiteUnavailable(
+                f"вход не завершился на шаге «{self._step}»: {type(error).__name__}"
+            ) from None
         if not cookies:
             raise LoginFailed("после входа нет cookies сессии bpmgob")
         logger.info("вход выполнен: получено %d cookies сессии", len(cookies))
@@ -105,12 +112,17 @@ class PlaywrightAuthenticator:
             raise RateLimited("страница входа заблокирована защитным шлюзом")
 
     async def _fill_identity(self, page: Page, creds: Credentials) -> None:
+        self._step = "переход на ID Uruguay"
         if LOGIN_HOST not in page.url:
             await page.wait_for_url(re.compile(re.escape(LOGIN_HOST)), timeout=STEP_TIMEOUT_MS)
+        self._step = "выбор «Usuario Gub.uy»"
         await _click_text(page, re.compile(r"Usuario\s+Gub\.uy", re.I))
+        self._step = "«No tengo documento uruguayo»"
         await _click_text(page, re.compile(r"No tengo documento uruguayo", re.I))
+        self._step = "страна и тип документа"
         await _choose(page, re.compile(r"Pa[ií]s emisor", re.I), self._doc_country)
         await _choose(page, re.compile(r"Tipo de documento", re.I), self._doc_type)
+        self._step = "номер документа"
         number = await _first_visible(
             page.get_by_label(re.compile(r"N[úu]mero", re.I)),
             page.get_by_role("textbox", name=re.compile(r"N[úu]mero", re.I)),
@@ -118,6 +130,7 @@ class PlaywrightAuthenticator:
         await number.fill(creds.doc_number.get_secret_value())
         await _click_text(page, re.compile(r"^\s*Continuar\s*$", re.I))
 
+        self._step = "пароль"
         password = await _first_visible(
             page.get_by_label(re.compile(r"contrase[ñn]a", re.I)),
             page.locator("input[type=password]"),

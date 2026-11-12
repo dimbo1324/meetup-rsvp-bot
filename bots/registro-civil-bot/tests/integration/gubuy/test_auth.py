@@ -222,7 +222,8 @@ async def test_после_входа_нет_cookies_это_login_failed(login: L
 
 async def test_пароль_не_показан_это_site_unavailable_без_утечки(login: Login) -> None:
     login.site.page(LOGIN_ID_RETURN, id_uruguay_page(password_hidden=True))
-    with pytest.raises(SiteUnavailable, match="вход не завершился") as info:
+    # В сообщении названо место, где вход застрял: по нему на живом сайте ясно, что чинить
+    with pytest.raises(SiteUnavailable, match="вход не завершился на шаге «пароль»") as info:
         await login.authenticator().login()
     assert_clean_error(info.value)
     assert login.posted == []
