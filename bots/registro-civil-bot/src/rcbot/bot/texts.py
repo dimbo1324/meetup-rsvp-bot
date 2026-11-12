@@ -41,6 +41,7 @@ PAUSED_FOREVER = "Пауза до команды /resume."
 RESUMED = "Опрос продолжен."
 RELOGIN_OK = "Вход выполнен."
 RELOGIN_FAILED = "Вход не удался: {error}"
+MENU_STALE = "Меню устарело: откройте заново /menu"
 
 
 def human_size(size: int | None) -> str:

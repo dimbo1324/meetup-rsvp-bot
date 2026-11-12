@@ -20,6 +20,7 @@ from rcbot.domain.models import Channel
 
 INTERVALS = ("20", "30", "45", "60", "120", "300")
 MONTHS = ("3", "6", "9", "12")
+CHANNEL_IDS = frozenset(c.value for c in Channel)
 PAUSES = (("30", "30 мин"), ("60", "1 ч"), ("180", "3 ч"), ("0", "до /resume"))
 
 
@@ -70,16 +71,27 @@ async def _maintenance_getter(dialog_manager: DialogManager, **_: Any) -> dict[s
     return {"size": texts.human_size(view.folder_bytes), "errors": errors}
 
 
+async def _stale(callback: CallbackQuery) -> None:
+    """Значения в кнопке нет среди готовых: кнопка от старой версии меню или подделана."""
+    await callback.answer(texts.MENU_STALE)
+
+
 async def _on_interval(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in INTERVALS:
+        return await _stale(callback)
     value = await _controller(manager).set_interval(float(item))
     await callback.answer(f"Интервал {value:.0f} с")
 
 
 async def _on_months(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in MONTHS:
+        return await _stale(callback)
     await callback.answer(f"Месяцев вперёд: {await _controller(manager).set_months(int(item))}")
 
 
 async def _on_pause(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in {minutes for minutes, _label in PAUSES}:
+        return await _stale(callback)
     await _controller(manager).pause(int(item) or None)
     await callback.answer("Пауза включена")
 
@@ -90,11 +102,15 @@ async def _on_resume(callback: CallbackQuery, _: Button, manager: DialogManager)
 
 
 async def _on_toggle(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in CHANNEL_IDS:
+        return await _stale(callback)
     enabled = await _controller(manager).toggle_channel(Channel(item))
     await callback.answer("Канал включён" if enabled else "Канал выключен")
 
 
 async def _on_test(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
+    if item not in CHANNEL_IDS:
+        return await _stale(callback)
     results = await _controller(manager).test(Channel(item))
     await callback.answer(texts.deliveries_text(results)[:200], show_alert=True)
 
