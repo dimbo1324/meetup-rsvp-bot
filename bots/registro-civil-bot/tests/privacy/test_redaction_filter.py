@@ -150,7 +150,8 @@ def test_шумные_библиотеки_не_имеют_своих_обраб
     setup_logging(tmp_path / "x.log", level="DEBUG", console=False)
     for name in ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "playwright"):
         lib = logging.getLogger(name)
-        assert lib.handlers == []
+        # NullHandler библиотеки (хорошая практика) ничего не выводит; настоящих обработчиков нет
+        assert [h for h in lib.handlers if not isinstance(h, logging.NullHandler)] == []
         assert lib.propagate is True
 
 

@@ -186,6 +186,8 @@ JSON_VALUES = st.lists(dirty_text | st.text(max_size=30), min_size=1, max_size=5
 JSON_KEYS = st.lists(st.sampled_from(["token", "Cookie", "password", "msg", "a b", "пароль"]))
 
 
+@example(values=["\nuser@example.com"], keys=[])
+@example(values=["x\tivan@example.com y"], keys=["token"])
 @given(values=JSON_VALUES, keys=JSON_KEYS)
 @settings(max_examples=150)
 def test_json_после_вырезания_остаётся_json_и_без_секретов(

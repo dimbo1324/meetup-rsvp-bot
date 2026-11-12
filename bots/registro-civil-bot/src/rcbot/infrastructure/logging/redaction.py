@@ -59,6 +59,18 @@ def _mask_value(match: re.Match[str]) -> str:
     return f"{head}{key_quote}{MASK}{key_quote}" if key_quote else f"{head}{MASK}"
 
 
+_JSON_ESCAPE = re.compile(r"u[0-9a-fA-F]{4}|.", re.DOTALL)
+
+
+def _mask_email(match: re.Match[str]) -> str:
+    # Адрес сразу после обратной косой черты — это JSON-экранирование (перенос строки, \uXXXX)
+    # вместе с началом адреса: экранирование остаётся целым, иначе маска ломает JSON
+    start = match.start()
+    if start and match.string[start - 1] == "\\" and (esc := _JSON_ESCAPE.match(match.group())):
+        return esc.group() + MASK
+    return MASK
+
+
 _PATTERNS: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], ...] = (
     (_HEADER, _mask_value),
     (_KEY_VALUE, _mask_value),
@@ -66,7 +78,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str | Callable[[re.Match[str]], str]], .
     # Хвостовой `\b` нельзя: токен может кончаться на «-», и последний знак остался бы в тексте
     (re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}"), MASK),
     # Адрес почты; начало только с границы слова — иначе длинная строка без «@» даёт O(n²)
-    (re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"), MASK),
+    (re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"), _mask_email),
     # Телефон с «+» и кодом страны: от 8 цифр, между ними пробелы, скобки, дефисы, точки
     (re.compile(r"\+\d(?:[\s().-]{0,2}\d){7,}"), MASK),
     # Длинные номера (документы, chat_id): 9 и больше цифр подряд. Не задеваются дробная часть
