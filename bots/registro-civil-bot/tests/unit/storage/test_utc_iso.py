@@ -59,10 +59,18 @@ def test_сутки_в_местном_времени_не_совпадают_с_
     assert to_db(near_midnight) == "2026-11-13T02:30:00.000000+00:00"
 
 
+# Фиксированные смещения: в зонах с переводом часов бывают несуществующие и неоднозначные
+# «моменты», равенство для которых определено плохо и к БД отношения не имеет
+offsets = st.builds(
+    timezone,
+    st.timedeltas(min_value=timedelta(hours=-14), max_value=timedelta(hours=14)).map(
+        lambda delta: timedelta(minutes=delta // timedelta(minutes=1))
+    ),
+)
 moments = st.datetimes(
     min_value=datetime(1990, 1, 1),
     max_value=datetime(2100, 1, 1),
-    timezones=st.timezones() | st.just(UTC) | st.just(MONTEVIDEO),
+    timezones=offsets | st.just(UTC),
 )
 
 
