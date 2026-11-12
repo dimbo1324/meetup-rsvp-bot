@@ -28,7 +28,10 @@ from rcbot.infrastructure.gubuy.dom_source import DomSource
 from rcbot.infrastructure.journal.files import FileJournal
 from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
 
-STAGE_URL = "https://bpmgob.mec.gub.uy/etapas/ejecutar/4455667/1"
+# Условные номера из одной повторяющейся цифры: так их не принять за настоящие (решение R1)
+STAGE_ID = "9" * 7
+TRAMITE_ID = "TRAM-" + "8" * 6
+STAGE_URL = f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE_ID}/1"
 
 
 def tables(paths: Paths) -> set[str]:
@@ -61,25 +64,27 @@ def test_build_core_не_перезаписывает_заданный_путь_
 
 
 def test_логи_идут_в_файл_и_проходят_через_фильтр_секретов(paths: Paths) -> None:
-    write_env(paths, agenda_url=STAGE_URL, tramite_id="TRAM-778899")
+    write_env(paths, agenda_url=STAGE_URL, tramite_id=TRAMITE_ID)
     core = build_core(console=False)
 
-    logging.getLogger("rcbot.test").warning("заявка TRAM-778899, этап 4455667, цель %s", STAGE_URL)
+    logging.getLogger("rcbot.test").warning(
+        f"заявка {TRAMITE_ID}, этап {STAGE_ID}, цель %s", STAGE_URL
+    )
     for handler in logging.getLogger().handlers:
         handler.flush()
 
     text = paths.log_file.read_text(encoding="utf-8")
-    assert "TRAM-778899" not in text
-    assert "4455667" not in text
+    assert TRAMITE_ID not in text
+    assert STAGE_ID not in text
     assert f"заявка {MASK}, этап {MASK}" in text
-    assert core.settings.tramite_id == "TRAM-778899"
+    assert core.settings.tramite_id == TRAMITE_ID
 
 
 def test_фильтр_получает_номер_заявки_и_номер_этапа_из_настроек(paths: Paths) -> None:
-    write_env(paths, agenda_url=STAGE_URL, tramite_id="TRAM-778899")
+    write_env(paths, agenda_url=STAGE_URL, tramite_id=TRAMITE_ID)
     build_core(console=False)
-    assert REDACTOR.redact("TRAM-778899") == MASK
-    assert REDACTOR.redact("этап 4455667") == f"этап {MASK}"
+    assert REDACTOR.redact(TRAMITE_ID) == MASK
+    assert REDACTOR.redact(f"этап {STAGE_ID}") == f"этап {MASK}"
 
 
 def test_адрес_с_меткой_вместо_этапа_ничего_лишнего_в_фильтр_не_кладёт(paths: Paths) -> None:
@@ -93,9 +98,9 @@ def test_адрес_с_меткой_вместо_этапа_ничего_лиш�
 @pytest.mark.parametrize(
     ("url", "stage"),
     [
-        ("https://bpmgob.mec.gub.uy/etapas/ejecutar/4455667/1", "4455667"),
+        (STAGE_URL, STAGE_ID),
         ("https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1", "1"),
-        ("https://bpmgob.mec.gub.uy/etapas/ejecutar/abc/", ""),
+        ("https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ABC/", ""),
         ("", ""),
     ],
 )

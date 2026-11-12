@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 from rcbot.application.ports import SessionCookie
+from rcbot.infrastructure.logging.redaction import REDACTOR
 
 NAVIGATION_TIMEOUT_MS = 45_000
 
@@ -51,6 +52,9 @@ def to_playwright(cookies: Sequence[SessionCookie]) -> list[dict[str, object]]:
 
 async def session_cookies(context: BrowserContext, hosts: Sequence[str]) -> list[SessionCookie]:
     cookies = await context.cookies([f"https://{host}/" for host in hosts])
+    # Значение cookie регистрируется в фильтре: «голое» эхо в ответе, исключении или JSON
+    # (шаблоны знают только имена simple_bpm_*) иначе попало бы в лог, карантин и журнал
+    REDACTOR.register_many(str(c.get("value", "")) for c in cookies if c.get("name"))
     return [
         SessionCookie(
             name=str(c.get("name", "")),

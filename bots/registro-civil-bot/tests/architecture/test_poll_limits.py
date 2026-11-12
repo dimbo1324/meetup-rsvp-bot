@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import random
 from datetime import timedelta
 from pathlib import Path
@@ -41,13 +43,14 @@ from rcbot.config.settings import (
 )
 from rcbot.domain.detector import Detector
 from rcbot.domain.errors import ReloginBudgetExceeded, SessionExpired
-from rcbot.domain.models import SourceKind
+from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
 from tests.fakes import (
     T0,
     TARGET,
     FakeAuthenticator,
     FakeClock,
     FakeSource,
+    ManualClock,
     MemoryEventLog,
     MemoryIncidentRepository,
     MemoryKV,
@@ -98,11 +101,6 @@ def test_settings_принимает_ровно_десять_и_ограничи
     assert Settings().poll_interval_sec == 20
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: Settings принимает RCBOT_POLL_INTERVAL_SEC=nan (сравнение nan < 10 ложно, "
-    "config/settings.py:~91); интервал становится nan. Ожидается: отклонить не конечные значения",
-)
 def test_settings_отклоняет_nan_и_бесконечность(monkeypatch: pytest.MonkeyPatch) -> None:
     for text in ("nan", "-inf"):
         monkeypatch.setenv("RCBOT_POLL_INTERVAL_SEC", text)
@@ -141,8 +139,9 @@ def make_loop(
     auth: FakeAuthenticator | None = None,
     kv: MemoryKV | None = None,
     ladder_age: timedelta = timedelta(hours=40),
-) -> tuple[PollLoop, FakeClock, MemoryKV, SessionManager]:
-    clock = FakeClock()
+    clock: FakeClock | ManualClock | None = None,
+) -> tuple[PollLoop, FakeClock | ManualClock, MemoryKV, SessionManager]:
+    clock = clock or FakeClock()
     kv = kv or MemoryKV()
     runtime = RuntimeSettings(base, 6, T0 - ladder_age)
     session = SessionManager(auth or FakeAuthenticator(), clock, 6)
@@ -209,12 +208,6 @@ async def test_controller_принимает_ровно_десять() -> None:
     assert await make_controller(loop, clock, session).set_interval(10.0) == 10.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: Controller.set_interval(nan) и /interval nan проходят проверку (nan < 10 "
-    "ложно): интервал становится nan и показывается владельцу как «nan с» (control.py:~108). "
-    "Ожидается IntervalTooSmall для не конечных значений",
-)
 async def test_controller_отклоняет_nan() -> None:
     loop, clock, _, session = make_loop()
     with pytest.raises(IntervalTooSmall):
@@ -228,12 +221,6 @@ async def test_повреждённое_малое_значение_в_kv_огр
     assert settings.base_interval_sec == MIN_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: RuntimeStore.load падает на мусоре в kv_settings (float('abc'), "
-    "fromisoformat, Channel('x')): бот не стартует, Планировщик перезапускает его по кругу "
-    "(runtime.py:~66-76). Ожидается: испорченный ключ заменяется значением по умолчанию",
-)
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -293,12 +280,6 @@ def test_режим_dom_не_чаще_раза_в_минуту_без_разбр
     assert loop._schedule_next() >= MIN_DOM_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: poll_loop._schedule_next применяет нижнюю границу MIN (10 с) после разброса, "
-    "а границу DOM (60 с) — до него: при jitter=0.10 (значение по умолчанию) проверки DomSource "
-    "идут через 54–66 с, при 0.5 — через 30 с, SPEC 2.3 требует не ниже 60 с",
-)
 @pytest.mark.parametrize("jitter", [0.1, 0.5])
 def test_режим_dom_не_чаще_раза_в_минуту_и_с_разбросом(jitter: float) -> None:
     loop, clock, _, _ = make_loop(kind=SourceKind.DOM, base=20.0, jitter=jitter)
@@ -306,16 +287,31 @@ def test_режим_dom_не_чаще_раза_в_минуту_и_с_разбр�
     assert loop._schedule_next() >= MIN_DOM_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: после успешного входа poll_loop._reauth возвращает задержку 0 с и следующая "
-    "проверка идёт сразу (poll_loop.py:~310). Если сайт снова отвечает «сессия истекла», запросы "
-    "идут подряд (до 6 входов в час) и пол 10 с не соблюдается. Ожидается задержка ≥ 10 с",
-)
-async def test_после_входа_следующая_проверка_не_раньше_десяти_секунд() -> None:
-    source = FakeSource([SessionExpired("страница входа")])
-    loop, _, _, _ = make_loop(source=source)
-    assert await loop._tick() >= MIN_POLL_INTERVAL_SEC
+@pytest.mark.parametrize(("kind", "minimum"), [(SourceKind.API, 10.0), (SourceKind.DOM, 60.0)])
+async def test_после_входа_проверки_идут_не_чаще_минимума_источника(
+    kind: SourceKind, minimum: float
+) -> None:
+    """Сайт всё время отвечает «сессия истекла», вход мгновенный: запросы не должны идти подряд."""
+    clock = ManualClock()
+    stamps: list[float] = []
+
+    class Expired(FakeSource):
+        async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
+            stamps.append(clock.monotonic())
+            raise SessionExpired("страница входа")
+
+    loop, _, _, _ = make_loop(kind=kind, source=Expired(kind=kind), clock=clock)
+    task = asyncio.create_task(loop.run())
+    try:
+        for _ in range(60):
+            await clock.advance(20)
+    finally:
+        loop.stop()
+        await clock.advance(1000)
+        await asyncio.wait_for(task, 5)
+    gaps = [b - a for a, b in itertools.pairwise(stamps)]
+    assert len(stamps) >= 3
+    assert min(gaps) >= minimum - 1e-6
 
 
 # --- не больше 6 входов в час ---

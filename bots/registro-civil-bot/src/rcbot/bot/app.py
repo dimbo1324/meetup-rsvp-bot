@@ -47,8 +47,13 @@ def build_dispatcher(controller: Controller, tz: ZoneInfo, owner_chat_id: int) -
     dispatcher = Dispatcher(controller=controller, tz=tz)
     owner_only = OwnerOnlyMiddleware(owner_chat_id)
     # Фильтр стоит снаружи: чужое обновление не доходит ни до команд, ни до меню
-    dispatcher.message.outer_middleware(owner_only)
-    dispatcher.callback_query.outer_middleware(owner_only)
+    # aiogram-dialog регистрирует обработчики и для business_message: фильтр нужен и там
+    for observer in (
+        dispatcher.message,
+        dispatcher.business_message,
+        dispatcher.callback_query,
+    ):
+        observer.outer_middleware(owner_only)
     dispatcher.include_router(ack.build_router())
     dispatcher.include_router(commands.build_router())
     dispatcher.include_router(build_menu_dialog())

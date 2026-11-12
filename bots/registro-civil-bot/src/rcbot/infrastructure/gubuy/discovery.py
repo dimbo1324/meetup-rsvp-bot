@@ -24,11 +24,24 @@ from playwright.async_api import Page, Response, async_playwright
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch
 from rcbot.infrastructure.gubuy.pages import BPMGOB_HOST, is_bpmgob_session_url
 from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS, month_view
-from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
+from rcbot.infrastructure.logging.redaction import MASK, REDACTOR, SECRET_KEY_NAMES
 
 logger = logging.getLogger(__name__)
 
-DROP_HEADERS = {"cookie", "set-cookie", "authorization", "proxy-authorization"}
+# Заголовки сессии, авторизации и защиты от подделки запросов в дамп не попадают вовсе
+DROP_HEADERS = {
+    "cookie",
+    "set-cookie",
+    "authorization",
+    "proxy-authorization",
+    "x-csrf-token",
+    "x-xsrf-token",
+    "x-api-key",
+}
+# То же по шаблону: вариации имён (`X-CSRFToken`, `Api-Key`) не должны проскочить
+_DROP_PATTERN = re.compile(r"(?i)cookie|authoriz|csrf|xsrf|api[-_]?key|token")
+# Ключи JSON, значения которых секретны (CSRF нужен для разбора запроса, но не его значение)
+SECRET_KEYS = SECRET_KEY_NAMES
 PERSONAL_KEYS = re.compile(
     r"(?i)(nombre|apellido|name|mail|correo|tel[eé]fono|phone|celular|documento|"
     r"c[eé]dula|pasaporte|passport|usuario|user|direcci[oó]n|address)"
@@ -40,14 +53,22 @@ API_MARKER = "agenda_sae_api_disponibilidades"
 
 
 def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
-    return {k: REDACTOR.redact(v) for k, v in headers.items() if k.lower() not in DROP_HEADERS}
+    return {
+        k: REDACTOR.redact(v)
+        for k, v in headers.items()
+        if k.lower() not in DROP_HEADERS and not _DROP_PATTERN.search(k)
+    }
 
 
 def _mask_json(value: Any) -> Any:
     if isinstance(value, dict):
         return {
             # Сам ключ тоже может быть личным («адрес почты → данные»): прогоняем и его
-            REDACTOR.redact(str(k)): (MASK if PERSONAL_KEYS.search(str(k)) else _mask_json(v))
+            REDACTOR.redact(str(k)): (
+                MASK
+                if PERSONAL_KEYS.search(str(k)) or SECRET_KEYS.search(str(k))
+                else _mask_json(v)
+            )
             for k, v in value.items()
         }
     if isinstance(value, list):
@@ -172,7 +193,9 @@ class DiscoveryRecorder:
                 page = await context.new_page()
                 page.on("response", self._on_response)
                 await page.goto(self._login_url, wait_until="domcontentloaded")
-                print("Войдите в аккаунт в открывшемся окне. Бот ждёт и ничего не вводит сам…")
+                logger.info(
+                    "Войдите в аккаунт в открывшемся окне. Бот ждёт и ничего не вводит сам…"
+                )
                 await page.wait_for_url(is_bpmgob_session_url, timeout=wait_login_sec * 1000)
                 await page.goto(self._agenda_url, wait_until="networkidle")
                 await self._walk_calendar(page)

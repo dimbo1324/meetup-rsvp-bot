@@ -302,16 +302,18 @@ async def _simulate(
     alerts: AlertOrchestrator, clock_sleep: Callable[[float], Awaitable[None]], wait_sec: int
 ) -> int:
     """Тестовая тревога со всеми повторами; успех — если владелец нажал «Вижу» до таймаута."""
-    print(f"Тестовая тревога отправлена. Нажмите «✅ Вижу» в Telegram (жду до {wait_sec} с).")
+    logger.info(
+        "Тестовая тревога отправлена. Нажмите «✅ Вижу» в Telegram (жду до %d с).", wait_sec
+    )
     await alerts.simulate()
     waited = 0
     while alerts.repeating() and waited < wait_sec:
         await clock_sleep(1)
         waited += 1
     if alerts.repeating():
-        print("«Вижу» не нажата: повторы остановлены по таймауту.")
+        logger.warning("«Вижу» не нажата: повторы остановлены по таймауту.")
         return 1
-    print("«Вижу» получено: повторы во всех каналах остановлены.")
+    logger.info("«Вижу» получено: повторы во всех каналах остановлены.")
     return 0
 
 

@@ -24,7 +24,8 @@ NEAR_NUMBER = re.compile(
     rf"{WORDS}[^\n\d]{{0,30}}\d{{6,}}|\d{{6,}}[^\n\d]{{0,30}}{WORDS}", re.IGNORECASE
 )
 # Форма токена Telegram и закрытого ключа: настоящему секрету в репозитории не место
-TOKEN_SHAPE = re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}")
+# Явная подделка помечается словом «synthetic» в значении: допуск по маркеру, а не «всё подряд»
+TOKEN_SHAPE = re.compile(r"\b\d{8,10}:(?![A-Za-z0-9_-]*(?i:synthetic))[A-Za-z0-9_-]{30,}")
 PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 
 CHECKS = {
@@ -151,6 +152,7 @@ def test_шаблоны_ловят_плохие_файлы(label: str, text: str
         "Заявка стоит на шаге 2, этапов 3",
         "RCBOT_TRAMITE_ID=<НОМЕР_ЗАЯВКИ>",
         "бот 123456:ABC",
+        "TOKEN = " + "1" * 9 + ":AAH-synthetic-token-abcdefghijklmnopqrstuvwxyz0123",
     ],
 )
 def test_шаблоны_не_ругаются_на_метки_и_короткие_числа(text: str) -> None:

@@ -71,8 +71,11 @@ class SafeHttp:
         return self.session.cookie_jar
 
     def check(self, url: str) -> None:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+        except ValueError:  # «https://[x»: urllib отказывает разбором, а не нашим исключением
+            raise HostNotAllowed("адрес не разобран, запрос не разрешён") from None
         if parsed.scheme != "https" or host not in self._allowed:
             raise HostNotAllowed(f"запрос к {parsed.scheme}://{host} не разрешён")
         # Соединение откроет aiohttp (yarl), а список проверен по urllib: адрес, который они

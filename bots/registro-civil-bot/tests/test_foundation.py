@@ -55,6 +55,7 @@ def test_окружение_изолировано(bot_home: Path, tmp_path: Pat
         not in (
             "RCBOT_HOME",
             "RCBOT_JOURNAL_DIR",
+            "RCBOT_JOURNAL_BACKGROUND",
         )
     ]
     assert os.environ["RCBOT_JOURNAL_DIR"].startswith(str(tmp_path))

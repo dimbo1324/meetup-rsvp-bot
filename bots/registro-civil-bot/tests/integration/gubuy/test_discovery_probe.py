@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -109,10 +110,11 @@ def recorder(tmp_path: Path, months: int = 3) -> DiscoveryRecorder:
 
 
 async def test_сквозной_прогон_записывает_только_xhr_и_скрипт_календаря(
-    site: FakeSite, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    site: FakeSite, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     serve_login_and_agenda(site)
-    result = await recorder(tmp_path).run(AT, wait_login_sec=15)
+    with caplog.at_level(logging.INFO):
+        result = await recorder(tmp_path).run(AT, wait_login_sec=15)
 
     assert result.path == tmp_path / "discovery" / "discovery-20261112T150405.json"
     urls = [r["url"] for r in result.records]
@@ -125,7 +127,7 @@ async def test_сквозной_прогон_записывает_только_x
     )
     assert all(ID_HOST not in u for u in urls)
     assert {r["resource"] for r in result.records} <= {"xhr", "fetch", "script"}
-    assert "Войдите в аккаунт" in capsys.readouterr().out
+    assert "Войдите в аккаунт" in caplog.text
 
 
 async def test_разведка_листает_месяцы_только_стрелкой(site: FakeSite, tmp_path: Path) -> None:

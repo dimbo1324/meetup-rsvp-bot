@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -113,7 +114,10 @@ async def test_цикл_опроса_работает_и_при_истекшей
     rig = build_rig(monkeypatch.setattr, script=[SessionExpired("нет входа"), frozenset()])
     async with running(rig):
         await rig.started()
-        await rig.until(lambda: rig.auth.logins == 1 and len(rig.dom.calls) >= 2, "вход и опрос")
+        await rig.until(lambda: rig.auth.logins == 1, "вход")
+        # DomSource не чаще раза в 60 с (SPEC 2.3): проверка после входа ждёт минимум
+        await rig.clock.advance(61)
+        await rig.until(lambda: len(rig.dom.calls) >= 2, "повторный опрос после входа")
         # cookies нового входа переданы источнику: подписка источника на сессию собрана
         assert rig.dom.cookie_history == [rig.auth.cookies]
         assert rig.dom.calls[0].name == "registro-civil"
@@ -418,8 +422,9 @@ async def test_зависший_опрос_перезапускается_мон
 
 
 async def test_simulate_успех_после_вижу_код_0_и_повторы_остановлены(
-    rig: Rig, capsys: pytest.CaptureFixture[str]
+    rig: Rig, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO)
     deliveries: list[Any] = []
     async with running(rig, simulate_wait_sec=30, on_delivery=deliveries.append) as task:
         await rig.until(lambda: rig.alerts is not None and rig.alerts.repeating(), "повторы")
@@ -430,23 +435,23 @@ async def test_simulate_успех_после_вижу_код_0_и_повтор�
         await rig.clock.advance(1)
         assert await asyncio.wait_for(task, 10) == 0
 
-    out = capsys.readouterr().out
-    assert "Тестовая тревога отправлена" in out
-    assert "«Вижу» получено" in out
+    assert "Тестовая тревога отправлена" in caplog.text
+    assert "«Вижу» получено" in caplog.text
     assert rig.alerts is not None and not rig.alerts.repeating()
     assert is_subsequence(["alerts.close", "source.close", "storage.close"], rig.order)
 
 
 async def test_simulate_без_вижу_по_таймауту_код_1_и_повторы_останавливаются(
-    rig: Rig, capsys: pytest.CaptureFixture[str]
+    rig: Rig, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO)
     async with running(rig, simulate_wait_sec=3) as task:
         await rig.until(lambda: rig.alerts is not None and rig.alerts.repeating(), "повторы")
         for _ in range(4):
             await rig.clock.advance(1)
         assert await asyncio.wait_for(task, 10) == 1
 
-    assert "«Вижу» не нажата: повторы остановлены по таймауту." in capsys.readouterr().out
+    assert "«Вижу» не нажата: повторы остановлены по таймауту." in caplog.text
     assert rig.alerts is not None and not rig.alerts.repeating()
     assert "storage.close" in rig.order
 

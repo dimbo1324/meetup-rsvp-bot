@@ -16,8 +16,9 @@ from rcbot.domain.models import Alert, AlertAction, Channel, DeliveryResult
 
 logger = logging.getLogger(__name__)
 
-CALLBACK_ACK = "ack"
-CALLBACK_MANUAL_DONE = "manual_done"
+# callback_data кнопок — значения действий домена: на них же настроены обработчики слоя bot
+CALLBACK_ACK = AlertAction.ACK.value
+CALLBACK_MANUAL_DONE = AlertAction.MANUAL_DONE.value
 REQUEST_TIMEOUT_SEC = 10
 MAX_TEXT = 4096
 

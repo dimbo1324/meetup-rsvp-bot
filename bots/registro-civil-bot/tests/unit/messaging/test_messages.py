@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import string
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -199,8 +200,8 @@ def test_в_push_и_звонке_нет_ссылки_номера_заявки_�
 
 
 @given(
-    tramite=st.text("0123456789", min_size=6, max_size=12).map("ZAYAVKA-".__add__),
-    etapa=st.text("0123456789", min_size=6, max_size=12).map("ETAPA-".__add__),
+    tramite=st.text(string.digits, min_size=6, max_size=12).map("ZAYAVKA-".__add__),
+    etapa=st.text(string.digits, min_size=6, max_size=12).map("ETAPA-".__add__),
     days=st.sets(st.integers(1, 28), min_size=1, max_size=10),
     with_time=st.booleans(),
 )

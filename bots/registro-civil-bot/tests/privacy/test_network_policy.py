@@ -63,26 +63,26 @@ def test_http_в_настройках_отклоняется() -> None:
                 Settings()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: Settings.allowed_hosts добавляет хост RCBOT_API_URL без проверки: API "
-    "календаря на чужом хосте открывает его для запросов (SPEC 2.6 разрешает bpmgob/mi.iduruguay "
-    "и «сторожа»). Ожидается валидатор: api_url только на хосте из GUBUY_HOSTS",
-)
-def test_api_url_на_чужом_хосте_не_расширяет_список(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RCBOT_API_URL", "https://evil.example/agenda_sae_api_disponibilidades")
-    assert "evil.example" not in Settings().allowed_hosts()
+def test_api_url_на_чужом_хосте_отклоняется_и_список_не_расширяется(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for url in (
+        "https://evil.example/agenda_sae_api_disponibilidades",
+        "https://bpmgob.mec.gub.uy.evil.example/x",
+        "https://sub.bpmgob.mec.gub.uy/x",
+    ):
+        monkeypatch.setenv("RCBOT_API_URL", url)
+        with pytest.raises(ValueError, match=r"bpmgob\.mec\.gub\.uy"):
+            Settings()
+    monkeypatch.setenv(
+        "RCBOT_API_URL", "https://bpmgob.mec.gub.uy/api/agenda_sae_api_disponibilidades"
+    )
+    assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS)
 
 
 # --- проверка адреса ---
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: SafeHttp.check пропускает ValueError из urlparse (например, «https://[x») "
-    "наружу вместо HostNotAllowed: цикл опроса ловит только RcbotError. Ожидается перехват "
-    "ValueError и HostNotAllowed (client.py:~49)",
-)
 def test_битый_адрес_даёт_hostnotallowed_а_не_valueerror() -> None:
     with pytest.raises(HostNotAllowed):
         SafeHttp({"ntfy.sh"}, 5).check("https://[ntfy.sh/")
@@ -235,22 +235,14 @@ async def test_с_доверенным_центром_запрос_проход�
         await client.close()
 
 
-HOLE = pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: SafeHttp.request делает kwargs.setdefault('ssl', ...), поэтому вызов "
-    "request(..., ssl=False) отключает проверку сертификата (client.py:~57). Инвариант 8: TLS "
-    "проверяется всегда. Ожидается: ssl из kwargs отклоняется или перезаписывается",
-)
-
-
-@pytest.mark.parametrize("override", [pytest.param(False, marks=HOLE), None])
-async def test_вызов_с_ssl_false_не_отключает_проверку_сертификата(
+@pytest.mark.parametrize("override", [False, None])
+async def test_вызов_с_ssl_false_отклоняется_и_сети_не_касается(
     tls_server: LocalTlsServer, override: bool | None
 ) -> None:
     tls_server.respond("GET", "/x", text="ok")
     client = SafeHttp({"127.0.0.1"}, 5)
     try:
-        with pytest.raises((aiohttp.ClientError, TypeError, ValueError)):
+        with pytest.raises(TypeError, match="ssl"):
             async with client.request("GET", tls_server.url("/x"), ssl=override):
                 pass
     finally:
@@ -353,7 +345,7 @@ def test_ни_один_вызов_не_следует_за_переадреса�
         f"{path.relative_to(SRC)}:{number}"
         for path in py_files()
         for number, line in _code_lines(path)
-        if re.search(r"allow_redirects\s*=\s*True|max_redirects", line)
+        if re.search(r"allow_redirects\s*=\s*True|max_redirects\s*=", line)
     ]
     assert found == []
 

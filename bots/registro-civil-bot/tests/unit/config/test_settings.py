@@ -112,7 +112,9 @@ def test_необязательные_адреса_могут_быть_пуст�
     "field", ["agenda_url", "login_url", "ntfy_server", "sae_url", "api_url", "watchdog_url"]
 )
 def test_схема_https_в_любом_регистре_допустима(field: str) -> None:
-    assert getattr(Settings(**{field: "HTTPS://host.example/a"}), field)
+    # API календаря допустим только на bpmgob (SPEC 2.6): для него проверяется регистр схемы
+    host = "bpmgob.mec.gub.uy" if field == "api_url" else "host.example"
+    assert getattr(Settings(**{field: f"HTTPS://{host}/a"}), field)
 
 
 @pytest.mark.parametrize("field", ["agenda_url", "login_url", "ntfy_server", "sae_url", "api_url"])
@@ -274,9 +276,18 @@ def test_хост_сторожа_добавляется_только_когда_
     assert not any(":" in h or "/" in h for h in hosts)
 
 
-def test_хост_api_добавляется_только_когда_задан() -> None:
-    hosts = Settings(api_url="https://api.example.org/disp").allowed_hosts()
-    assert "api.example.org" in hosts and len(hosts) == 6
+def test_api_живёт_на_bpmgob_и_список_хостов_не_растёт() -> None:
+    hosts = Settings(api_url="https://BPMGOB.mec.gub.uy/disp").allowed_hosts()
+    assert hosts == Settings().allowed_hosts() and len(hosts) == 5
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://api.example.org/disp", "https://bpmgob.mec.gub.uy.evil.example/x"],
+)
+def test_api_на_чужом_хосте_отклоняется(url: str) -> None:
+    with pytest.raises(ValidationError, match=r"bpmgob\.mec\.gub\.uy"):
+        Settings(api_url=url)
 
 
 def test_sae_попадает_в_список_только_когда_включён() -> None:
@@ -294,11 +305,11 @@ def test_свой_сервер_ntfy_заменяет_ntfy_sh_в_списке() -
 def test_все_необязательные_источники_вместе() -> None:
     hosts = Settings(
         watchdog_url="https://w.example.org/p",
-        api_url="https://a.example.org/x",
+        api_url="https://bpmgob.mec.gub.uy/x",
         sae_source_enabled=True,
     ).allowed_hosts()
-    assert len(hosts) == 8
-    assert {"w.example.org", "a.example.org", "sae.mec.gub.uy"} <= hosts
+    assert len(hosts) == 7
+    assert {"w.example.org", "sae.mec.gub.uy"} <= hosts
 
 
 def test_хосты_не_зависят_от_адреса_этапа_и_входа() -> None:

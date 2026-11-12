@@ -294,12 +294,12 @@ async def test_квота_журнала_проверяется_сразу_и_к
     hk, *_, clock, journal = _make()
     task = asyncio.create_task(hk.journal_quota_forever())
     await until(lambda: journal.quota_calls == 1)
+    await until(lambda: clock.sleeping == 1)  # проверка идёт в потоке: ждём, пока цикл заснёт
     await clock.advance(599)
     assert journal.quota_calls == 1
-    await clock.advance(1)
-    await until(lambda: journal.quota_calls == 2)
-    await clock.advance(1200)
-    await until(lambda: journal.quota_calls == 4)
+    await cycle(clock, 1, lambda: journal.quota_calls == 2)
+    await cycle(clock, 600, lambda: journal.quota_calls == 3)
+    await cycle(clock, 600, lambda: journal.quota_calls == 4)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

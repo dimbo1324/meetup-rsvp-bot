@@ -279,7 +279,8 @@ def test_имя_личного_поля_в_адресе_может_быть_за
 
 def test_тело_формы_маскирует_личные_поля() -> None:
     cleaned = clean_post_data("csrf=1&apellido=Иванов&telefono=099&fecha=2027-02-23")
-    assert cleaned == f"csrf=1&apellido={MASK}&telefono={MASK}&fecha=2027-02-23"
+    # csrf — секретное имя редактора (значение привязано к сессии): маскируется вместе с личным
+    assert cleaned == f"csrf={MASK}&apellido={MASK}&telefono={MASK}&fecha=2027-02-23"
 
 
 def test_тело_json_маскирует_личные_поля() -> None:
