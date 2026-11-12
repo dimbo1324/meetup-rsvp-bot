@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote_plus, urlparse
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, async_playwright
@@ -34,6 +34,8 @@ PERSONAL_KEYS = re.compile(
     r"c[eé]dula|pasaporte|passport|usuario|user|direcci[oó]n|address)"
 )
 MAX_BODY_CHARS = 200_000
+# Запас на секрет, разрезанный границей усечения (см. quarantine.py)
+_REDACT_MARGIN = 1000
 API_MARKER = "agenda_sae_api_disponibilidades"
 
 
@@ -44,7 +46,9 @@ def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
 def _mask_json(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            k: (MASK if PERSONAL_KEYS.search(str(k)) else _mask_json(v)) for k, v in value.items()
+            # Сам ключ тоже может быть личным («адрес почты → данные»): прогоняем и его
+            REDACTOR.redact(str(k)): (MASK if PERSONAL_KEYS.search(str(k)) else _mask_json(v))
+            for k, v in value.items()
         }
     if isinstance(value, list):
         return [_mask_json(v) for v in value]
@@ -59,7 +63,32 @@ def clean_body(content_type: str, body: str) -> Any:
             return _mask_json(json.loads(body))
         except ValueError:
             pass
-    return REDACTOR.redact(body[:MAX_BODY_CHARS])
+    # Сначала вырезаем секреты, потом усекаем: иначе секрет на границе протечёт префиксом
+    return REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS]
+
+
+def _mask_pairs(query: str) -> str:
+    """`a=1&nombre=Ana` → `a=1&nombre=***`: значения личных полей формы и адреса."""
+    parts = []
+    for part in query.split("&"):
+        key, sep, _ = part.partition("=")
+        parts.append(f"{key}={MASK}" if sep and PERSONAL_KEYS.search(unquote_plus(key)) else part)
+    return "&".join(parts)
+
+
+def clean_url(url: str) -> str:
+    base, mark, query = url.partition("?")
+    return REDACTOR.redact(base + mark + _mask_pairs(query))
+
+
+def clean_post_data(data: str) -> str:
+    """Тело запроса: JSON чистится как ответ, форма — по именам полей, прочее — редактором."""
+    try:
+        return json.dumps(_mask_json(json.loads(data)), ensure_ascii=False)
+    except ValueError:
+        return REDACTOR.redact(_mask_pairs(data[: MAX_BODY_CHARS + _REDACT_MARGIN]))[
+            :MAX_BODY_CHARS
+        ]
 
 
 @dataclass
@@ -112,11 +141,11 @@ class DiscoveryRecorder:
         self._records.append(
             {
                 "method": request.method,
-                "url": REDACTOR.redact(url),
+                "url": clean_url(url),
                 "resource": request.resource_type,
                 "status": response.status,
                 "request_headers": _clean_headers(await request.all_headers()),
-                "post_data": REDACTOR.redact(request.post_data or ""),
+                "post_data": clean_post_data(request.post_data or ""),
                 "response_headers": _clean_headers(await response.all_headers()),
                 "content_type": content_type,
                 "body": clean_body(content_type, body),
@@ -126,7 +155,14 @@ class DiscoveryRecorder:
     def _on_response(self, response: Response) -> None:
         task = asyncio.create_task(self._collect(response))
         self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        task.add_done_callback(self._collected)
+
+    def _collected(self, task: asyncio.Task[None]) -> None:
+        self._pending.discard(task)
+        # Сбой записи одного ответа (страница закрылась, тело не читается) не должен пропадать
+        # молча и не должен мешать остальным
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.warning("разведка: ответ не записан: %s", type(error).__name__)
 
     async def run(self, at: datetime, wait_login_sec: int = 600) -> DiscoveryResult:
         async with async_playwright() as pw:

@@ -15,6 +15,10 @@ from rcbot.infrastructure.logging.redaction import REDACTOR
 
 MAX_FILES = 20
 MAX_BODY_CHARS = 8000
+# Запас на секрет, разрезанный границей усечения: редактору отдаётся чуть больше, чем сохраняется.
+# Весь ответ редактору не отдаём: его шаблоны на длинной строке без разделителей работают
+# квадратично, а карантин пишется прямо в цикле опроса
+_REDACT_MARGIN = 1000
 
 
 def _free_path(directory: Path, at: datetime, source: str) -> Path:
@@ -40,7 +44,7 @@ def quarantine(
         "content_type": content_type,
         # Сначала вырезаем секреты, потом усекаем: усечение до очистки оставило бы от значения,
         # разрезанного границей, префикс, который редактор уже не узнает
-        "body": REDACTOR.redact(body)[:MAX_BODY_CHARS],
+        "body": REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS],
     }
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     for old in sorted(directory.glob("*.json"))[:-MAX_FILES]:
