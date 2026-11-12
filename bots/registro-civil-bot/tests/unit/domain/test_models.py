@@ -49,6 +49,12 @@ def test_слот_со_временем_печатается_с_нулями_д�
     assert Slot(DAY, time(0, 0)).label() == "2027-02-23 00:00"
 
 
+def test_слот_не_сравнивается_с_посторонними_типами() -> None:
+    assert Slot(DAY) != "2027-02-23"
+    with pytest.raises(TypeError):
+        Slot(DAY) < date(2027, 2, 24)  # type: ignore[operator]  # noqa: B015
+
+
 def test_слоты_упорядочены_по_дню_потом_по_времени() -> None:
     later_day = Slot(date(2027, 3, 1), time(8, 0))
     ordered = [Slot(DAY, time(9, 0)), Slot(DAY, time(10, 30)), later_day]
