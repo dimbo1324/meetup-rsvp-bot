@@ -8,25 +8,43 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from itertools import count
 from pathlib import Path
 
 from rcbot.infrastructure.logging.redaction import REDACTOR
 
 MAX_FILES = 20
 MAX_BODY_CHARS = 8000
+# Запас на секрет, разрезанный границей усечения: редактору отдаётся чуть больше, чем сохраняется.
+# Весь ответ редактору не отдаём: его шаблоны на длинной строке без разделителей работают
+# квадратично, а карантин пишется прямо в цикле опроса
+_REDACT_MARGIN = 1000
+
+
+def _free_path(directory: Path, at: datetime, source: str) -> Path:
+    stamp = f"{at:%Y%m%dT%H%M%S%f}"
+    path = directory / f"{stamp}-{source}.json"
+    # Два ответа в один и тот же момент не должны затирать друг друга: берём следующий номер
+    for number in count(1):
+        if not path.exists():
+            return path
+        path = directory / f"{stamp}-{number}-{source}.json"
+    raise AssertionError("недостижимо")  # pragma: no cover
 
 
 def quarantine(
     directory: Path, at: datetime, source: str, status: int, content_type: str, body: str
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{at:%Y%m%dT%H%M%S%f}-{source}.json"
+    path = _free_path(directory, at, source)
     record = {
         "at": at.isoformat(),
         "source": source,
         "status": status,
         "content_type": content_type,
-        "body": REDACTOR.redact(body[:MAX_BODY_CHARS]),
+        # Сначала вырезаем секреты, потом усекаем: усечение до очистки оставило бы от значения,
+        # разрезанного границей, префикс, который редактор уже не узнает
+        "body": REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS],
     }
     path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     for old in sorted(directory.glob("*.json"))[:-MAX_FILES]:

@@ -19,12 +19,18 @@ from rcbot.application.ports import SessionCookie
 from rcbot.config.secrets import Credentials
 from rcbot.domain.errors import LoginFailed, RateLimited, SiteUnavailable
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, session_cookies, temporary_context
-from rcbot.infrastructure.gubuy.pages import LOGIN_HOST, PageKind, classify
+from rcbot.infrastructure.gubuy.pages import (
+    BPMGOB_HOST,
+    LOGIN_HOST,
+    PageKind,
+    classify,
+    is_bpmgob_session_url,
+)
 
 logger = logging.getLogger(__name__)
 
-BPMGOB_HOST = "bpmgob.mec.gub.uy"
 STEP_TIMEOUT_MS = 30_000
+RETURN_TIMEOUT_MS = 60_000
 
 
 async def _first_visible(*candidates: Locator) -> Locator:
@@ -83,10 +89,7 @@ class PlaywrightAuthenticator:
                     page.url, await page.content(), response.status if response else None
                 )
                 await self._fill_identity(page, creds)
-                await page.wait_for_url(
-                    lambda url: BPMGOB_HOST in url and "/autenticacion" not in url,
-                    timeout=60_000,
-                )
+                await page.wait_for_url(is_bpmgob_session_url, timeout=RETURN_TIMEOUT_MS)
                 cookies = await session_cookies(context, [BPMGOB_HOST])
         except PlaywrightError as error:
             # Текст ошибки Playwright может содержать адрес и селектор, но не введённые значения
