@@ -42,7 +42,6 @@ from rcbot.application.ports import (
     CheckRecord,
     NoopCoordinator,
     Notifier,
-    OpeningRecord,
 )
 from rcbot.application.runtime import K_LADDER_START, RuntimeSettings, RuntimeStore
 from rcbot.application.session_manager import SessionManager
@@ -86,24 +85,17 @@ class StandJournal(FileJournal):
         self.check_count = 0
         self.stall_sec = 0.0
 
-    def _stall(self) -> None:
+    def _write_line(self, writer: Any, text: str, at: Any) -> None:  # type: ignore[override]
         if self.stall_sec:
-            time.sleep(self.stall_sec)  # блокирует цикл событий, как зависший диск
+            time.sleep(self.stall_sec)  # зависший диск: в фоновом режиме стоит поток записи
+        FileJournal._write_line(writer, text, at)
 
     def check(self, record: CheckRecord) -> None:
-        self._stall()
         self.check_count += 1
         super().check(record)
 
-    def event(self, code: str, message: str, level: str = "INFO", **data: object) -> None:
-        self._stall()
-        super().event(code, message, level, **data)
-
-    def opening(self, record: OpeningRecord) -> None:
-        self._stall()
-        super().opening(record)
-
     def _jsonl(self, folder: str) -> list[dict[str, Any]]:
+        self.flush()
         rows: list[dict[str, Any]] = []
         for path in sorted((self.root / folder).glob("*.jsonl")):
             rows += [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
@@ -119,6 +111,7 @@ class StandJournal(FileJournal):
         return [e["code"] for e in self.read_events()]
 
     def read_openings(self) -> list[dict[str, str]]:
+        self.flush()
         path = self.root / "openings.csv"
         if not path.exists():
             return []
@@ -126,6 +119,7 @@ class StandJournal(FileJournal):
             return list(csv.DictReader(f, delimiter=";"))
 
     def read_status(self) -> dict[str, Any]:
+        self.flush()
         data: dict[str, Any] = json.loads((self.root / "status.json").read_text("utf-8"))
         return data
 
@@ -232,6 +226,7 @@ class Stand:
         jitter: float = 0.0,
         journal_max_bytes: int = 10 * 2**30,
         journal_trim_bytes: int = 5 * 2**30,
+        journal_background: bool = True,
         incidents_open_hook: Callable[[], Awaitable[None]] | None = None,
         start: bool = True,
         ignore: set[str] | None = None,
@@ -247,7 +242,12 @@ class Stand:
         # Как в build_core: номера заявки и этапа не должны попасть ни в журнал, ни в лог
         REDACTOR.register_many([TRAMITE_ID, "TEST-ETAPA"])
         journal = StandJournal(
-            journal_root, settings.tz, clock, journal_max_bytes, journal_trim_bytes
+            journal_root,
+            settings.tz,
+            clock,
+            journal_max_bytes,
+            journal_trim_bytes,
+            background=journal_background,
         )
         core = Core(paths, settings, SecretStore(), clock=clock, journal=journal)  # type: ignore[arg-type]
         storage = await open_storage(core)

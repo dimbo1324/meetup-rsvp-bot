@@ -105,26 +105,37 @@ async def test_запись_в_базу_не_задерживает_рассыл
     assert len(deliveries) == 3 and {d.incident_id for d in deliveries} == {incident.id}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: poll_loop.py:_tick (journal.check после publish, до первой уступки циклу) и "
-        "alerting.py:_wave (journal.event до TaskGroup): синхронная запись журнала на диск "
-        "стоит перед отправкой; зависший диск или блокировка файла синхронизацией задерживают "
-        "тревогу на всё время записи (SPEC 2.2 п. 4)"
-    ),
-)
 async def test_запись_журнала_не_задерживает_рассылку_диск_завис_на_200_мс(
     make_stand, stand_clock
 ) -> None:
     source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API))
-    stand = await make_stand(primary=source, auth=NoLogin())
-    stand.journal.stall_sec = 0.2
+    stand = await make_stand(
+        primary=source, auth=NoLogin()
+    )  # журнал — в фоновом потоке, как в работе
+    stand.journal.stall_sec = 0.2  # каждая запись на диск занимает 200 мс
     await stand.next_check()
 
     (value,) = latencies_ms(stand, source)
     print(f"первая волна при записи журнала 200 мс: {value:.2f} мс")
     assert value < P95_LIMIT_MS
+    # журнал не потерян: позже всё записано, включая появление мест
+    stand.journal.stall_sec = 0.0
+    assert "slots.appeared" in stand.journal.codes()
+    assert [r["событие"] for r in stand.journal.read_openings()] == ["появились"]
+
+
+async def test_синхронный_журнал_на_зависшем_диске_всё_ещё_задерживает_рассылку(
+    make_stand, stand_clock
+) -> None:
+    """Режим без фонового потока (RCBOT_JOURNAL_BACKGROUND=false) остаётся медленным — по
+    замыслу; тест фиксирует, что именно фоновый поток снимает задержку."""
+    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API))
+    stand = await make_stand(primary=source, auth=NoLogin(), journal_background=False)
+    stand.journal.stall_sec = 0.1
+    await stand.next_check()
+    (value,) = latencies_ms(stand, source)
+    print(f"синхронный журнал, запись 100 мс: {value:.2f} мс")
+    assert value > P95_LIMIT_MS
 
 
 async def test_настоящие_ntfy_и_callmebot_по_https_от_события_до_запроса_на_сервере(

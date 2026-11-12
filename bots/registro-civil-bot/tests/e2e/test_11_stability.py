@@ -71,6 +71,7 @@ async def test_сутки_проверок_без_утечек_с_почасов
     assert current is not None and current.checks == 60 and len(rows) + 1 == 24
 
     # журнал за сутки: ровно по строке на проверку; граница суток — полночь по Монтевидео
+    stand.journal.flush()
     lines = {
         path.name: len(path.read_text("utf-8").splitlines())
         for path in sorted((stand.journal.root / "checks").glob("*.jsonl"))
@@ -97,6 +98,7 @@ async def test_квота_журнала_срабатывает_по_ходу_р
     await stand.quiesce()
     await stand.advance(600 * 399)  # около 2,8 суток при проверке раз в 10 минут
 
+    stand.journal.flush()
     names = sorted(p.name for p in (stand.journal.root / "checks").glob("*.jsonl"))
     today = stand.clock.now().astimezone(stand.settings.tz).date().isoformat()
     assert f"checks-{today}.jsonl" in names, "сегодняшний файл не удаляется"
