@@ -73,3 +73,28 @@ def test_неизвестный_бот(tmp_path: Path) -> None:
     _make_bot(tmp_path, "a-bot", "abot")
     with pytest.raises(monorepo.LayoutError, match="a-bot"):
         monorepo.find_bot("nope", tmp_path)
+
+
+def test_окружение_бота_не_перекрывает_заданное_снаружи(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_bot(tmp_path, "a-bot", "abot")
+    bot = monorepo.find_bot("abot", tmp_path)
+    monkeypatch.setenv("PROBE", "из окружения")
+    env = bot.resolved_env()
+    assert "PROBE" not in env  # значение вызывающего (CI, worktree) главнее умолчания бота
+    assert env["MODE"] == "test"
+
+
+def test_ключи_покрытия_только_для_настроенного_порога(tmp_path: Path) -> None:
+    bot = _make_bot(tmp_path, "a-bot", "abot")
+    assert monorepo.find_bot("abot", tmp_path).coverage_args() == []
+    pyproject = bot / "pyproject.toml"
+    extra = 'coverage = ["abot.domain", "abot.app"]\ncoverage_min = 85\n'
+    pyproject.write_text(pyproject.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    assert monorepo.find_bot("abot", tmp_path).coverage_args() == [
+        "--cov=abot.domain",
+        "--cov=abot.app",
+        "--cov-report=term-missing:skip-covered",
+        "--cov-fail-under=85",
+    ]

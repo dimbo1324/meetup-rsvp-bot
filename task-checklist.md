@@ -10,11 +10,11 @@
 
 ## Подготовка (тимлид, ветка `test/rcbot-foundation`)
 
-- [ ] Решение Q-M3 записано (R7): HTTP — фальшивый сервер aiohttp + локальный TLS (`trustme`),
+- [+] Решение Q-M3 записано (R7): HTTP — фальшивый сервер aiohttp + локальный TLS (`trustme`),
       `aioresponses` убран из зависимостей
-- [ ] Зависимости тестов (`hypothesis`, `trustme`, `pytest-timeout`) в общем `uv.lock`
-- [ ] Общие фейки и фикстуры (`tests/fakes.py`, `tests/conftest.py`), маркеры и таймаут pytest
-- [ ] Порог покрытия 85 % для `domain` и `application` в полном прогоне шлюза (`dev.py`)
+- [+] Зависимости тестов (`hypothesis`, `trustme`, `pytest-timeout`) в общем `uv.lock`
+- [+] Общие фейки и фикстуры (`tests/fakes.py`, `tests/conftest.py`), маркеры и таймаут pytest
+- [+] Порог покрытия 85 % для `domain` и `application` в полном прогоне шлюза (`dev.py`)
 
 ## Команда агентов (каждый в своей ветке и своём worktree)
 

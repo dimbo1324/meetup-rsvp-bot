@@ -6,6 +6,7 @@ ttl_dns_cache=300)` и общий таймаут запроса. Отпечат�
 
 from __future__ import annotations
 
+import ssl
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlparse
@@ -23,7 +24,11 @@ class SafeHttp:
         *,
         limit: int = 4,
         cookie_jar: aiohttp.abc.AbstractCookieJar | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
+        # ssl_context нужен только тестам с локальным TLS-сервером: в работе проверка по системным
+        # сертификатам, отключить её (ssl=False) нельзя
+        self._ssl: ssl.SSLContext | bool = ssl_context if ssl_context is not None else True
         self._allowed = frozenset(host.lower() for host in allowed_hosts)
         self._timeout = aiohttp.ClientTimeout(total=timeout_sec)
         self._limit = limit
@@ -56,7 +61,7 @@ class SafeHttp:
     def request(self, method: str, url: str, **kwargs: Any) -> Any:
         """Возвращает контекстный менеджер ответа aiohttp; переадресации проверяются тоже."""
         self.check(url)
-        kwargs.setdefault("ssl", True)
+        kwargs.setdefault("ssl", self._ssl)
         kwargs.setdefault("allow_redirects", False)
         return self.session.request(method, url, **kwargs)
 

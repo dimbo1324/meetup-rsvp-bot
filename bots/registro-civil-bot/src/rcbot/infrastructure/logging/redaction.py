@@ -43,6 +43,11 @@ class Redactor:
             with self._lock:
                 self._secrets.add(value)
 
+    def clear(self) -> None:
+        """Забыть зарегистрированные значения: изоляция тестов."""
+        with self._lock:
+            self._secrets.clear()
+
     def register_many(self, values: Iterable[str]) -> None:
         for value in values:
             self.register(value)

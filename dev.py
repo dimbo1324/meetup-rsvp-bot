@@ -162,7 +162,14 @@ def cmd_typecheck(args: list[str]) -> int:
 def cmd_test(args: list[str]) -> int:
     name, rest = split_bot(args)
     tooling = 0 if name else uv("pytest", *rest)
-    return each(selected_bots(name), lambda bot: in_bot(bot, "pytest", *rest)) or tooling
+    # Полный прогон бота (без своих аргументов) проверяет ещё и порог покрытия его конфигурации
+    return (
+        each(
+            selected_bots(name),
+            lambda bot: in_bot(bot, "pytest", *(rest or bot.coverage_args())),
+        )
+        or tooling
+    )
 
 
 def cmd_migrate(args: list[str]) -> int:

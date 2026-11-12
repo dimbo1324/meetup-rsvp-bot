@@ -25,9 +25,13 @@ dependencies = [
 rcbot = "rcbot.cli:main"
 
 # Общие инструменты (pytest, ruff, mypy, pip-audit) — в dev-группе корня монорепозитория.
+# Тесты бота: hypothesis — свойства детектора, разбора и редактора; trustme — локальный TLS-сервер
+# вместо живого сайта; pytest-timeout — зависший тест не вешает прогон (решение R7).
 [dependency-groups]
 dev = [
-    "aioresponses>=0.7.9",
+    "hypothesis>=6.140",
+    "trustme>=1.2",
+    "pytest-timeout>=2.4",
 ]
 
 [build-system]
@@ -44,6 +48,9 @@ platform = "windows-desktop"
 # Chromium для Playwright живёт в каталоге бота (SPEC.md, 2.7), а не в профиле пользователя.
 env = { PLAYWRIGHT_BROWSERS_PATH = "./.browsers" }
 setup = [["playwright", "install", "chromium"]]
+# Полный прогон тестов проверяет порог покрытия этих пакетов (SPEC 3.4)
+coverage = ["rcbot.domain", "rcbot.application"]
+coverage_min = 85
 
 [tool.ruff]
 extend = "../../pyproject.toml"
@@ -65,8 +72,25 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --strict-markers --import-mode=importlib"
+timeout = 60
+pythonpath = ["."]
+filterwarnings = [
+    # «coroutine was never awaited» — всегда настоящая ошибка, не шум
+    "error::RuntimeWarning",
+]
+markers = [
+    "browser: нужен Chromium из .browsers/ (dev.py setup); без него тест пропускается",
+    "slow: дольше пяти секунд",
+]
 
 [tool.coverage.run]
 source = ["src/rcbot"]
 branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    '\.\.\.$',
+]

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,17 +44,34 @@ class Bot:
     platform: str
     env: dict[str, str] = field(default_factory=dict)
     setup: tuple[tuple[str, ...], ...] = ()
+    coverage: tuple[str, ...] = ()
+    coverage_min: float = 0.0
 
     @property
     def has_migrations(self) -> bool:
         return (self.path / "alembic.ini").is_file()
 
     def resolved_env(self) -> dict[str, str]:
-        """Переменные окружения бота; относительные пути считаются от каталога бота."""
+        """Значения по умолчанию из `[tool.monorepo].env`; относительные пути — от каталога бота.
+
+        Переменная, уже заданная в окружении вызова, не перекрывается: так worktree агента
+        или CI могут указать общий каталог браузера (PLAYWRIGHT_BROWSERS_PATH).
+        """
         return {
             key: str((self.path / value).resolve()) if value.startswith(".") else value
             for key, value in self.env.items()
+            if key not in os.environ
         }
+
+    def coverage_args(self) -> list[str]:
+        """Ключи pytest-cov для полного прогона: порог покрытия выбранных пакетов."""
+        if not self.coverage or self.coverage_min <= 0:
+            return []
+        return [
+            *(f"--cov={module}" for module in self.coverage),
+            "--cov-report=term-missing:skip-covered",
+            f"--cov-fail-under={self.coverage_min:g}",
+        ]
 
 
 def _load_bot(path: Path) -> Bot:
@@ -73,7 +91,9 @@ def _load_bot(path: Path) -> Bot:
         raise LayoutError(f"{rel}: platform={platform!r}, допустимо: {', '.join(PLATFORMS)}")
     env = {str(k): str(v) for k, v in meta.get("env", {}).items()}
     setup = tuple(tuple(str(part) for part in step) for step in meta.get("setup", []))
-    return Bot(path.name, path, dist, package, platform, env, setup)
+    coverage = tuple(str(module) for module in meta.get("coverage", []))
+    coverage_min = float(meta.get("coverage_min", 0))
+    return Bot(path.name, path, dist, package, platform, env, setup, coverage, coverage_min)
 
 
 def discover_bots(root: Path = ROOT) -> list[Bot]:

@@ -25,7 +25,8 @@ STACK = (
     "sentry_sdk",
     "playwright.async_api",
     "keyring",
-    "aioresponses",
+    "hypothesis",
+    "trustme",
 )
 
 
@@ -64,28 +65,6 @@ async def test_aiosqlite_в_режиме_wal(tmp_path: Path) -> None:
         assert mode == "wal"
     finally:
         await engine.dispose()
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason=(
-        "aioresponses 0.7.9 (последняя на 2026-11-11) несовместима с aiohttp 3.14: "
-        "ClientResponse требует stream_writer. Вопрос Q-M3 в docs/open-questions.md; "
-        "strict — тест упадёт, когда библиотеку починят, и пометку нужно будет снять."
-    ),
-)
-async def test_aioresponses_подменяет_aiohttp() -> None:
-    import aiohttp
-    from aioresponses import aioresponses
-
-    with aioresponses() as mocked:
-        mocked.get("https://example.invalid/probe", payload={"ok": True})
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get("https://example.invalid/probe") as response,
-        ):
-            assert await response.json() == {"ok": True}
 
 
 async def test_фальшивый_сервер_aiohttp_отвечает_клиенту() -> None:
