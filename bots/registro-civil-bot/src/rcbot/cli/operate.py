@@ -80,7 +80,8 @@ def _print_snapshot(snapshot: AvailabilitySnapshot) -> None:
         print(f"{month:02}.{year}: " + ", ".join(s.label() for s in slots))
 
 
-async def _check_once(core: Core) -> AvailabilitySnapshot:
+async def _check_once(core: Core) -> tuple[SourceKind, AvailabilitySnapshot | RcbotError]:
+    """Одна проверка; вид источника нужен и при ошибке: запись в журнале не должна его путать."""
     session = build_session(core)
     api = build_api_source(core)
     source: AvailabilitySource = api if api.configured else build_dom_source(core)
@@ -91,11 +92,13 @@ async def _check_once(core: Core) -> AvailabilitySnapshot:
     try:
         await session.ensure()
         try:
-            return await source.fetch(target)
+            return source.kind, await source.fetch(target)
         except SessionExpired:
             session.mark_expired()
             await session.relogin("сессия истекла во время проверки")
-            return await source.fetch(target)
+            return source.kind, await source.fetch(target)
+    except RcbotError as error:
+        return source.kind, error
     finally:
         await source.close()
 
@@ -118,39 +121,38 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 def cmd_check(_: argparse.Namespace) -> int:
     core = build_core(command="check")
-    try:
-        snapshot = asyncio.run(_check_once(core))
-    except RcbotError as error:
+    kind, outcome = asyncio.run(_check_once(core))
+    if isinstance(outcome, RcbotError):
         core.journal.check(
             CheckRecord(
                 core.clock.now(),
-                SourceKind.DOM,
+                kind,
                 False,
                 frozenset(),
                 0.0,
                 "check-once",
                 0.0,
-                type(error).__name__,
-                str(error),
+                type(outcome).__name__,
+                str(outcome),
             )
         )
-        if isinstance(error, ManualStepRequired):
+        if isinstance(outcome, ManualStepRequired):
             print("Сайт требует шаг 1: пройдите его в своём браузере и повторите.", file=sys.stderr)
         else:
-            print(f"Проверка не удалась: {type(error).__name__}: {error}", file=sys.stderr)
+            print(f"Проверка не удалась: {type(outcome).__name__}: {outcome}", file=sys.stderr)
         return 1
     core.journal.check(
         CheckRecord(
-            snapshot.observed_at,
-            snapshot.source,
+            outcome.observed_at,
+            outcome.source,
             True,
-            snapshot.slots,
-            snapshot.latency_ms,
+            outcome.slots,
+            outcome.latency_ms,
             "check-once",
             0.0,
         )
     )
-    _print_snapshot(snapshot)
+    _print_snapshot(outcome)
     return 0
 
 
