@@ -7,6 +7,7 @@ mi.iduruguay.gub.uy отображаются на локальный серве�
 `ignore_https_errors`.
 """
 
+# ruff: noqa: E501  (строки HTML-макетов)
 from __future__ import annotations
 
 import json
@@ -61,6 +62,7 @@ class FakeSite:
     handlers: dict[tuple[str, str], Handler] = field(default_factory=dict)
     requests: list[Seen] = field(default_factory=list)
     port: int = 0
+    browsers: list[Browser] = field(default_factory=list)
     _runner: web.AppRunner | None = None
 
     # --- описание страниц ---
@@ -154,6 +156,7 @@ def routed_launch(site: FakeSite) -> Callable[[Playwright, Any], Awaitable[Brows
 
     async def launch(pw: Playwright, options: Any) -> Browser:
         browser = await pw.chromium.launch(headless=options.headless, args=site.chromium_args)
+        site.browsers.append(browser)
         real = browser.new_context
 
         async def new_context(*args: Any, **kwargs: Any) -> BrowserContext:
@@ -164,6 +167,63 @@ def routed_launch(site: FakeSite) -> Callable[[Playwright, Any], Awaitable[Brows
         return browser
 
     return launch
+
+
+# --- макет страницы входа ID Uruguay ---
+
+LOGIN_ID_RETURN = f"https://{ID_HOST}/login?process_state=TEST&redirect_uri=https://{BPM_HOST}/"
+HOME_PAGE = f"https://{BPM_HOST}/etapas/home"
+
+
+def id_uruguay_page(
+    *, omit: str = "", password_hidden: bool = False, return_to_bpmgob: bool = True
+) -> str:
+    """Шаги из SPEC 1.3. `omit` убирает элемент: gubuy, nodoc, pais, tipo, num, continuar1.
+
+    `password_hidden`: поле пароля существует, но не показывается (шаг «завис»).
+    `return_to_bpmgob=False`: форма принята, но возврата на bpmgob нет (например, пароль неверный).
+    Заполненное уходит POST-запросом `/api/login` в виде JSON вместе с порядком шагов.
+    """
+
+    def part(name: str, html: str) -> str:
+        return "" if omit == name else html
+
+    pais = '<label for="pais">País emisor</label><select id="pais"><option>Uruguay</option><option>Rusia</option></select>'
+    tipo = '<label for="tipo">Tipo de documento</label><select id="tipo"><option>Cédula</option><option>Pasaporte</option></select>'
+    leave = f"location.href = 'https://{BPM_HOST}/etapas/home';" if return_to_bpmgob else ""
+    return f"""<html><head><meta charset="utf-8"></head><body>
+<h1>Elige un método para identificarte en ID Uruguay</h1>
+<div id="s1">{part("gubuy", '<button id="gubuy">Usuario Gub.uy</button>')}</div>
+<div id="s2" hidden>{part("nodoc", '<button id="nodoc">No tengo documento uruguayo</button>')}</div>
+<div id="s3" hidden>
+ {part("pais", pais)}
+ {part("tipo", tipo)}
+ {part("num", '<label for="num">Número</label><input id="num">')}
+ {part("continuar1", '<button id="c1">Continuar</button>')}
+</div>
+<div id="s4" hidden>
+ <label for="pw">Ingresá tu contraseña</label><input type="password" id="pw">
+ <button id="c2">Continuar</button>
+</div>
+<script>
+const steps = [];
+const $ = (id) => document.getElementById(id);
+const show = (a, b) => {{ $(a).hidden = true; $(b).hidden = false; }};
+if ($('gubuy')) $('gubuy').addEventListener('click', () => {{ steps.push('gubuy'); show('s1', 's2'); }});
+if ($('nodoc')) $('nodoc').addEventListener('click', () => {{ steps.push('nodoc'); show('s2', 's3'); }});
+if ($('c1')) $('c1').addEventListener('click', () => {{
+  steps.push('continuar1');
+  $('s3').hidden = true;
+  $('s4').hidden = {str(password_hidden).lower()};
+}});
+$('c2').addEventListener('click', () => {{
+  steps.push('continuar2');
+  const field = (id) => ($(id) ? $(id).value : null);
+  fetch('/api/login', {{method: 'POST', body: JSON.stringify({{
+    pais: field('pais'), tipo: field('tipo'), num: field('num'), pw: field('pw'), steps }})}})
+    .then(() => {{ {leave} }});
+}});
+</script></body></html>"""
 
 
 # --- макет календаря jQuery UI Datepicker ---
