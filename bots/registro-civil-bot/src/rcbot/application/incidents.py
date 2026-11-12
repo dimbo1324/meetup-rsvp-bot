@@ -33,9 +33,16 @@ class IncidentBook:
         return incident
 
     async def current(self) -> Incident | None:
-        if self._current is None:
+        pending = self._current
+        if pending is None:
             return None
-        return await self._current
+        try:
+            return await pending
+        except Exception:  # БД не открыла инцидент: книга не должна «отравиться» навсегда
+            logger.exception("инцидент не открылся в БД")
+            if self._current is pending:
+                self._current = None
+            return None
 
     async def on_appeared(self, event: SlotsAppeared) -> None:
         async with self._lock:
