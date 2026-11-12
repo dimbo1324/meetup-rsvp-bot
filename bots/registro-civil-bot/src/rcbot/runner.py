@@ -61,6 +61,7 @@ from rcbot.infrastructure.notify.watchdog import HttpWatchdog
 logger = logging.getLogger(__name__)
 
 STOP_MESSAGE_TIMEOUT_SEC = 10.0
+STOP_POLL_TIMEOUT_SEC = 5.0
 
 
 @dataclass
@@ -322,6 +323,8 @@ async def _shutdown(
 ) -> None:
     if loop is not None:
         loop.stop()
+        # Цикл опроса досохраняет статистику часа: отмена посреди записи потеряла бы её
+        await supervisor.wait_done("poll", STOP_POLL_TIMEOUT_SEC)
     if alerts is not None:
         with contextlib.suppress(Exception):
             async with asyncio.timeout(STOP_MESSAGE_TIMEOUT_SEC):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 from dataclasses import dataclass, field
 
@@ -89,12 +90,15 @@ def build_journal(core: Core) -> Journal:
             max_bytes=int(s.journal_max_gb * 2**30),
             trim_to_bytes=int(s.journal_trim_to_gb * 2**30),
             # Запись на диск в отдельном потоке: зависший диск не должен тормозить тревоги
-            background=True,
+            background=s.journal_background,
         )
     except OSError as error:
         logger.warning("журнал наблюдения недоступен: %s", type(error).__name__)
         return NullJournal()
     journal.attach_log_handler()
+    if s.journal_background:
+        # Очередь сбрасывается при обычном завершении процесса: последние записи команды не теряются
+        atexit.register(journal.close)
     return journal
 
 

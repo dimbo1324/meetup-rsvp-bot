@@ -267,3 +267,51 @@ async def test_stop_не_ждёт_дольше_таймаута_для_зада�
     finally:
         release.set()
         await settle()
+
+
+async def test_wait_done_ждёт_завершения_не_отменяя_задачу(manual_clock) -> None:
+    from rcbot.application.supervisor import Supervisor
+
+    sup = Supervisor(manual_clock)
+    finished: list[str] = []
+
+    async def worker() -> None:
+        await manual_clock.sleep(3)  # досохраняет статистику
+        finished.append("готово")
+
+    sup.start("poll", worker)
+    waiter = asyncio.create_task(sup.wait_done("poll", 10))
+    await manual_clock.advance(2)
+    assert not waiter.done() and finished == []  # задачу не отменили и не дожидаются зря
+    await manual_clock.advance(2)
+    assert await waiter is True and finished == ["готово"]
+
+
+async def test_wait_done_по_таймауту_возвращает_false_и_не_отменяет(manual_clock) -> None:
+    from rcbot.application.supervisor import Supervisor
+
+    sup = Supervisor(manual_clock)
+
+    async def forever() -> None:
+        await manual_clock.sleep(10**6)
+
+    sup.start("poll", forever)
+    waiter = asyncio.create_task(sup.wait_done("poll", 5))
+    await manual_clock.advance(6)
+    assert await waiter is False
+    await sup.stop()
+
+
+async def test_wait_done_для_неизвестной_и_завершённой_задачи(manual_clock) -> None:
+    from rcbot.application.supervisor import Supervisor
+
+    sup = Supervisor(manual_clock)
+    assert await sup.wait_done("нет-такой") is True
+
+    async def quick() -> None:
+        return None
+
+    sup.start("poll", quick)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert await sup.wait_done("poll") is True

@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     # Журнал наблюдения (решение R6): пусто — папка rcbot-journal на рабочем столе
     journal_enabled: bool = True
     journal_dir: str = ""
+    # Запись журнала в отдельном потоке: зависший диск не тормозит тревоги (находка T9)
+    journal_background: bool = True
     journal_max_gb: float = Field(default=10.0, gt=0, le=1000)
     journal_trim_to_gb: float = Field(default=5.0, gt=0, le=1000)
 

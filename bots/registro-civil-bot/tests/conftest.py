@@ -82,6 +82,9 @@ def bot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     monkeypatch.setenv("RCBOT_HOME", str(home))
     monkeypatch.setenv("RCBOT_JOURNAL_DIR", str(tmp_path / "journal"))
+    # В тестах журнал пишется синхронно: файлы читаются сразу. Фоновый режим проверяют
+    # отдельные тесты (tests/unit/storage/test_journal_background.py, e2e)
+    monkeypatch.setenv("RCBOT_JOURNAL_BACKGROUND", "false")
     return home
 
 

@@ -107,9 +107,11 @@ def test_close_дописывает_очередь_и_останавливает
     journal = make(tmp_path / "j")
     for i in range(30):
         journal.event("x.y", f"событие {i}")
+    worker = journal._worker
+    assert worker is not None and worker.is_alive()
     journal.close()  # без flush: close сам дожидается очереди
     assert len(lines(next((tmp_path / "j" / "events").glob("*.jsonl")))) == 30
-    assert not [t for t in threading.enumerate() if t.name == "rcbot-journal"]
+    assert not worker.is_alive()
     journal.close()  # повторное закрытие безопасно
 
 

@@ -64,6 +64,15 @@ class Supervisor:
             delay = min(delay * 2, RESTART_MAX_SEC)
             logger.warning("задача «%s» перезапускается", name)
 
+    async def wait_done(self, name: str, wait_sec: float = 5.0) -> bool:
+        """Дать задаче завершиться самой (например, циклу опроса, который досохраняет статистику
+        часа после `stop()`), не отменяя её. True — задача завершилась или её нет."""
+        task = self._tasks.get(name)
+        if task is None or task.done():
+            return True
+        done, _ = await asyncio.wait({task}, timeout=wait_sec)
+        return bool(done)
+
     async def stop(self, wait_sec: float = 10.0) -> None:
         for task in self._tasks.values():
             task.cancel()
