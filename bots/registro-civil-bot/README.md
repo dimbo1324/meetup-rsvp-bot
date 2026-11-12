@@ -73,6 +73,19 @@ uv run --all-packages rcbot doctor                    # проверка все�
 Если проверка зависнет дольше 150 секунд, она прерывается; если встанет весь цикл опроса, бот
 сам перезапустит его вместе с браузером и напишет об этом в Telegram.
 
+Запись журнала идёт в фоновом потоке (`RCBOT_JOURNAL_BACKGROUND`, по умолчанию включено): проверка
+не ждёт диска. `false` — запись в том же потоке, нужно только отладке и тестам.
+
+## Тесты
+
+```powershell
+uv run python dev.py test --bot registro-civil-bot          # весь набор и порог покрытия 85 %
+uv run python dev.py quality-gate --bot registro-civil-bot  # плюс ruff, mypy, раскладка
+```
+
+Тесты идут без сети и без настоящих данных; устройство набора — `docs/testing.md`. Тесты с
+Chromium требуют `uv run python dev.py setup --bot registro-civil-bot`, иначе пропускаются.
+
 ## Управление из Telegram
 
 `/status`, `/pause [минуты]`, `/resume`, `/interval <сек>` (не меньше 10), `/test`, `/last`,

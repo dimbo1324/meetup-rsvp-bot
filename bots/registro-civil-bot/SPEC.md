@@ -152,7 +152,7 @@
 | Event loop | uvloop | 0.23.0 | Только Linux. На Windows не ставится (маркер `sys_platform == "linux"`) |
 | **Добавить:** браузер | playwright | последняя с поддержкой 3.14 | Только вход и запасной режим |
 | **Добавить:** секреты | keyring | последняя | Windows Credential Manager |
-| **Добавить:** тесты | pytest, pytest-asyncio, aioresponses | последние | Тесты |
+| **Добавить:** тесты | pytest, pytest-asyncio, hypothesis, trustme, pytest-timeout (вместо aioresponses, решение R7) | последние | Тесты |
 | **Добавить:** качество | ruff, mypy (strict) | последние | Линтер, типы |
 | Менеджер проекта | uv | последняя | Окружение, lock-файл с хешами |
 

@@ -31,7 +31,7 @@ CI и один `uv.lock`.
 
 | Что | Зачем |
 |---|---|
-| `pyproject.toml` с `[project].name` и `[tool.monorepo]` | Член uv workspace; `package` — импортируемый пакет, `platform` — `linux-docker` или `windows-desktop`, необязательные `env` (переменные окружения; значения на `.` — пути от каталога бота) и `setup` (шаги, которые выполняет `dev.py setup`) |
+| `pyproject.toml` с `[project].name` и `[tool.monorepo]` | Член uv workspace; `package` — импортируемый пакет, `platform` — `linux-docker` или `windows-desktop`, необязательные `env` (переменные окружения; значения на `.` — пути от каталога бота), `setup` (шаги, которые выполняет `dev.py setup`), `coverage` и `coverage_min` (пакеты и порог покрытия в процентах для полного прогона `dev.py test`) |
 | `src/<package>/__init__.py`, `tests/` | Код и тесты; тесты бота запускаются отдельным процессом в его каталоге |
 | `README.md`, `CHANGELOG.md` | Для людей: запуск, развёртывание, история изменений бота |
 | `.env.example` | Только несекретные настройки и пустые места под секреты; `.env` не коммитится |

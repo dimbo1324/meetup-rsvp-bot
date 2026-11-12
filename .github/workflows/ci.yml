@@ -44,6 +44,8 @@ jobs:
         run: |
           uv python install 3.14
           uv sync --frozen --all-packages --all-groups
+      - name: Браузер и шаги подготовки бота (Chromium для тестов с маркером browser)
+        run: uv run python dev.py setup --bot ${{ matrix.bot }}
       - name: Шлюз качества бота
         run: uv run python dev.py quality-gate --bot ${{ matrix.bot }}
 
