@@ -17,7 +17,8 @@ MAX_POLL_INTERVAL_SEC = 3600.0
 MIN_MONTHS_AHEAD = 1
 MAX_MONTHS_AHEAD = 12
 
-GUBUY_HOSTS = ("bpmgob.mec.gub.uy", "mi.iduruguay.gub.uy")
+BPMGOB_HOST = "bpmgob.mec.gub.uy"
+GUBUY_HOSTS = (BPMGOB_HOST, "mi.iduruguay.gub.uy")
 TELEGRAM_HOST = "api.telegram.org"
 CALLMEBOT_HOST = "api.callmebot.com"
 SAE_HOST = "sae.mec.gub.uy"
@@ -102,10 +103,20 @@ class Settings(BaseSettings):
     def _https_only(cls, value: str) -> str:
         return _require_https(value)
 
-    @field_validator("api_url", "watchdog_url")
+    @field_validator("watchdog_url")
     @classmethod
     def _optional_https(cls, value: str) -> str:
         return _require_https(value) if value else value
+
+    @field_validator("api_url")
+    @classmethod
+    def _api_on_bpmgob(cls, value: str) -> str:
+        """API календаря живёт на bpmgob: чужой хост получил бы cookies сессии и права запроса."""
+        if not value:
+            return value
+        if _host(_require_https(value)) != BPMGOB_HOST:
+            raise ValueError(f"адрес API календаря допустим только на {BPMGOB_HOST}")
+        return value
 
     @property
     def tz(self) -> ZoneInfo:
@@ -118,9 +129,8 @@ class Settings(BaseSettings):
     def allowed_hosts(self) -> frozenset[str]:
         """Список хостов SPEC 2.6: HTTP-обёртка отказывает всем остальным."""
         hosts = {*GUBUY_HOSTS, TELEGRAM_HOST, CALLMEBOT_HOST, _host(self.ntfy_server)}
-        for optional in (self.watchdog_url, self.api_url):
-            if optional:
-                hosts.add(_host(optional))
+        if self.watchdog_url:
+            hosts.add(_host(self.watchdog_url))
         if self.sae_source_enabled:
             hosts.add(SAE_HOST)
         return frozenset(hosts)

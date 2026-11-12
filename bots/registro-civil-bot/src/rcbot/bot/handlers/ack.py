@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from rcbot.application.control import Controller
 from rcbot.bot import texts
-from rcbot.infrastructure.notify.telegram import CALLBACK_ACK, CALLBACK_MANUAL_DONE
+from rcbot.domain.models import AlertAction
 
 OK_WORDS = re.compile(r"^\s*(ок|окей|ok|okay|вижу|да)[.!]*\s*$", re.I)
 
@@ -33,7 +33,7 @@ async def on_ok_word(message: Message, controller: Controller) -> None:
 def build_router() -> Router:
     """Новый роутер на каждый Dispatcher: один роутер нельзя подключить к двум."""
     router = Router(name="ack")
-    router.callback_query.register(on_ack_button, F.data == CALLBACK_ACK)
-    router.callback_query.register(on_manual_done, F.data == CALLBACK_MANUAL_DONE)
+    router.callback_query.register(on_ack_button, F.data == AlertAction.ACK.value)
+    router.callback_query.register(on_manual_done, F.data == AlertAction.MANUAL_DONE.value)
     router.message.register(on_ok_word, F.text.regexp(OK_WORDS))
     return router

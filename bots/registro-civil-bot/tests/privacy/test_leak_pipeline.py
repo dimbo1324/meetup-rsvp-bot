@@ -20,9 +20,9 @@ from tests.privacy.helpers import Canaries, find_in_tree, sqlite_text
 from tests.privacy.scenario import Artifacts, run_scenario
 
 C = Canaries()
-# Владельцу в Telegram номер заявки и ссылка с номером этапа разрешены (SPEC 2.4);
-# всё остальное в сообщение уходить не должно
-OWNER_FORBIDDEN = [C.doc_number, C.password, C.telegram_token, C.ntfy_topic, C.call_user]
+# Владельцу в Telegram номер заявки и ссылка с номером этапа разрешены (SPEC 2.4); текст причины
+# сбоя формирует код бота (решение владельца проекта), поэтому секреты из чужих текстов ошибок
+# в Telegram-тексты отдельно не проверяются, в отличие от ntfy, звонка, журнала и БД
 
 
 @pytest.fixture
@@ -100,21 +100,10 @@ def _db_leaks(art: Artifacts, values: list[str]) -> list[str]:
     return in_rows + in_bytes
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: SqlEventLog.write кладёт в app_events текст причины как есть "
-    "(poll_loop._set_state → reason = str(error)); в БД попадает документ из текста ошибки. "
-    "Ожидается вырезание в SqlEventLog.write (infrastructure/db) или в PollLoop",
-)
 def test_бд_не_содержит_секретов_из_текстов_ошибок(art: Artifacts) -> None:
     assert _db_leaks(art, SECRETS_ONLY) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: watch_targets.agenda_url хранит адрес с номером этапа (SPEC 3.1 требует "
-    "agenda_url в WatchTarget, а решение R1 и инвариант 6 — номер только в .env)",
-)
 def test_бд_не_хранит_номер_этапа_и_заявки(art: Artifacts) -> None:
     assert _db_leaks(art, [C.etapa, C.tramite]) == []
 
@@ -175,17 +164,6 @@ def test_владельцу_в_telegram_уходят_номер_заявки_и_
     assert C.tramite in joined
     assert f"/etapas/ejecutar/{C.etapa}/1" in joined
     assert C.cookie_value not in joined
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: «⏸ Бот замедлился: {reason}» (alerting.on_state_changed) и «Причина: …» "
-    "(messages.manual_step) уходят в Telegram с текстом ошибки без вырезания: пароль или "
-    "документ из текста исключения попадает в облако Telegram",
-)
-def test_владельцу_в_telegram_не_уходят_секреты_из_текстов_ошибок(art: Artifacts) -> None:
-    joined = "\n".join(art.owner_texts)
-    assert [v for v in OWNER_FORBIDDEN if v in joined] == []
 
 
 def test_запросы_к_сайту_не_несут_лишних_данных(art: Artifacts) -> None:

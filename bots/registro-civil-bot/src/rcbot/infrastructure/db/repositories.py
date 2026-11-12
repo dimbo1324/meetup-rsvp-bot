@@ -30,6 +30,7 @@ from rcbot.infrastructure.db.tables import (
     PollStatsHourRow,
     WatchTargetRow,
 )
+from rcbot.infrastructure.logging.redaction import REDACTOR
 
 _LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 
@@ -213,7 +214,13 @@ class SqlEventLog:
     async def write(self, event: AppEvent) -> None:
         async with self._sessions.begin() as session:
             session.add(
-                AppEventRow(ts=event.ts, level=event.level, code=event.code, message=event.message)
+                AppEventRow(
+                    ts=event.ts,
+                    level=event.level,
+                    code=event.code,
+                    # Текст причины мог собрать чужой ответ или исключение: в БД секретов нет
+                    message=REDACTOR.redact(event.message),
+                )
             )
 
     async def last(self, limit: int, min_level: str = "WARNING") -> list[AppEvent]:

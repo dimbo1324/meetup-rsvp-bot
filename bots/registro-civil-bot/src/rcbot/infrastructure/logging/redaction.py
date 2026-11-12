@@ -24,6 +24,11 @@ from collections.abc import Callable, Iterable
 from urllib.parse import quote, quote_plus
 
 MASK = "***"
+# Имена ключей, значения которых секретны целиком (заголовки, JSON, словари событий): их значение
+# вырезается по ключу, потому что в самом значении («a=b; c=d») признаков секрета нет
+SECRET_KEY_NAMES = re.compile(
+    r"(?i)cookie|authoriz|passw|contrase|token|secret|api[-_]?key|csrf|xsrf|session"
+)
 _MIN_SECRET_LEN = 4
 
 # Значение после «ключ=» или «"ключ": »: в кавычках — целиком; без них — до пробела или знака,

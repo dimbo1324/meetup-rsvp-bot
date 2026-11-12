@@ -9,8 +9,6 @@ from __future__ import annotations
 import ast
 import re
 
-import pytest
-
 from tests.architecture.srcscan import Module, calls, modules
 
 ALL = modules()
@@ -137,7 +135,7 @@ def _prints(m: Module) -> list[int]:
     ]
 
 
-PRINT_DEBT = {"runner.py", "infrastructure/gubuy/discovery.py"}
+PRINT_DEBT: set[str] = set()
 
 
 def test_print_только_в_cli_и_известных_отступлениях() -> None:
@@ -145,12 +143,6 @@ def test_print_только_в_cli_и_известных_отступления�
     assert owners <= PRINT_DEBT
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: print() вне cli/: runner._simulate (runner.py) и DiscoveryRecorder.run "
-    "(infrastructure/gubuy/discovery.py) печатают в консоль минуя логи и фильтр секретов. "
-    "Ожидается вынос вывода в cli/ или обратный вызов",
-)
 def test_print_нет_вне_cli() -> None:
     assert {m.rel for m in ALL if _prints(m) and not m.rel.startswith("cli/")} == set()
 

@@ -148,12 +148,6 @@ def test_разведка_выбрасывает_cookie_и_authorization_из_з
     assert MASK in cleaned["Referer"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: discovery._mask_json маскирует по ключам только личные поля; значение "
-    "csrf_token/api_key/session в JSON-теле дампа остаётся (SPEC 6.2 п. 3 — CSRF нужен для "
-    "разбора, но не его значение). Ожидается маскирование секретных ключей рядом с PERSONAL_KEYS",
-)
 def test_разведка_маскирует_csrf_и_токены_в_json_теле() -> None:
     body = '{"csrf_token": "aB3dE5fG7hJ9kL1m", "api_key": "zY8xW6vU4tS2rQ0p", "dias": [1]}'
     cleaned = json.dumps(clean_body("application/json", body))
@@ -161,11 +155,6 @@ def test_разведка_маскирует_csrf_и_токены_в_json_тел
     assert "zY8xW6vU4tS2rQ0p" not in cleaned
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: discovery._clean_headers отбрасывает только Cookie/Set-Cookie/Authorization; "
-    "X-CSRF-Token и X-API-Key сохраняются в дамп разведки (хранится 7 дней)",
-)
 def test_разведка_отбрасывает_csrf_заголовки() -> None:
     cleaned = _clean_headers({"X-CSRF-Token": "aB3dE5fG7hJ9kL1m", "X-API-Key": "zY8xW6vU4tS2rQ0p"})
     assert "aB3dE5fG7hJ9kL1m" not in json.dumps(cleaned)
@@ -220,11 +209,6 @@ async def test_карантин_хранит_очищенное_тело_без_
     assert MASK in record["body"]  # маска на месте: тело сохранено для разбора, секреты нет
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: quarantine() пишет content_type ответа без вырезания; "
-    "заголовок, управляемый сайтом, попадает в файл как есть",
-)
 async def test_карантин_не_пишет_секрет_из_content_type(
     primed: None, tls_server: LocalTlsServer, tmp_path: Path
 ) -> None:
@@ -246,12 +230,6 @@ class _FakeContext:
         return self._cookies
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: значения cookies сессии, полученные из браузера (gubuy/browser.py:"
-    "session_cookies), не регистрируются в фильтре: эхо значения «голым» в теле ответа, "
-    "исключении или JSON уходит в лог, карантин и журнал (шаблоны ловят только имена simple_bpm_*)",
-)
 async def test_значения_cookies_из_браузера_регистрируются_в_фильтре() -> None:
     context = _FakeContext(
         [{"name": "simple_bpm_session", "value": C.cookie_value, "domain": "bpmgob.mec.gub.uy"}]

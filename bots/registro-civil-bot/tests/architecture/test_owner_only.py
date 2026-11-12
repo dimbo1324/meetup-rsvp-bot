@@ -67,17 +67,7 @@ class RecordingSession(BaseSession):
         raise NotImplementedError
 
 
-def _detach_routers() -> None:
-    """Роутеры — объекты уровня модуля и крепятся к диспетчеру один раз за процесс (см. ниже)."""
-    from rcbot.bot.dialogs.menu import menu_dialog
-    from rcbot.bot.handlers import ack, commands
-
-    for router in (ack.router, commands.router, menu_dialog):
-        router._parent_router = None
-
-
 def build() -> tuple[Dispatcher, Bot, CountingController, RecordingSession]:
-    _detach_routers()
     controller = CountingController()
     dispatcher = build_dispatcher(controller, TZ, OWNER)  # type: ignore[arg-type]
     session = RecordingSession()
@@ -115,12 +105,6 @@ def callback_update(user_id: int, chat_id: int | None, data: str) -> Update:
 # --- устройство ---
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: build_dispatcher нельзя вызвать дважды в одном процессе: роутеры ack, "
-    "commands и menu_dialog — объекты уровня модуля, и aiogram отказывает «Router is already "
-    "attached» (bot/app.py:~37). Мешает тестам и перезапуску Telegram-части без процесса",
-)
 def test_build_dispatcher_можно_вызвать_повторно() -> None:
     from rcbot.bot.app import build_dispatcher as make
 
@@ -145,32 +129,40 @@ FRAMEWORK_OBSERVERS = {"update", "aiogd_update", "error"}
 
 
 def _stray_handlers() -> list[str]:
+    """Обработчики типа события, на котором у диспетчера нет фильтра владельца."""
     dispatcher, *_ = build()
     routers = list(dispatcher.chain_tail)
     assert len(routers) >= 4
-    allowed = {"message", "callback_query"} | FRAMEWORK_OBSERVERS
+    guarded = {
+        name
+        for name, observer in dispatcher.observers.items()
+        if any(isinstance(m, OwnerOnlyMiddleware) for m in observer.outer_middleware)
+    }
     return [
         f"{router.name}.{name}"
         for router in routers
         for name, observer in router.observers.items()
-        if observer.handlers and name not in allowed
+        if observer.handlers and name not in guarded | FRAMEWORK_OBSERVERS
     ]
 
 
-def test_обработчики_только_у_message_и_callback_query_кроме_известной_business_message() -> None:
-    """Ratchet: набор «чужих» обработчиков не растёт сверх известного отступления."""
-    assert {s.split(".", 1)[1] for s in _stray_handlers()} <= {"business_message"}
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: aiogram-dialog регистрирует обработчики business_message (меню), а фильтр "
-    "владельца стоит только на message и callback_query (bot/app.py:~34). От чужих такие "
-    "обновления спасает только allowed_updates; ожидается фильтр на dispatcher.update "
-    "(outer middleware по Update) либо на business_message",
-)
 def test_нет_обработчиков_вне_фильтра_владельца() -> None:
+    """aiogram-dialog вешает обработчики и на business_message: фильтр обязан стоять и там."""
     assert _stray_handlers() == []
+
+
+def test_фильтр_стоит_на_каждом_типе_события_с_обработчиками() -> None:
+    dispatcher, *_ = build()
+    handled = {
+        name
+        for router in dispatcher.chain_tail
+        for name, observer in router.observers.items()
+        if observer.handlers and name not in FRAMEWORK_OBSERVERS
+    }
+    assert {"message", "callback_query", "business_message"} <= handled
+    for name in handled:
+        mws = dispatcher.observers[name].outer_middleware
+        assert any(isinstance(m, OwnerOnlyMiddleware) for m in mws), name
 
 
 def test_все_обработчики_лежат_под_диспетчером_с_фильтром() -> None:
@@ -315,12 +307,11 @@ async def test_контроль_кнопка_вижу_от_владельца_д
 
 async def test_контроль_сканер_слеп_без_фильтра() -> None:
     """Отрицательный контроль: без OwnerOnlyMiddleware чужой доходит до controller."""
-    _detach_routers()
     controller = CountingController()
     dispatcher = Dispatcher(controller=controller, tz=TZ)
     from rcbot.bot.handlers import ack
 
-    dispatcher.include_router(ack.router)
+    dispatcher.include_router(ack.build_router())
     bot = Bot(TOKEN, session=RecordingSession())
     await dispatcher.feed_update(bot, message_update(12345, 12345, "ок"))
     assert controller.calls == ["ack"]

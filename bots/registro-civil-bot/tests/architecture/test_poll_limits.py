@@ -98,11 +98,6 @@ def test_settings_принимает_ровно_десять_и_ограничи
     assert Settings().poll_interval_sec == 20
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: Settings принимает RCBOT_POLL_INTERVAL_SEC=nan (сравнение nan < 10 ложно, "
-    "config/settings.py:~91); интервал становится nan. Ожидается: отклонить не конечные значения",
-)
 def test_settings_отклоняет_nan_и_бесконечность(monkeypatch: pytest.MonkeyPatch) -> None:
     for text in ("nan", "-inf"):
         monkeypatch.setenv("RCBOT_POLL_INTERVAL_SEC", text)
@@ -209,12 +204,6 @@ async def test_controller_принимает_ровно_десять() -> None:
     assert await make_controller(loop, clock, session).set_interval(10.0) == 10.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: Controller.set_interval(nan) и /interval nan проходят проверку (nan < 10 "
-    "ложно): интервал становится nan и показывается владельцу как «nan с» (control.py:~108). "
-    "Ожидается IntervalTooSmall для не конечных значений",
-)
 async def test_controller_отклоняет_nan() -> None:
     loop, clock, _, session = make_loop()
     with pytest.raises(IntervalTooSmall):
@@ -228,12 +217,6 @@ async def test_повреждённое_малое_значение_в_kv_огр
     assert settings.base_interval_sec == MIN_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: RuntimeStore.load падает на мусоре в kv_settings (float('abc'), "
-    "fromisoformat, Channel('x')): бот не стартует, Планировщик перезапускает его по кругу "
-    "(runtime.py:~66-76). Ожидается: испорченный ключ заменяется значением по умолчанию",
-)
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -293,12 +276,6 @@ def test_режим_dom_не_чаще_раза_в_минуту_без_разбр
     assert loop._schedule_next() >= MIN_DOM_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: poll_loop._schedule_next применяет нижнюю границу MIN (10 с) после разброса, "
-    "а границу DOM (60 с) — до него: при jitter=0.10 (значение по умолчанию) проверки DomSource "
-    "идут через 54–66 с, при 0.5 — через 30 с, SPEC 2.3 требует не ниже 60 с",
-)
 @pytest.mark.parametrize("jitter", [0.1, 0.5])
 def test_режим_dom_не_чаще_раза_в_минуту_и_с_разбросом(jitter: float) -> None:
     loop, clock, _, _ = make_loop(kind=SourceKind.DOM, base=20.0, jitter=jitter)

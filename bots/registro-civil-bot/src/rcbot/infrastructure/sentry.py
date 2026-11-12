@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from rcbot.infrastructure.logging.redaction import REDACTOR
+from rcbot.infrastructure.logging.redaction import MASK, REDACTOR, SECRET_KEY_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,14 @@ def _scrub(value: Any, depth: int = 0) -> Any:
     if isinstance(value, str):
         return REDACTOR.redact(value)
     if isinstance(value, dict):
-        return {_scrub(k, depth + 1): _scrub(v, depth + 1) for k, v in value.items()}
+        return {
+            _scrub(k, depth + 1): (
+                MASK
+                if isinstance(k, str) and SECRET_KEY_NAMES.search(k) and v is not None
+                else _scrub(v, depth + 1)
+            )
+            for k, v in value.items()
+        }
     if isinstance(value, list | tuple):
         return [_scrub(v, depth + 1) for v in value]
     if value is None or isinstance(value, bool | int | float):
@@ -32,7 +39,8 @@ def _before_send(event: Any, _hint: Any) -> Any:
     # нельзя очистить, отбрасывается целиком.
     try:
         return _scrub(event)
-    except ValueError, RecursionError:
+    except Exception:  # объект с падающим repr и любая другая беда: не отправлять
+        logger.warning("событие Sentry отброшено: очистить не удалось")
         return None
 
 

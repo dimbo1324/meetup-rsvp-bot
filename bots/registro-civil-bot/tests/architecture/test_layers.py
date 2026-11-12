@@ -40,8 +40,8 @@ ALLOWED = {
         "infrastructure",
     },
 }
-# Известные отступления (находки): имя модуля → импорт. Список не должен расти.
-KNOWN_DEBT = {("bot/handlers/ack.py", "infrastructure")}
+# Известные отступления (находки): имя модуля → импорт. Сейчас их нет и список не должен расти.
+KNOWN_DEBT: set[tuple[str, str]] = set()
 
 
 def _rcbot_layer(name: str) -> str | None:
@@ -77,12 +77,6 @@ def test_слой_импортирует_только_разрешённое(lay
     assert bad == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: bot/handlers/ack.py импортирует rcbot.infrastructure.notify.telegram "
-    "(CALLBACK_ACK, CALLBACK_MANUAL_DONE): слой bot не должен знать инфраструктуру. Ожидается "
-    "вынос констант в application или bot",
-)
 def test_bot_не_импортирует_infrastructure() -> None:
     assert [v for v in _violations("bot") if "infrastructure" in v[2]] == []
 
@@ -104,7 +98,7 @@ def test_все_модули_верхнего_уровня_известны_пр
 
 # --- domain и application: состав модулей ---
 
-DOMAIN_STDLIB = {"__future__", "dataclasses", "datetime", "enum", "hashlib"}
+DOMAIN_STDLIB = {"__future__", "dataclasses", "datetime", "enum", "functools", "hashlib"}
 FORBIDDEN_THIRD_PARTY = {
     "aiohttp",
     "aiogram",

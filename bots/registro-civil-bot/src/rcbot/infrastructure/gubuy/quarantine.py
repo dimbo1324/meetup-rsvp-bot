@@ -41,7 +41,7 @@ def quarantine(
         "at": at.isoformat(),
         "source": source,
         "status": status,
-        "content_type": content_type,
+        "content_type": REDACTOR.redact(content_type),
         # Сначала вырезаем секреты, потом усекаем: усечение до очистки оставило бы от значения,
         # разрезанного границей, префикс, который редактор уже не узнает
         "body": REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS],
