@@ -91,7 +91,7 @@ def month_view(raw: object) -> MonthView:
     if not isinstance(raw, dict):
         raise UnexpectedResponse("календарь на странице не найден")
     days = raw.get("days", [])
-    if not isinstance(days, list) or not all(isinstance(d, int) for d in days):
+    if not isinstance(days, list) or not all(type(d) is int for d in days):
         raise UnexpectedResponse("список дней календаря не распознан")
     return MonthView(
         title=str(raw.get("title", "")),
@@ -107,6 +107,6 @@ def slots_of(view: MonthView) -> frozenset[Slot]:
     for day in view.days:
         try:
             slots.add(Slot(date(year, month, day)))
-        except ValueError as error:
+        except (ValueError, OverflowError) as error:
             raise UnexpectedResponse("в календаре несуществующий день") from error
     return frozenset(slots)
