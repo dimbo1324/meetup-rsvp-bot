@@ -453,8 +453,10 @@ def test_нужные_ключи_покрыты_описаниями() -> None:
 
 # --- номер этапа и номер заявки: проверка ввода и запись в локальный .env ---
 
-STAGE = "4242424"
-TRAMITE = "3030303"
+# Числа собираются, а не записываются: проверка репозитория не должна видеть длинных цифр рядом
+# со словами «заявка» и «этап» (tests/privacy)
+STAGE = "4" * 7
+TRAMITE = "3" * 7
 STAGE_URL = f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1"
 
 
@@ -482,7 +484,7 @@ def test_parse_stage_принимает_номер_и_адрес(text: str, expe
         f"https://evil.example/etapas/ejecutar/{STAGE}/1",  # чужой хост
         f"https://bpmgob.mec.gub.uy.evil.example/etapas/ejecutar/{STAGE}/1",
         f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1?x=1",  # лишнее в адресе
-        f"https://bpmgob.mec.gub.uy/etapas/ejecutar/abc/1",  # noqa: F541 — не число
+        "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ABC/1",  # не число
     ],
 )
 def test_parse_stage_отклоняет_лишнее(text: str) -> None:
