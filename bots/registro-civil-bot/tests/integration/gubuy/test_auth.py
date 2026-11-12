@@ -26,6 +26,7 @@ from tests.integration.gubuy.site import (
     Seen,
     id_uruguay_page,
     routed_launch,
+    warm_up_chromium,
 )
 
 from rcbot.config.secrets import Credentials, SecretMissing
@@ -85,6 +86,7 @@ async def login(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Login]:
             "<html>Inicio</html>",
             **{"Set-Cookie": "simple_bpm_session=TEST-SESSION; Path=/; Secure; HttpOnly"},
         )
+        await warm_up_chromium(site)  # до сжатия таймаутов: холодный запуск может быть медленным
         monkeypatch.setattr(browser, "launch", routed_launch(site))
         monkeypatch.setattr(auth, "STEP_TIMEOUT_MS", 1500)
         monkeypatch.setattr(browser, "NAVIGATION_TIMEOUT_MS", 1500)  # клик по скрытому элементу

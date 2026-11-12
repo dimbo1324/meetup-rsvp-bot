@@ -14,12 +14,13 @@ import json
 import ssl
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
 import trustme
 from aiohttp import web
-from playwright.async_api import Browser, BrowserContext, Playwright
+from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 BPM_HOST = "bpmgob.mec.gub.uy"
 ID_HOST = "mi.iduruguay.gub.uy"
@@ -167,6 +168,31 @@ def routed_launch(site: FakeSite) -> Callable[[Playwright, Any], Awaitable[Brows
         return browser
 
     return launch
+
+
+_CHROMIUM_WARM = False
+
+
+async def warm_up_chromium(site: FakeSite) -> None:
+    """Прогрев Chromium один раз за сессию тестов.
+
+    Первая навигация холодного Chromium иногда занимает заметно дольше нормы (диск, антивирус),
+    а тесты ниже сжимают таймауты до 1,5 с, чтобы провалы не тянулись по 30 секунд. Без прогрева
+    первый такой тест падал бы случайно (находка интеграции: один тест из ~2800 в полном шлюзе).
+    """
+    global _CHROMIUM_WARM
+    if _CHROMIUM_WARM:
+        return
+    launch = routed_launch(site)
+    async with async_playwright() as pw:
+        browser = await launch(pw, SimpleNamespace(headless=True))
+        try:
+            context = await browser.new_context()
+            page = await context.new_page()
+            await page.goto(f"https://{BPM_HOST}/", timeout=120_000, wait_until="domcontentloaded")
+        finally:
+            await browser.close()
+    _CHROMIUM_WARM = True
 
 
 # --- макет страницы входа ID Uruguay ---

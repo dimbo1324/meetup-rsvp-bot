@@ -27,6 +27,7 @@ from tests.integration.gubuy.site import (
     grey,
     routed_launch,
     rows,
+    warm_up_chromium,
 )
 
 from rcbot.application.ports import SessionCookie
@@ -70,6 +71,7 @@ async def env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clock: FakeClock
 ) -> AsyncIterator[Env]:
     async with FakeSite() as site:
+        await warm_up_chromium(site)  # до сжатия таймаутов: холодный запуск может быть медленным
         monkeypatch.setattr(dom_source, "launch", routed_launch(site))
         monkeypatch.setattr(dom_source, "STEP_TIMEOUT_MS", 1500)  # провалы ждём 1,5 с, а не 20 с
         created: list[DomSource] = []
