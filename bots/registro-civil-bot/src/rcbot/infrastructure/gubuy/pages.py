@@ -10,6 +10,12 @@ from urllib.parse import urlparse
 
 LOGIN_HOST = "mi.iduruguay.gub.uy"
 NO_SLOTS_TEXT = "No hay cupos disponibles"
+# Вместо ответа API может прийти HTML входа: адрес у него — адрес API, и по адресу страницу
+# входа не узнать (SPEC 2.3: «HTML вместо ожидаемого ответа» — признак истёкшей сессии)
+LOGIN_MARKERS = (
+    "Elige un método para identificarte",
+    "Elige un metodo para identificarte",
+)
 STEP1_MARKERS = (
     "Verificación de seguridad",
     "Verificacion de seguridad",
@@ -33,6 +39,8 @@ def classify(url: str, text: str, status: int | None = None) -> PageKind:
     if status in (403, 429) or any(marker in text for marker in BLOCK_MARKERS):
         return PageKind.BLOCKED
     if (parsed.hostname or "") == LOGIN_HOST or parsed.path.startswith("/autenticacion"):
+        return PageKind.LOGIN
+    if any(marker in text for marker in LOGIN_MARKERS):
         return PageKind.LOGIN
     if any(marker in text for marker in STEP1_MARKERS):
         return PageKind.STEP1
