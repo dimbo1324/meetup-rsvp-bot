@@ -312,6 +312,7 @@ def agenda_page(
     banner: str | None = None,
     show_calendar_without_radio: bool = False,
     office: str = OFFICE,
+    extra_script: str = "",
 ) -> str:
     """Шаг «Agenda»: радиокнопка офиса, после её выбора появляется календарь.
 
@@ -365,4 +366,5 @@ next.addEventListener('click', (e) => {{
   if ('{flip}' === 'normal') {{ i += 1; render(); }}
   else if ('{flip}' === 'same_month') {{ title.textContent = title.textContent.toUpperCase(); }}
 }});
+{extra_script}
 </script></body></html>"""
