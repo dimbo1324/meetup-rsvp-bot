@@ -18,6 +18,7 @@ from tests.conftest import MemoryKeyring
 from rcbot.cli import setup
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey, SecretStore
+from rcbot.config.settings import Settings
 
 DOC = "SYN-DOC-0000001"
 PASSWORD = "syn-parol-Zx9!qL"
@@ -28,12 +29,26 @@ SECRETS = (DOC, PASSWORD, TOKEN)
 class Wizard:
     """Подставные input/getpass: отвечает по описанию секрета, запоминает вопросы."""
 
-    def __init__(self, answers: dict[SecretKey, str]) -> None:
+    def __init__(
+        self,
+        answers: dict[SecretKey, str],
+        *,
+        stage: list[str] | None = None,
+        tramite: list[str] | None = None,
+    ) -> None:
         self.answers = answers
         self.prompts: dict[SecretKey, str] = {}
         self.hidden: dict[SecretKey, bool] = {}
+        # Вопросы про номер этапа и номер заявки: пустой ответ — «пропустить»
+        self.stage = stage or []
+        self.tramite = tramite or []
+        self.case_questions: list[str] = []
 
     def _answer(self, prompt: str, hidden: bool) -> str:
+        for name, queue in (("Номер этапа", self.stage), ("Номер заявки", self.tramite)):
+            if prompt.startswith(name):
+                self.case_questions.append(name)
+                return queue.pop(0) if queue else ""
         for key, description in DESCRIPTIONS.items():
             if description in prompt:
                 self.prompts[key] = prompt
@@ -434,3 +449,161 @@ def test_сбой_telegram_при_определении_владельца_об
 def test_нужные_ключи_покрыты_описаниями() -> None:
     """Мастер спрашивает по описанию: каждый ключ обязан его иметь (иначе KeyError на вводе)."""
     assert set(DESCRIPTIONS) == set(SecretKey)
+
+
+# --- номер этапа и номер заявки: проверка ввода и запись в локальный .env ---
+
+STAGE = "4242424"
+TRAMITE = "3030303"
+STAGE_URL = f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (STAGE, STAGE_URL),
+        (f"  {STAGE}  ", STAGE_URL),
+        (STAGE_URL, STAGE_URL),
+        (f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/3/", STAGE_URL),  # шаг приводится к 1
+    ],
+)
+def test_parse_stage_принимает_номер_и_адрес(text: str, expected: str) -> None:
+    assert setup.parse_stage(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "12",  # слишком короткий
+        "1234567890123456",  # слишком длинный
+        "12ab34",
+        f"http://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1",  # не https
+        f"https://evil.example/etapas/ejecutar/{STAGE}/1",  # чужой хост
+        f"https://bpmgob.mec.gub.uy.evil.example/etapas/ejecutar/{STAGE}/1",
+        f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1?x=1",  # лишнее в адресе
+        f"https://bpmgob.mec.gub.uy/etapas/ejecutar/abc/1",  # noqa: F541 — не число
+    ],
+)
+def test_parse_stage_отклоняет_лишнее(text: str) -> None:
+    assert setup.parse_stage(text) is None
+
+
+def test_parse_tramite_только_цифры() -> None:
+    assert setup.parse_tramite(f" {TRAMITE} ") == TRAMITE
+    for bad in ("", "12", "12ab", "<НОМЕР_ЗАЯВКИ>", "1" * 16):
+        assert setup.parse_tramite(bad) is None
+
+
+def test_set_env_value_меняет_строку_и_не_трогает_остальное(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("# заметка\nRCBOT_A=1\nRCBOT_AGENDA_URL=старое\nRCBOT_B=2", encoding="utf-8")
+    setup.set_env_value(env, "RCBOT_AGENDA_URL", "новое")
+    assert (
+        env.read_text(encoding="utf-8")
+        == "# заметка\nRCBOT_A=1\nRCBOT_AGENDA_URL=новое\nRCBOT_B=2\n"
+    )
+
+
+def test_set_env_value_дописывает_отсутствующий_ключ_и_создаёт_файл(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    setup.set_env_value(env, "RCBOT_X", "1")
+    setup.set_env_value(env, "RCBOT_Y", "2")
+    assert env.read_text(encoding="utf-8") == "RCBOT_X=1\nRCBOT_Y=2\n"
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_записывает_этап_и_заявку_в_env_и_настройки_их_читают(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    Wizard(FULL, stage=[STAGE], tramite=[TRAMITE]).install(monkeypatch)
+    fake_bot.batches = [[update(10, 777, "private")]]
+
+    code, out = run_init(capsys)
+
+    assert code == 0
+    lines = paths.env_file.read_text(encoding="utf-8").splitlines()
+    assert f"RCBOT_AGENDA_URL={STAGE_URL}" in lines
+    assert f"RCBOT_TRAMITE_ID={TRAMITE}" in lines
+    assert "<НОМЕР_ЭТАПА>" not in paths.env_file.read_text(encoding="utf-8")
+    assert STAGE not in out and TRAMITE not in out  # номера в консоль не повторяются
+    settings = Settings(_env_file=paths.env_file)  # type: ignore[call-arg]
+    assert settings.agenda_url == STAGE_URL and settings.tramite_id == TRAMITE
+    assert settings.agenda_configured
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_пустой_ответ_пропускает_и_оставляет_метки(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    wizard = Wizard(FULL)
+    wizard.install(monkeypatch)
+    fake_bot.batches = [[update(10, 777, "private")]]
+
+    code, _ = run_init(capsys)
+
+    assert code == 0
+    assert wizard.case_questions == ["Номер этапа", "Номер заявки"]
+    text = paths.env_file.read_text(encoding="utf-8")
+    assert "<НОМЕР_ЭТАПА>" in text and "<НОМЕР_ЗАЯВКИ>" in text
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_неверный_ввод_трижды_ничего_не_пишет(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    wizard = Wizard(FULL, stage=["abc", "12", "https://evil.example/x"], tramite=["x"] * 3)
+    wizard.install(monkeypatch)
+    fake_bot.batches = [[update(10, 777, "private")]]
+
+    code, out = run_init(capsys)
+
+    assert code == 0
+    assert wizard.case_questions.count("Номер этапа") == setup.ASK_ATTEMPTS
+    assert out.count("Не подошло") == 2 * setup.ASK_ATTEMPTS
+    assert "<НОМЕР_ЭТАПА>" in paths.env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_одна_ошибка_и_исправление_принимаются(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    Wizard(FULL, stage=["не число", STAGE]).install(monkeypatch)
+    fake_bot.batches = [[update(10, 777, "private")]]
+    assert run_init(capsys)[0] == 0
+    assert f"RCBOT_AGENDA_URL={STAGE_URL}" in paths.env_file.read_text(encoding="utf-8")
+
+
+def test_init_не_спрашивает_то_что_уже_задано(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    paths.env_file.write_text(
+        f"RCBOT_AGENDA_URL={STAGE_URL}\nRCBOT_TRAMITE_ID={TRAMITE}\n", encoding="utf-8"
+    )
+    wizard = Wizard(FULL)
+    wizard.install(monkeypatch)
+    fake_bot.batches = [[update(10, 777, "private")]]
+
+    assert run_init(capsys)[0] == 0
+    assert wizard.case_questions == []
+    assert paths.env_file.read_text(encoding="utf-8").count(STAGE) == 1

@@ -72,6 +72,23 @@ function global:uv {
     $index = @($global:rec.calls | Where-Object { $_.name -eq 'uv' }).Count - 1
     $global:LASTEXITCODE = [int]$codes[[Math]::Min($index, $codes.Count - 1)]
 }
+$global:answers = @($env:RC_ANSWERS -split '\|' | Where-Object { $_ -ne '' })
+function global:Read-Host { param($Prompt)
+    Rec 'Read-Host' @{ prompt = [string]$Prompt }
+    if ($global:answers.Count -eq 0) { return '' }
+    $first = $global:answers[0]
+    $global:answers = @($global:answers | Select-Object -Skip 1)
+    return $first }
+function global:winget {
+    Rec 'winget' @{ args = ($args -join ' ') }
+    $global:LASTEXITCODE = 0
+    if ($env:RC_WINGET_INSTALLS_UV -eq '1') {
+        Set-Item -Path function:global:uv -Value $global:uvBlock } }
+function global:Test-Path { param([Parameter(Position = 0)]$Path, $PathType, $LiteralPath)
+    # Chrome и Edge на машине разработчика настоящие: «что установлено» задаёт тест (RC_BROWSERS)
+    if ($env:RC_BROWSERS -and "$Path" -match '(chrome|msedge)\.exe$') {
+        return (@($env:RC_BROWSERS -split '\|') -contains (Split-Path "$Path" -Leaf)) }
+    Microsoft.PowerShell.Management\Test-Path @PSBoundParameters }
 foreach ($cmd in 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'New-ScheduledTaskAction',
                  'Stop-ScheduledTask', 'Get-ScheduledTask', 'uv') {
     if ((Get-Command $cmd).CommandType -ne 'Function') {
@@ -82,7 +99,16 @@ foreach ($cmd in 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'New-Sche
 
 RUN = r"""
 $before = (Get-Location).Path
-try { & $env:RC_SCRIPT } catch { $global:rec.error = $_.Exception.Message }
+$global:uvBlock = ${function:uv}
+if ($env:RC_NO_UV -eq '1') {
+    Remove-Item function:uv
+    # На машине разработчика настоящий uv.exe есть: «uv не установлен» нужно изобразить
+    function global:Get-Command { param($Name, $ErrorAction)
+        if ($Name -eq 'uv' -and -not (Test-Path function:uv)) { return $null }
+        Microsoft.PowerShell.Core\Get-Command @PSBoundParameters } }
+$switches = @{}
+foreach ($name in ($env:RC_SWITCHES -split ',')) { if ($name) { $switches[$name] = $true } }
+try { & $env:RC_SCRIPT @switches } catch { $global:rec.error = $_.Exception.Message }
 $global:rec.location_restored = ((Get-Location).Path -eq $before)
 $global:rec | ConvertTo-Json -Depth 8 | Set-Content -Path $env:RC_OUT -Encoding UTF8
 """
@@ -148,7 +174,12 @@ def same_path(a: str, b: Path) -> bool:
 
 
 def test_набор_скриптов_известен() -> None:
-    assert ALL_SCRIPTS == ["install.ps1", "register_task.ps1", "unregister_task.ps1"]
+    assert ALL_SCRIPTS == [
+        "install.ps1",
+        "quickstart.ps1",
+        "register_task.ps1",
+        "unregister_task.ps1",
+    ]
 
 
 @pytest.mark.parametrize("name", ALL_SCRIPTS)

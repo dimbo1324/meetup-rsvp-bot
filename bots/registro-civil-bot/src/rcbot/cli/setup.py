@@ -7,10 +7,12 @@ import asyncio
 import getpass
 import importlib.metadata
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -35,12 +37,78 @@ def _ask(key: SecretKey, *, hidden: bool, existing: bool) -> str:
     return (getpass.getpass(prompt) if hidden else input(prompt)).strip()
 
 
+AGENDA_URL_TEMPLATE = "https://bpmgob.mec.gub.uy/etapas/ejecutar/{stage}/1"
+_STAGE_URL = re.compile(r"^https://bpmgob\.mec\.gub\.uy/etapas/ejecutar/(\d{3,15})/\d{1,3}/?$")
+_NUMBER = re.compile(r"^\d{3,15}$")
+ASK_ATTEMPTS = 3
+
+
+def parse_stage(text: str) -> str | None:
+    """Адрес шага «Agenda» из номера этапа или из целого адреса; не подошло — `None`."""
+    text = text.strip()
+    if _NUMBER.match(text):
+        return AGENDA_URL_TEMPLATE.format(stage=text)
+    if match := _STAGE_URL.match(text):
+        return AGENDA_URL_TEMPLATE.format(stage=match.group(1))
+    return None
+
+
+def parse_tramite(text: str) -> str | None:
+    text = text.strip()
+    return text if _NUMBER.match(text) else None
+
+
+def set_env_value(env_file: Path, key: str, value: str) -> None:
+    """Меняет строку `KEY=...` в `.env` (или дописывает), остальное содержимое не трогает."""
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    for index, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[index] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def _ask_number(prompt: str, parse: Callable[[str], str | None]) -> str | None:
+    for _ in range(ASK_ATTEMPTS):
+        answer = input(prompt).strip()
+        if not answer:
+            return None
+        if (value := parse(answer)) is not None:
+            return value
+        print("Не подошло: нужны только цифры (от 3 до 15) — проверьте и введите ещё раз.")
+    return None
+
+
+def _ask_case(core: Core) -> None:
+    """Номер этапа и номер заявки: нужны один раз, лежат в локальном `.env`, не в репозитории."""
+    s = core.settings
+    if "<" in s.agenda_url:
+        stage = _ask_number(
+            "Номер этапа — число из адресной строки шага «Agenda» (можно весь адрес;\n"
+            "  Enter — пропустить и вписать в .env позже): ",
+            parse_stage,
+        )
+        if stage:
+            set_env_value(core.paths.env_file, "RCBOT_AGENDA_URL", stage)
+            print("  Записано в .env: RCBOT_AGENDA_URL.")
+    if not s.tramite_id or "<" in s.tramite_id:
+        number = _ask_number(
+            "Номер заявки из «Bandeja de entrada» (Enter — пропустить): ", parse_tramite
+        )
+        if number:
+            set_env_value(core.paths.env_file, "RCBOT_TRAMITE_ID", number)
+            print("  Записано в .env: RCBOT_TRAMITE_ID.")
+
+
 def cmd_init(_: argparse.Namespace) -> int:
     core = build_core(command="init")
     if not core.paths.env_file.exists():
         example = core.paths.home / ".env.example"
         shutil.copyfile(example, core.paths.env_file)
-        print(f"Создан {core.paths.env_file} — проверьте RCBOT_AGENDA_URL и RCBOT_TRAMITE_ID.")
+        print(f"Создан {core.paths.env_file}.")
+    _ask_case(core)
     present = core.secrets.present()
     print("Секреты кладутся в Windows Credential Manager (служба rcbot), не на диск.\n")
 
