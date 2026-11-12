@@ -40,7 +40,9 @@ def _slot_rows(incident_id: int, slots: frozenset[Slot]) -> list[IncidentSlotRow
             day=slot.day.isoformat(),
             at=None if slot.at is None else slot.at.strftime("%H:%M"),
         )
-        for slot in sorted(slots)
+        # Slot.__lt__ не сравнивает None со временем: в одном наборе день без времени и тот же
+        # день со временем бросали TypeError и теряли запись инцидента
+        for slot in sorted(slots, key=lambda s: (s.day, s.at is not None, s.at or time.min))
     ]
 
 
