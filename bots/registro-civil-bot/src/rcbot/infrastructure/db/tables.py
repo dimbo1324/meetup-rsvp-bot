@@ -26,7 +26,11 @@ class UtcIso(TypeDecorator[datetime]):
     def process_result_value(self, value: Any, dialect: Dialect) -> datetime | None:
         if value is None:
             return None
-        return datetime.fromisoformat(str(value)).astimezone(UTC)
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            # astimezone() принял бы naive-строку за местное время ноутбука; в БД же всё в UTC
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
 
 class Base(DeclarativeBase):
