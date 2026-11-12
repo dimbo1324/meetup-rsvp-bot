@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import random
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -125,6 +125,7 @@ def make_rig(
     max_logins_per_hour: int = 6,
     quiet_after_alert_sec: float = 600.0,
     failures: Sequence[BaseException] = (),
+    auth_delay: Callable[[], Awaitable[None]] | None = None,
     paused_until: datetime | None = None,
     months: int = 6,
     start: datetime = T0,
@@ -137,7 +138,7 @@ def make_rig(
         if fallback_script is not None
         else None
     )
-    auth = FakeAuthenticator(failures=failures)
+    auth = FakeAuthenticator(failures=failures, delay=auth_delay)
     session = SessionManager(auth, clock, max_logins_per_hour, quiet_after_alert_sec)
     session.subscribe(source.use_cookies)
     if fallback is not None:
