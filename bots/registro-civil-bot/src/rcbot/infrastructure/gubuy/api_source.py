@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import time as monotonic_time
 from collections.abc import Sequence
+from http.cookies import SimpleCookie
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiohttp
 from yarl import URL
@@ -29,6 +31,20 @@ from rcbot.infrastructure.gubuy.pages import LOGIN_HOST, PageKind, classify
 from rcbot.infrastructure.gubuy.quarantine import quarantine
 from rcbot.infrastructure.gubuy.schemas import parse_disponibilidades
 from rcbot.infrastructure.http.client import SafeHttp
+
+BPMGOB_HOST = "bpmgob.mec.gub.uy"
+
+
+def _is_login_redirect(location: str) -> bool:
+    """Переадресация на вход: страница ID Uruguay или `/autenticacion` самого bpmgob.
+
+    Разбираем адрес, а не ищем подстроку: чужой адрес с «mi.iduruguay.gub.uy» в запросе — не вход.
+    """
+    parsed = urlparse(location)
+    host = (parsed.hostname or "").lower()
+    if host == LOGIN_HOST:
+        return True
+    return host in ("", BPMGOB_HOST) and parsed.path.startswith("/autenticacion")
 
 
 class ApiSource:
@@ -54,7 +70,14 @@ class ApiSource:
         jar.clear()
         for cookie in cookies:
             host = cookie.domain.lstrip(".")
-            jar.update_cookies({cookie.name: cookie.value}, response_url=URL(f"https://{host}/"))
+            morsels: SimpleCookie = SimpleCookie()
+            morsels[cookie.name] = cookie.value
+            morsels[cookie.name]["path"] = cookie.path
+            if cookie.domain.startswith("."):
+                # Cookie с точкой действует и на поддомены: без атрибута domain jar сделал бы её
+                # «только для этого хоста», и родительский домен (.mec.gub.uy) не дошёл бы до bpmgob
+                morsels[cookie.name]["domain"] = host
+            jar.update_cookies(morsels, response_url=URL(f"https://{host}/"))
 
     async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
         if not self._api_url:
@@ -72,7 +95,7 @@ class ApiSource:
         latency_ms = (monotonic_time.perf_counter() - started) * 1000
 
         if 300 <= status < 400:
-            if "/autenticacion" in location or LOGIN_HOST in location:
+            if _is_login_redirect(location):
                 raise SessionExpired("API переадресует на вход")
             raise self._unexpected(status, content_type, body, "неожиданная переадресация")
         if status in (403, 429):
