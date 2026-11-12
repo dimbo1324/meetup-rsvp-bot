@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -246,3 +248,29 @@ def test_даты_время_порты_версии_и_адреса_не_иск
 @given(st.text(alphabet="абвгдеёжз abcdef,.;:-()", max_size=60))
 def test_текст_без_секретоподобного_не_меняется(text: str) -> None:
     assert clean(text) == text
+
+
+# --- BUG-T6-1: шаблон почты не должен быть квадратичным ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" * 20_000,
+        "a." * 10_000,
+        "a-b" * 7_000,
+        "a@" * 10_000,
+        "a" * 20_000 + "@" + "b" * 20_000,
+        "x" * 20_000 + "@",
+    ],
+    ids=["слово", "точки", "дефисы", "собаки", "слово-собака-слово", "слово-собака"],
+)
+def test_шаблон_почты_линеен_на_длинных_строках_без_пробелов(text: str) -> None:
+    started = time.perf_counter()
+    clean(text)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_почта_после_длинного_слова_всё_равно_вырезается() -> None:
+    out = clean("x" * 5_000 + " " + "ivan.petrov@example.com")
+    assert out == "x" * 5_000 + f" {MASK}"
