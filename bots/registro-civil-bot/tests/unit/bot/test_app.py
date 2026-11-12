@@ -5,11 +5,21 @@ from __future__ import annotations
 import asyncio
 import re
 
-from aiogram.methods import GetUpdates, SetMyCommands
+from aiogram.methods import AnswerCallbackQuery, GetUpdates, SetMyCommands
+from aiogram.types import CallbackQuery, ErrorEvent, Update, User
+from aiogram_dialog.api.exceptions import UnknownIntent
 
-from rcbot.bot.app import ALLOWED_UPDATES, COMMANDS, build_dispatcher, run_polling
+from rcbot.bot.app import ALLOWED_UPDATES, COMMANDS, _on_stale_dialog, build_dispatcher, run_polling
 from rcbot.bot.middlewares import OwnerOnlyMiddleware
-from tests.unit.bot.harness import OWNER, TZ, make_bot, make_rig, make_setup, settled
+from tests.unit.bot.harness import (
+    OWNER,
+    TZ,
+    ApiFailure,
+    make_bot,
+    make_rig,
+    make_setup,
+    settled,
+)
 
 SPEC_COMMANDS = [
     "status",
@@ -82,3 +92,30 @@ async def test_run_polling_ставит_команды_и_слушает_тол�
     (commands,) = session.of(SetMyCommands)
     assert [c.command for c in commands.commands] == SPEC_COMMANDS
     assert session.of(GetUpdates)[0].allowed_updates == ALLOWED_UPDATES
+
+
+def _stale_event(bot, with_callback: bool) -> ErrorEvent:  # type: ignore[no-untyped-def]
+    callback = CallbackQuery(
+        id="old", from_user=User(id=OWNER, is_bot=False, first_name="Т"), chat_instance="x"
+    ).as_(bot)
+    update = Update(update_id=1, callback_query=callback if with_callback else None)
+    return ErrorEvent(update=update, exception=UnknownIntent("нет контекста"))
+
+
+async def test_устаревшая_кнопка_получает_ответ() -> None:
+    bot, session = make_bot()
+    await _on_stale_dialog(_stale_event(bot, True))
+    assert [a.text for a in session.answers] == ["Меню устарело: откройте заново /menu"]
+
+
+async def test_устаревшее_событие_без_нажатия_молча_пропускается() -> None:
+    bot, session = make_bot()
+    await _on_stale_dialog(_stale_event(bot, False))
+    assert session.calls == []
+
+
+async def test_слишком_старое_нажатие_не_роняет_обработчик_ошибок() -> None:
+    """Telegram отвечает 400 «query is too old»: отвечать уже некуда, это не авария."""
+    bot, session = make_bot()
+    session.script(AnswerCallbackQuery, ApiFailure(400, "Bad Request: query is too old"))
+    await _on_stale_dialog(_stale_event(bot, True))

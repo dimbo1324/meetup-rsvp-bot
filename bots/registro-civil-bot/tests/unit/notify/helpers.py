@@ -74,3 +74,28 @@ class RaisingHttp:
 
     async def close(self) -> None:
         self.closed += 1
+
+
+class _Response:
+    async def read(self) -> bytes:
+        return b""
+
+    async def __aenter__(self) -> _Response:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+class OkHttp:
+    """Подмена `SafeHttp`: запрос «успешен» и записывается; сети нет."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def request(self, method: str, url: str, **_: Any) -> Any:
+        self.calls.append((method, url))
+        return _Response()
+
+    async def close(self) -> None:
+        return None

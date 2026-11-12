@@ -19,6 +19,7 @@ from rcbot.infrastructure.notify.callmebot import FALLBACK_LANG, CallMeBotNotifi
 from tests.fakes import LocalTlsServer
 from tests.unit.notify.helpers import (
     PRIVATE_MARKERS,
+    OkHttp,
     RaisingHttp,
     all_alerts,
     hang_up,
@@ -336,3 +337,15 @@ async def test_close_закрывает_сессию(server: LocalTlsServer) -> 
     session = http.session
     await channel.close()
     assert session.closed
+
+
+async def test_прогрев_успешен_и_это_head_без_параметров() -> None:
+    http = OkHttp()
+    channel = CallMeBotNotifier(http, USER, RU)  # type: ignore[arg-type]
+    await channel.warmup()
+    assert http.calls == [("HEAD", "https://api.callmebot.com/")]
+    assert USER not in http.calls[0][1]
+
+
+def test_канал_это_звонок() -> None:
+    assert CallMeBotNotifier(OkHttp(), USER, RU).channel is Channel.CALL  # type: ignore[arg-type]
