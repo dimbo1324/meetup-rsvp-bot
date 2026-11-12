@@ -42,7 +42,10 @@
 - [+] Независимое ревью: `rcbot-privacy` (блокирующих для слияния нет; для этапа 3 — Q-M4),
       `quality-reviewer` (блокирующих нет); пожелание про хост страницы входа исправлено
 - [+] ROADMAP (статус Э2), `overview.md`, README, CHANGELOG, `docs/testing.md`, решения R8 и R9
-- [ ] Слияние в `main` fast-forward, пуш, CI на GitHub зелёный, ветки удалены
+- [+] Слияние в `main` fast-forward, пуш, CI на GitHub зелёный (Linux, Windows с Chromium, Docker),
+      ветки и worktree агентов удалены. Первый прогон CI упал на Linux: три теста папки рабочего
+      стола (GUID через `wintypes` — 8 байт вместо 4 на Linux); исправлено, Linux-шлюз
+      воспроизведён и подтверждён в контейнере Docker до повторного пуша
 
 ## Оговорки
 
