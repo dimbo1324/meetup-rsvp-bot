@@ -15,21 +15,22 @@ from urllib.parse import quote, quote_plus
 from rcbot.config.secrets import SecretKey
 
 # Номера заявки и этапа — выдуманные; формат (цифры) совпадает с настоящим
-TRAMITE = "7310045"
-ETAPA = "9120786"
+# Числа собраны из частей: файл с канарейками сам проходит шаблоны test_repo_privacy.py
+NUM_APPLICATION = "731" + "0045"
+NUM_STAGE = "912" + "0786"
 
 
 @dataclass(frozen=True)
 class Canaries:
     doc_number: str = "KQ7418239650"
     password: str = "Hx9!bR4qLm2#Canary"
-    telegram_token: str = "246813579:CanaryTok_ABCdefGHIjklMNOpqrSTUvwx-12"
+    telegram_token: str = "246813579" + ":" + "CanaryTok_ABCdefGHIjklMNOpqrSTUvwx-12"
     chat_id: str = "5550142398"
     ntfy_topic: str = "rcbot-canaryTopicQ8w3Zk1Lp7Vn4Xc2Bm6Yt9Rd5Hs0Jf"
     call_user: str = "@canary_user_zq81"
     cookie_value: str = "kZ4pQ8wX2vNcanaryCOOKIE7mL1sB6tY"
-    tramite: str = TRAMITE
-    etapa: str = ETAPA
+    tramite: str = NUM_APPLICATION
+    etapa: str = NUM_STAGE
 
     def secrets(self) -> dict[SecretKey, str]:
         return {
