@@ -268,6 +268,14 @@ class SqlMaintenance:
                     stmt = stmt.where(IncidentRow.status == IncidentStatus.CLOSED)
                 result = await session.execute(stmt)
                 removed[name] = int(getattr(result, "rowcount", 0) or 0)
+                if model is IncidentRow:
+                    # Служебные доставки без инцидента (сбой, зависание) живут тот же срок:
+                    # каскад по инциденту их не достаёт
+                    await session.execute(
+                        delete(DeliveryRow).where(
+                            DeliveryRow.incident_id.is_(None), DeliveryRow.at < cutoff
+                        )
+                    )
         return removed
 
     async def compact(self) -> None:
@@ -280,3 +288,6 @@ class SqlMaintenance:
             driver = raw.driver_connection
             if driver is not None:
                 await driver.execute("VACUUM")
+                # В WAL результат VACUUM лежит в журнале: без второго checkpoint файл на диске
+                # остаётся прежнего размера, и уплотнение ничего не освобождает
+                await driver.execute("PRAGMA wal_checkpoint(TRUNCATE)")
