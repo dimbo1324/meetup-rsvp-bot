@@ -13,7 +13,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, TypeVar, get_args
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
@@ -134,7 +134,7 @@ class FakeSession(BaseSession):
 
     def _result(self, method: TelegramMethod[Any]) -> Any:
         returning = method.__returning__
-        if returning is Message:
+        if returning is Message or Message in get_args(returning):
             self._next_id += 1
             chat_id = getattr(method, "chat_id", OWNER)
             return {
