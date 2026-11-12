@@ -119,6 +119,13 @@ async def test_вход_по_шагам_значения_совпадают_с_�
     assert {c.name for c in cookies} >= {"simple_bpm_session"}
 
 
+async def test_раскрывающийся_список_вместо_select(login: Login) -> None:
+    login.site.page(LOGIN_ID_RETURN, id_uruguay_page(custom_select=True))
+    await login.authenticator().login()
+    assert login.posted[0]["pais"] == "Rusia"
+    assert login.posted[0]["tipo"] == "Pasaporte"
+
+
 async def test_возвращаются_только_cookies_bpmgob_с_их_значениями(login: Login) -> None:
     cookies = await login.authenticator().login()
     by_name = {c.name: c for c in cookies}

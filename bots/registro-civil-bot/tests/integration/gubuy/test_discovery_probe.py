@@ -136,6 +136,15 @@ async def test_разведка_листает_месяцы_только_стр�
     assert not [r for r in site.requests if "guardar" in r.url]  # форма не отправлялась
 
 
+async def test_разведка_останавливается_когда_стрелка_отключена(
+    site: FakeSite, tmp_path: Path
+) -> None:
+    serve_login_and_agenda(site)
+    site.page(AGENDA, agenda_page([NOV, DIC], extra_script=XHR_SCRIPT))
+    result = await recorder(tmp_path, months=6).run(AT, wait_login_sec=15)
+    assert result.path.exists()
+
+
 async def test_в_дамп_не_попадают_cookies_заголовки_и_личные_данные(
     site: FakeSite, tmp_path: Path
 ) -> None:

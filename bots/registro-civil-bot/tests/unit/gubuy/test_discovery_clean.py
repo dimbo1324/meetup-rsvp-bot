@@ -325,3 +325,73 @@ async def test_сбой_записи_ответа_логируется_а_не_�
         await asyncio.sleep(0)
     assert recorder._pending == set()
     assert any("ответ не записан" in r.getMessage() for r in caplog.records)
+
+
+async def test_тело_ответа_не_прочиталось_запись_делается_с_пустым_телом(tmp_path: Path) -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    async def headers() -> dict[str, str]:
+        return {"x": "1"}
+
+    async def no_body() -> str:
+        raise PlaywrightError("тело недоступно")
+
+    request = SimpleNamespace(
+        method="GET", resource_type="xhr", all_headers=headers, post_data=None
+    )
+    response = SimpleNamespace(
+        request=request,
+        url="https://bpmgob.mec.gub.uy/agenda_sae_api_disponibilidades",
+        status=204,
+        headers={"content-type": "application/json"},
+        text=no_body,
+        all_headers=headers,
+    )
+    recorder = discovery.DiscoveryRecorder(
+        "https://l/", "https://a/", "офис", 1, tmp_path, discovery.BrowserOptions()
+    )
+    await recorder._collect(response)  # type: ignore[arg-type]
+    [record] = recorder._records
+    assert record["body"] == ""
+    assert record["status"] == 204
+
+
+@pytest.mark.parametrize(
+    ("url", "resource", "recorded"),
+    [
+        ("https://bpmgob.mec.gub.uy/api", "xhr", True),
+        ("https://bpmgob.mec.gub.uy/api", "fetch", True),
+        ("https://bpmgob.mec.gub.uy/js/calendario-sae.js?_=1", "script", True),
+        ("https://bpmgob.mec.gub.uy/js/otro.js", "script", False),
+        ("https://bpmgob.mec.gub.uy/calendario.html", "document", False),
+        ("https://bpmgob.mec.gub.uy/x.css", "stylesheet", False),
+        ("https://mi.iduruguay.gub.uy/api", "xhr", False),
+        ("https://bpmgob.mec.gub.uy.evil.com/api", "xhr", False),
+        ("https://evil.com/calendario-sae.js", "script", False),
+    ],
+)
+async def test_что_записывается_а_что_нет(
+    tmp_path: Path, url: str, resource: str, recorded: bool
+) -> None:
+    async def headers() -> dict[str, str]:
+        return {}
+
+    async def text() -> str:
+        return "{}"
+
+    request = SimpleNamespace(
+        method="GET", resource_type=resource, all_headers=headers, post_data=None
+    )
+    response = SimpleNamespace(
+        request=request,
+        url=url,
+        status=200,
+        headers={"content-type": "application/json"},
+        text=text,
+        all_headers=headers,
+    )
+    recorder = discovery.DiscoveryRecorder(
+        "https://l/", "https://a/", "офис", 1, tmp_path, discovery.BrowserOptions()
+    )
+    await recorder._collect(response)  # type: ignore[arg-type]
+    assert bool(recorder._records) is recorded

@@ -176,7 +176,11 @@ HOME_PAGE = f"https://{BPM_HOST}/etapas/home"
 
 
 def id_uruguay_page(
-    *, omit: str = "", password_hidden: bool = False, return_to_bpmgob: bool = True
+    *,
+    omit: str = "",
+    password_hidden: bool = False,
+    return_to_bpmgob: bool = True,
+    custom_select: bool = False,
 ) -> str:
     """Шаги из SPEC 1.3. `omit` убирает элемент: gubuy, nodoc, pais, tipo, num, continuar1.
 
@@ -190,6 +194,17 @@ def id_uruguay_page(
 
     pais = '<label for="pais">País emisor</label><select id="pais"><option>Uruguay</option><option>Rusia</option></select>'
     tipo = '<label for="tipo">Tipo de documento</label><select id="tipo"><option>Cédula</option><option>Pasaporte</option></select>'
+    if custom_select:  # раскрывающийся список вместо <select>
+
+        def box(name: str, label: str, options: tuple[str, ...]) -> str:
+            items = "".join(f'<li role="option">{o}</li>' for o in options)
+            return (
+                f'<div id="{name}" role="combobox" aria-label="{label}" tabindex="0">elegir</div>'
+                f'<ul id="{name}-list" hidden>{items}</ul>'
+            )
+
+        pais = box("pais", "País emisor", ("Uruguay", "Rusia"))
+        tipo = box("tipo", "Tipo de documento", ("Cédula", "Pasaporte"))
     leave = f"location.href = 'https://{BPM_HOST}/etapas/home';" if return_to_bpmgob else ""
     return f"""<html><head><meta charset="utf-8"></head><body>
 <h1>Elige un método para identificarte en ID Uruguay</h1>
@@ -216,9 +231,17 @@ if ($('c1')) $('c1').addEventListener('click', () => {{
   $('s3').hidden = true;
   $('s4').hidden = {str(password_hidden).lower()};
 }});
+for (const id of ['pais', 'tipo']) {{
+  const box = $(id); if (!box || box.tagName !== 'DIV') continue;
+  box.addEventListener('click', () => {{ $(id + '-list').hidden = false; }});
+  $(id + '-list').addEventListener('click', (e) => {{
+    box.dataset.value = e.target.textContent; box.textContent = e.target.textContent;
+    $(id + '-list').hidden = true;
+  }});
+}}
 $('c2').addEventListener('click', () => {{
   steps.push('continuar2');
-  const field = (id) => ($(id) ? $(id).value : null);
+  const field = (id) => ($(id) ? ($(id).value ?? $(id).dataset.value) : null);
   fetch('/api/login', {{method: 'POST', body: JSON.stringify({{
     pais: field('pais'), tipo: field('tipo'), num: field('num'), pw: field('pw'), steps }})}})
     .then(() => {{ {leave} }});
