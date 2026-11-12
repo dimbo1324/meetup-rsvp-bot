@@ -25,6 +25,13 @@ def restore_process_env() -> Iterator[None]:
     os.environ.update(before)
 
 
+@pytest.fixture(autouse=True)
+def no_onedrive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """На машине разработчика OneDrive есть: doctor не должен зависеть от этого."""
+    for name in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def env_example(bot_home: Path) -> Path:
     """В `bot_home` только alembic.ini, а `rcbot init` копирует .env.example из каталога бота."""
