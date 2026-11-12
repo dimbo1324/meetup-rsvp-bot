@@ -88,6 +88,8 @@ def build_journal(core: Core) -> Journal:
             core.clock,
             max_bytes=int(s.journal_max_gb * 2**30),
             trim_to_bytes=int(s.journal_trim_to_gb * 2**30),
+            # Запись на диск в отдельном потоке: зависший диск не должен тормозить тревоги
+            background=True,
         )
     except OSError as error:
         logger.warning("журнал наблюдения недоступен: %s", type(error).__name__)

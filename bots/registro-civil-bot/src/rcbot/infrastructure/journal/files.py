@@ -20,10 +20,13 @@ import io
 import json
 import logging
 import os
+import queue
 import re
 import stat
 import threading
+from collections.abc import Callable
 from datetime import UTC, date, datetime
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import IO
 from zoneinfo import ZoneInfo
@@ -116,6 +119,16 @@ class DailyLogHandler(logging.Handler):
         super().close()
 
 
+class _DropQueueHandler(QueueHandler):
+    """QueueHandler, который при переполнении очереди молча отбрасывает запись, а не блокирует."""
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            return
+
+
 def _scrub(value: object) -> object:
     """Вырезает секреты в каждом значении по отдельности, а не в готовом JSON-тексте.
 
@@ -144,9 +157,29 @@ def _slots(slots: frozenset[Slot]) -> list[str]:
 
 class FileJournal:
     def __init__(
-        self, root: Path, tz: ZoneInfo, clock: Clock, max_bytes: int, trim_to_bytes: int
+        self,
+        root: Path,
+        tz: ZoneInfo,
+        clock: Clock,
+        max_bytes: int,
+        trim_to_bytes: int,
+        *,
+        background: bool = False,
+        queue_limit: int = 20_000,
     ) -> None:
+        """`background=True` — запись на диск в отдельном потоке: зависший диск (антивирус,
+        синхронизация OneDrive) не должен тормозить рассылку тревог и опрос. Подготовка строк
+        (в том числе вырезание секретов) остаётся в вызывающем потоке; если очередь переполнена,
+        новые записи отбрасываются и считаются в `dropped`."""
         self.root = root
+        self.dropped = 0
+        self._queue: queue.Queue[Callable[[], None] | None] | None = None
+        self._worker: threading.Thread | None = None
+        self._listener: QueueListener | None = None
+        if background:
+            self._queue = queue.Queue(maxsize=queue_limit)
+            self._worker = threading.Thread(target=self._drain, name="rcbot-journal", daemon=True)
+            self._worker.start()
         self._tz = tz
         self._clock = clock
         self._max = max_bytes
@@ -155,6 +188,7 @@ class FileJournal:
         self._events = _DailyWriter(root / "events", "events", "jsonl", tz)
         self._openings_lock = threading.Lock()
         self.log_handler: DailyLogHandler | None = None
+        self._queue_handler: QueueHandler | None = None
         root.mkdir(parents=True, exist_ok=True)
         readme = root / "README.txt"
         if not readme.exists():
@@ -171,7 +205,15 @@ class FileJournal:
             seconds or 0.0, self._tz
         ).timetuple()
         handler.setFormatter(formatter)
-        logging.getLogger().addHandler(handler)
+        if self._queue is None:
+            logging.getLogger().addHandler(handler)
+        else:
+            # Строки лога идут в файл из отдельного потока: logging.info() не ждёт диск
+            log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=50_000)
+            self._listener = QueueListener(log_queue, handler, respect_handler_level=True)
+            self._listener.start()
+            self._queue_handler = _DropQueueHandler(log_queue)
+            logging.getLogger().addHandler(self._queue_handler)
         self.log_handler = handler
         return handler
 
@@ -217,6 +259,9 @@ class FileJournal:
             record.source.value,
             "" if record.incident_open_sec is None else f"{record.incident_open_sec / 60:.1f}",
         )
+        self._submit(lambda: self._write_opening(row))
+
+    def _write_opening(self, row: tuple[object, ...]) -> None:
         path = self.root / "openings.csv"
         with self._openings_lock:
             try:
@@ -234,10 +279,13 @@ class FileJournal:
                 logger.warning("журнал: openings.csv не записан: %s", type(error).__name__)
 
     def status(self, snapshot: dict[str, object]) -> None:
+        text = json.dumps(_scrub(snapshot), ensure_ascii=False, indent=2)
+        self._submit(lambda: self._write_status(text))
+
+    def _write_status(self, text: str) -> None:
         path = self.root / "status.json"
         tmp = self.root / "status.json.tmp"
         try:
-            text = json.dumps(_scrub(snapshot), ensure_ascii=False, indent=2)
             tmp.write_text(text, encoding="utf-8", errors="replace")
             os.replace(tmp, path)
         except OSError:
@@ -245,10 +293,44 @@ class FileJournal:
             tmp.unlink(missing_ok=True)
 
     def _safe(self, writer: _DailyWriter, line: dict[str, object], at: datetime) -> None:
+        text = json.dumps(line, ensure_ascii=False)
+        self._submit(lambda: self._write_line(writer, text, at))
+
+    @staticmethod
+    def _write_line(writer: _DailyWriter, text: str, at: datetime) -> None:
         try:
-            writer.write(json.dumps(line, ensure_ascii=False), at)
+            writer.write(text, at)
         except OSError as error:
             logger.warning("журнал: запись не удалась: %s", type(error).__name__)
+
+    # --- фоновая запись ---
+
+    def _submit(self, job: Callable[[], None]) -> None:
+        if self._queue is None:
+            job()
+            return
+        try:
+            self._queue.put_nowait(job)
+        except queue.Full:
+            self.dropped += 1
+
+    def _drain(self) -> None:
+        assert self._queue is not None
+        while True:
+            job = self._queue.get()
+            try:
+                if job is None:
+                    return
+                job()
+            except Exception as error:  # одна неудачная запись не должна убить поток
+                logger.warning("журнал: фоновая запись не удалась: %s", type(error).__name__)
+            finally:
+                self._queue.task_done()
+
+    def flush(self) -> None:
+        """Дождаться, пока всё поставленное в очередь записано (тесты, остановка)."""
+        if self._queue is not None:
+            self._queue.join()
 
     # --- размер и квота ---
 
@@ -301,6 +383,17 @@ class FileJournal:
         return removed_files, removed_bytes
 
     def close(self) -> None:
+        if self._queue is not None and self._worker is not None:
+            self._queue.put(None)
+            self._worker.join(timeout=10)
+            self._queue = None
+            self._worker = None
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+            if self._queue_handler is not None:
+                logging.getLogger().removeHandler(self._queue_handler)
+                self._queue_handler = None
         self._checks.close()
         self._events.close()
         if self.log_handler is not None:

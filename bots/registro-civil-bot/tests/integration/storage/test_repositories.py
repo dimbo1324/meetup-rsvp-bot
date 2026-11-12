@@ -32,6 +32,18 @@ async def test_ensure_создаёт_цель_и_возвращает_все_п�
     assert target.id != db.target.id
 
 
+async def test_в_бд_не_попадает_номер_этапа_заявки(db: Db) -> None:
+    # Инвариант 6 и решение R1: номер этапа — только в настройках, в БД остаётся хост.
+    # Вызывающий при этом получает полный адрес обратно: источникам он нужен.
+    url = "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA-777/1"
+    target = await db.targets.ensure("registro-civil", url, "Офис", 6)
+    assert target.agenda_url == url
+    async with db.engine.connect() as conn:
+        stored = (await conn.execute(text("SELECT agenda_url FROM watch_targets"))).scalars().all()
+    assert stored == ["https://bpmgob.mec.gub.uy/…"]
+    assert all("TEST-ETAPA" not in value and "/etapas" not in value for value in stored)
+
+
 async def test_ensure_идемпотентен_и_обновляет_поля(db: Db) -> None:
     again = await db.targets.ensure("registro-civil", "https://new.test/b", "Новый офис", 2)
     assert again.id == db.target.id

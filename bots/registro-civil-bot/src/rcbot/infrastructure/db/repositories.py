@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from typing import ClassVar
+from urllib.parse import urlsplit
 
 from sqlalchemy import delete, desc, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -50,6 +51,11 @@ def _slot(row: IncidentSlotRow) -> Slot:
     return Slot(date.fromisoformat(row.day), None if row.at is None else time.fromisoformat(row.at))
 
 
+def _without_path(url: str) -> str:
+    parsed = urlsplit(url)
+    return f"{parsed.scheme}://{parsed.netloc}/…" if parsed.netloc else "…"
+
+
 class SqlTargetRepository:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
@@ -62,13 +68,13 @@ class SqlTargetRepository:
             if row is None:
                 row = WatchTargetRow(name=name)
                 session.add(row)
-            row.agenda_url = agenda_url
+            # В БД — только хост: путь адреса содержит номер этапа заявки (инвариант 6, решение R1).
+            # Полный адрес живёт в настройках; из БД он не читается
+            row.agenda_url = _without_path(agenda_url)
             row.location_text = location_text
             row.months_ahead = months_ahead
             await session.flush()
-            return WatchTarget(
-                row.id, row.name, row.agenda_url, row.location_text, row.months_ahead
-            )
+            return WatchTarget(row.id, row.name, agenda_url, row.location_text, row.months_ahead)
 
 
 class SqlIncidentRepository:
