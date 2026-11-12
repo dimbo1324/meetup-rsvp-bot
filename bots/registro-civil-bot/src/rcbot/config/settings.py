@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -77,29 +78,30 @@ class Settings(BaseSettings):
     @field_validator("poll_interval_sec")
     @classmethod
     def _interval_not_below_minimum(cls, value: float) -> float:
-        if value < MIN_POLL_INTERVAL_SEC:
+        # NaN не меньше минимума ни в одном сравнении и прошёл бы мимо жёсткой границы
+        if math.isnan(value) or value < MIN_POLL_INTERVAL_SEC:
             raise ValueError(f"интервал опроса не может быть меньше {MIN_POLL_INTERVAL_SEC:.0f} с")
         return min(value, MAX_POLL_INTERVAL_SEC)
 
     @field_validator("timezone")
     @classmethod
     def _known_timezone(cls, value: str) -> str:
-        ZoneInfo(value)
+        # ZoneInfoNotFoundError — это KeyError: pydantic его не превращает в ошибку валидации
+        try:
+            ZoneInfo(value)
+        except (ValueError, LookupError, OSError) as error:
+            raise ValueError(f"неизвестный часовой пояс: {value!r}") from error
         return value
 
     @field_validator("agenda_url", "login_url", "ntfy_server", "sae_url")
     @classmethod
     def _https_only(cls, value: str) -> str:
-        if urlparse(value).scheme != "https":
-            raise ValueError("допустим только https")
-        return value
+        return _require_https(value)
 
     @field_validator("api_url", "watchdog_url")
     @classmethod
     def _optional_https(cls, value: str) -> str:
-        if value and urlparse(value).scheme != "https":
-            raise ValueError("допустим только https")
-        return value
+        return _require_https(value) if value else value
 
     @property
     def tz(self) -> ZoneInfo:
@@ -118,6 +120,13 @@ class Settings(BaseSettings):
         if self.sae_source_enabled:
             hosts.add(SAE_HOST)
         return frozenset(hosts)
+
+
+def _require_https(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("допустим только https-адрес с указанием хоста")
+    return value
 
 
 def _host(url: str) -> str:
