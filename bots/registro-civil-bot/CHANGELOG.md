@@ -7,6 +7,11 @@
 
 ### Добавлено
 
+- **Быстрый старт под Windows 11.** `scripts\quickstart.cmd` (и `quickstart.ps1`): проверка `uv`
+  (установка через `winget` по согласию), зависимости без инструментов разработки, встроенный
+  Chromium только при отсутствии Chrome и Edge, мастер `rcbot init`, `rcbot doctor`, вопрос про
+  автозапуск. `scripts\rcbot.cmd` — короткий вызов `rcbot` из любой папки. `rcbot init` теперь
+  спрашивает номер этапа и номер заявки, проверяет и пишет в локальный `.env`.
 - **Выбор браузера (R8).** Настройка `RCBOT_BROWSER` (`auto`, `chrome`, `msedge`, `chromium`):
   по умолчанию первым берётся установленный Google Chrome, затем Microsoft Edge, затем встроенный
   Chromium Playwright; явный выбор запасных вариантов не имеет. `rcbot doctor` показывает найденные
