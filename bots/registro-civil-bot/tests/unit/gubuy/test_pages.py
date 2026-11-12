@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from rcbot.infrastructure.gubuy.pages import PageKind, classify
+from rcbot.infrastructure.gubuy.pages import PageKind, classify, is_login_url
 
 AGENDA_URL = "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA/1"
 LOGIN_URL = "https://mi.iduruguay.gub.uy/login?process_state=TEST"
@@ -114,3 +114,20 @@ def test_страница_входа_по_тексту_узнаётся_и_на_
     # Вместо JSON API может прийти HTML входа: адрес у него — адрес API, а не страницы входа
     text = "<h1>Elige un método para identificarte en ID Uruguay</h1> Usuario Gub.uy"
     assert classify("https://bpmgob.mec.gub.uy/api/disponibilidades", text, 200) is PageKind.LOGIN
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (LOGIN_URL, True),
+        ("https://MI.IDURUGUAY.GUB.UY/sending-saml-response", True),
+        ("https://mi.iduruguay.gub.uy:8443/login", True),
+        (AGENDA_URL, False),
+        ("https://evil.example/?redirect_uri=https://mi.iduruguay.gub.uy/login", False),
+        ("https://mi.iduruguay.gub.uy.evil.example/login", False),
+        ("https://evil.example/mi.iduruguay.gub.uy", False),
+        ("", False),
+    ],
+)
+def test_is_login_url_сравнивает_хост_строго(url: str, expected: bool) -> None:
+    assert is_login_url(url) is expected

@@ -21,10 +21,10 @@ from rcbot.domain.errors import LoginFailed, RateLimited, SiteUnavailable
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, session_cookies, temporary_context
 from rcbot.infrastructure.gubuy.pages import (
     BPMGOB_HOST,
-    LOGIN_HOST,
     PageKind,
     classify,
     is_bpmgob_session_url,
+    is_login_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,8 +113,8 @@ class PlaywrightAuthenticator:
 
     async def _fill_identity(self, page: Page, creds: Credentials) -> None:
         self._step = "переход на ID Uruguay"
-        if LOGIN_HOST not in page.url:
-            await page.wait_for_url(re.compile(re.escape(LOGIN_HOST)), timeout=STEP_TIMEOUT_MS)
+        if not is_login_url(page.url):
+            await page.wait_for_url(is_login_url, timeout=STEP_TIMEOUT_MS)
         self._step = "выбор «Usuario Gub.uy»"
         await _click_text(page, re.compile(r"Usuario\s+Gub\.uy", re.I))
         self._step = "«No tengo documento uruguayo»"

@@ -50,6 +50,11 @@ def classify(url: str, text: str, status: int | None = None) -> PageKind:
     return PageKind.UNKNOWN
 
 
+def is_login_url(url: str) -> bool:
+    """Мы на странице ID Uruguay; хост сравнивается строго, не подстрокой адреса."""
+    return (urlparse(url).hostname or "") == LOGIN_HOST
+
+
 def is_bpmgob_session_url(url: str) -> bool:
     """Мы на bpmgob вне страницы входа, то есть вход завершён.
 
