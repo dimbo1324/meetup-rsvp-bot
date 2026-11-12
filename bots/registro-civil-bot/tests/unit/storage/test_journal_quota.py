@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -345,3 +346,17 @@ def test_свойство_квоты(
         if gone:
             last_size = next(s for k, d, s in specs if (d, k) == gone[-1])
             assert journal.size() + last_size > TRIM
+
+
+def test_файл_текстового_лога_открытый_обработчиком_защищён_после_смены_суток(root: Path) -> None:
+    clock = ManualClock(start=datetime(2026, 11, 12, 15, 0, tzinfo=UTC))
+    journal = make(root, clock)
+    handler = journal.attach_log_handler()
+    record = logging.LogRecord("rcbot.t", logging.INFO, __file__, 1, "строка", None, None)
+    record.created = clock.now().timestamp()
+    handler.handle(record)
+    held = root / dated("logs", TODAY)
+    held.write_bytes(b"x" * 6000)
+    clock._now = datetime(2026, 11, 13, 15, 0, tzinfo=UTC)  # сутки прошли, записей не было
+    journal.enforce_quota()
+    assert held.exists()

@@ -167,7 +167,9 @@ class FileJournal:
         formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
         # Файл дня выбирается по поясу журнала: время в строках обязано быть в том же поясе,
         # а не в поясе машины (иначе строка 23:50 могла бы лежать в файле следующего дня)
-        formatter.converter = lambda seconds: datetime.fromtimestamp(seconds, self._tz).timetuple()
+        formatter.converter = lambda seconds: datetime.fromtimestamp(
+            seconds or 0.0, self._tz
+        ).timetuple()
         handler.setFormatter(formatter)
         logging.getLogger().addHandler(handler)
         self.log_handler = handler
