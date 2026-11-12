@@ -26,10 +26,11 @@ Google Chrome, затем Microsoft Edge, затем встроенный Chromi
 - [+] Тесты выбора на заглушках (без настоящего Chrome): порядок, запасные варианты, явный выбор, ошибки
 - [+] Тесты doctor и настроек; существующие тесты не ослаблены
 - [+] Проверка настоящего запуска Chrome и Edge на этой машине (локальная страница, без сети)
-- [ ] Полный `dev.py quality-gate` на Windows и в Linux-контейнере
+- [+] Полный `dev.py quality-gate` на Windows (2849 тестов) и в Linux-контейнере (2700 тестов,
+      149 пропущено платформой), покрытие 99,7 %
 
 ## Завершение
 
-- [ ] Документы: README, `.env.example`, `docs/open-questions.md` (R8 выполнено, Q-M2), `ROADMAP`, `overview.md`, `CHANGELOG`
+- [+] Документы: README, `.env.example`, `docs/open-questions.md` (R8 выполнено, Q-M2), `ROADMAP`, `overview.md`, `CHANGELOG`
 - [ ] Слияние в `main` fast-forward, пуш, CI зелёный, ветка удалена
 - [ ] Итоговый отчёт
