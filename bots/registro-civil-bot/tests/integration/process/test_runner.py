@@ -239,8 +239,7 @@ async def test_база_закрывается_даже_если_закрыти�
         await rig.started()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    assert "storage.close" in rig.order
-    assert "journal:bot.stop" in rig.order
+    assert is_subsequence(["bot.session.close", "storage.close", "journal:bot.stop"], rig.order)
 
 
 async def test_зависшее_сообщение_об_остановке_не_задерживает_закрытие_больше_таймаута(
