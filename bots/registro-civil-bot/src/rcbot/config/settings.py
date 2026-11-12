@@ -14,6 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 MIN_POLL_INTERVAL_SEC = 10.0
 MIN_DOM_POLL_INTERVAL_SEC = 60.0
 MAX_POLL_INTERVAL_SEC = 3600.0
+MIN_MONTHS_AHEAD = 1
+MAX_MONTHS_AHEAD = 12
 
 GUBUY_HOSTS = ("bpmgob.mec.gub.uy", "mi.iduruguay.gub.uy")
 TELEGRAM_HOST = "api.telegram.org"
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
     location_text: str = "Oficina Tramite Extranjeros"
     doc_country: str = "Rusia"
     doc_type: str = "Pasaporte"
-    months_ahead: int = Field(default=6, ge=1, le=12)
+    months_ahead: int = Field(default=6, ge=MIN_MONTHS_AHEAD, le=MAX_MONTHS_AHEAD)
     login_url: str = (
         "https://bpmgob.mec.gub.uy/autenticacion/login"
         "?redirect=https://bpmgob.mec.gub.uy/tramites/iniciar/8942"
