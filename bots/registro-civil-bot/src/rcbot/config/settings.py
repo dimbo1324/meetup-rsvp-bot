@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -13,6 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 MIN_POLL_INTERVAL_SEC = 10.0
 MIN_DOM_POLL_INTERVAL_SEC = 60.0
 MAX_POLL_INTERVAL_SEC = 3600.0
+MIN_MONTHS_AHEAD = 1
+MAX_MONTHS_AHEAD = 12
 
 GUBUY_HOSTS = ("bpmgob.mec.gub.uy", "mi.iduruguay.gub.uy")
 TELEGRAM_HOST = "api.telegram.org"
@@ -30,7 +33,7 @@ class Settings(BaseSettings):
     location_text: str = "Oficina Tramite Extranjeros"
     doc_country: str = "Rusia"
     doc_type: str = "Pasaporte"
-    months_ahead: int = Field(default=6, ge=1, le=12)
+    months_ahead: int = Field(default=6, ge=MIN_MONTHS_AHEAD, le=MAX_MONTHS_AHEAD)
     login_url: str = (
         "https://bpmgob.mec.gub.uy/autenticacion/login"
         "?redirect=https://bpmgob.mec.gub.uy/tramites/iniciar/8942"
@@ -77,29 +80,30 @@ class Settings(BaseSettings):
     @field_validator("poll_interval_sec")
     @classmethod
     def _interval_not_below_minimum(cls, value: float) -> float:
-        if value < MIN_POLL_INTERVAL_SEC:
+        # NaN не меньше минимума ни в одном сравнении и прошёл бы мимо жёсткой границы
+        if math.isnan(value) or value < MIN_POLL_INTERVAL_SEC:
             raise ValueError(f"интервал опроса не может быть меньше {MIN_POLL_INTERVAL_SEC:.0f} с")
         return min(value, MAX_POLL_INTERVAL_SEC)
 
     @field_validator("timezone")
     @classmethod
     def _known_timezone(cls, value: str) -> str:
-        ZoneInfo(value)
+        # ZoneInfoNotFoundError — это KeyError: pydantic его не превращает в ошибку валидации
+        try:
+            ZoneInfo(value)
+        except (ValueError, LookupError, OSError) as error:
+            raise ValueError(f"неизвестный часовой пояс: {value!r}") from error
         return value
 
     @field_validator("agenda_url", "login_url", "ntfy_server", "sae_url")
     @classmethod
     def _https_only(cls, value: str) -> str:
-        if urlparse(value).scheme != "https":
-            raise ValueError("допустим только https")
-        return value
+        return _require_https(value)
 
     @field_validator("api_url", "watchdog_url")
     @classmethod
     def _optional_https(cls, value: str) -> str:
-        if value and urlparse(value).scheme != "https":
-            raise ValueError("допустим только https")
-        return value
+        return _require_https(value) if value else value
 
     @property
     def tz(self) -> ZoneInfo:
@@ -118,6 +122,13 @@ class Settings(BaseSettings):
         if self.sae_source_enabled:
             hosts.add(SAE_HOST)
         return frozenset(hosts)
+
+
+def _require_https(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("допустим только https-адрес с указанием хоста")
+    return value
 
 
 def _host(url: str) -> str:
