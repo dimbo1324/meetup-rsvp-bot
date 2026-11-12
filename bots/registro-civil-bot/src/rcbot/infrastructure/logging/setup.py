@@ -21,6 +21,9 @@ def setup_logging(log_file: Path, level: str = "INFO", console: bool = True) -> 
     root = logging.getLogger()
     for handler in list(root.handlers):
         root.removeHandler(handler)
+        if isinstance(handler, logging.FileHandler):
+            # Незакрытый файловый обработчик держал бы файл: в Windows это ломает ротацию
+            handler.close()
     root.setLevel(level)
 
     redaction = RedactionFilter(REDACTOR)
