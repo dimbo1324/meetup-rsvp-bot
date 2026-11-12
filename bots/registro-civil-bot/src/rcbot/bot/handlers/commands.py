@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from zoneinfo import ZoneInfo
 
 from aiogram import Router
@@ -12,6 +13,20 @@ from aiogram_dialog import DialogManager, StartMode
 from rcbot.application.control import Controller, IntervalTooSmall
 from rcbot.bot import texts
 from rcbot.bot.dialogs.states import MenuSG
+
+# Дольше года пауза «на минуты» не бывает; для паузы без срока есть /pause без числа
+MAX_PAUSE_MINUTES = 525_600
+PAUSE_BAD = "Нужно число минут от 1 до 525600: /pause 30 (или просто /pause)"
+
+
+def _pause_minutes(args: str) -> int | None:
+    """Минуты из аргумента или `None`, если это не целое число от 1 до года."""
+    raw = args.strip()
+    # str.isdigit() пропускает «²» и арабские цифры, на которых int() падает или даёт неожиданное
+    if not (raw.isascii() and raw.isdigit()):
+        return None
+    minutes = int(raw)
+    return minutes if 1 <= minutes <= MAX_PAUSE_MINUTES else None
 
 
 async def cmd_help(message: Message) -> None:
@@ -26,11 +41,11 @@ async def cmd_pause(
     message: Message, command: CommandObject, controller: Controller, tz: ZoneInfo
 ) -> None:
     minutes: int | None = None
-    if command.args:
-        if not command.args.strip().isdigit():
-            await message.answer("Нужно число минут: /pause 30 (или просто /pause)")
+    if command.args and command.args.strip():
+        minutes = _pause_minutes(command.args)
+        if minutes is None:
+            await message.answer(PAUSE_BAD)
             return
-        minutes = int(command.args.strip())
     until = await controller.pause(minutes)
     if minutes:
         await message.answer(texts.PAUSED.format(until=f"{until.astimezone(tz):%d.%m %H:%M}"))
@@ -46,7 +61,11 @@ async def cmd_resume(message: Message, controller: Controller) -> None:
 async def cmd_interval(message: Message, command: CommandObject, controller: Controller) -> None:
     raw = (command.args or "").strip().replace(",", ".")
     try:
-        value = await controller.set_interval(float(raw))
+        seconds = float(raw)
+        # float() принимает «nan» и «inf»: nan проходит любые сравнения и ломает расписание
+        if not math.isfinite(seconds):
+            raise ValueError(raw)
+        value = await controller.set_interval(seconds)
     except ValueError, IntervalTooSmall:
         await message.answer(texts.INTERVAL_BAD)
         return
