@@ -455,3 +455,56 @@ async def test_chromium_запускается_без_профиля_на_дис
             await context.close()
         finally:
             await browser.close()
+
+
+# --- инвариант SPEC 0.3: бот только читает календарь ---
+
+READ_ONLY_FORBIDDEN = (
+    "siguiente",
+    "guardar",
+    "volver",
+    "ui-state-default",  # ячейки дней: день не выбирается
+    "<td>",
+    "submit",
+    "keydown",
+    "keypress",
+    "dblclick",
+    "contextmenu",
+    "dragstart",
+)
+
+
+async def test_инвариант_только_чтение_все_действия_на_странице(env: Env) -> None:
+    """Единственные действия бота на странице — выбор радиокнопки офиса и стрелка месяца."""
+    env.site.page(AGENDA, agenda_page([NOV, DIC, ENE, FEB]))
+    source = env.make()
+    snapshot = await source.fetch(target(4))  # type: ignore[arg-type]
+    assert len(snapshot.slots) == 4
+
+    log = await events(source)
+    assert log, "журнал событий макета пуст: проверка ничего не доказывает"
+    for entry in log:
+        text = entry.lower()
+        assert not any(word in text for word in READ_ONLY_FORBIDDEN), entry
+        assert "loc1" in text or "next" in text or OFFICE.lower() in text, entry
+    next_clicks = [e for e in log if e.startswith("click") and "next" in e.lower()]
+    assert len(next_clicks) == 3  # четыре месяца — три нажатия стрелки, ни одного лишнего
+
+    # ни одной отправки формы и ни одного запроса, кроме загрузки страницы
+    assert env.site.non_get() == []
+    assert env.site.gets() == [AGENDA]
+    assert source._page is not None and source._page.url == AGENDA
+
+
+async def test_инвариант_только_чтение_при_каждой_проверке_и_при_ошибках(env: Env) -> None:
+    env.site.page(AGENDA, agenda_page([NOV, DIC], flip="none"))
+    source = env.make()
+    with pytest.raises(UnexpectedResponse):
+        await source.fetch(target(2))  # type: ignore[arg-type]  # сломанный календарь: тоже без лишнего
+    env.site.page(AGENDA, agenda_page([EMPTY], banner="No hay cupos disponibles"))
+    await source.fetch(target(1))  # type: ignore[arg-type]
+    await source.fetch(target(1))  # type: ignore[arg-type]
+    assert env.site.non_get() == []
+    assert set(env.site.gets()) == {AGENDA}
+    for entry in await events(source):
+        assert not any(word in entry.lower() for word in READ_ONLY_FORBIDDEN), entry
