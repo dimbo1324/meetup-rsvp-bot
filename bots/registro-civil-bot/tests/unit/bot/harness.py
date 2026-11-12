@@ -84,6 +84,7 @@ class FakeSession(BaseSession):
         self.closed = False
         self._script: dict[type, list[BaseException | ApiFailure | None]] = {}
         self._next_id = 500
+        self.last_message_id = 0
 
     def script(self, method_type: type, *outcomes: BaseException | ApiFailure | None) -> None:
         """Исходы первых вызовов метода по порядку; `None` — обычный успех."""
@@ -137,8 +138,9 @@ class FakeSession(BaseSession):
         if returning is Message or Message in get_args(returning):
             self._next_id += 1
             chat_id = getattr(method, "chat_id", OWNER)
+            self.last_message_id = getattr(method, "message_id", None) or self._next_id
             return {
-                "message_id": getattr(method, "message_id", None) or self._next_id,
+                "message_id": self.last_message_id,
                 "date": 1_700_000_000,
                 "chat": {"id": chat_id, "type": "private"},
                 "text": getattr(method, "text", ""),
