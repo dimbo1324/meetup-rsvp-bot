@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Жёсткие ограничения SPEC 0.3 (правило 3) и 2.3: не настраиваются ни .env, ни Telegram.
@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     sae_url: str = "https://sae.mec.gub.uy/sae/agendarReserva/Paso1.xhtml?e=9&a=82"
     headless: bool = True
     discover_channel: str = ""
+
+    # Журнал наблюдения (решение R6): пусто — папка rcbot-journal на рабочем столе
+    journal_enabled: bool = True
+    journal_dir: str = ""
+    journal_max_gb: float = Field(default=10.0, gt=0, le=1000)
+    journal_trim_to_gb: float = Field(default=5.0, gt=0, le=1000)
+
+    @model_validator(mode="after")
+    def _trim_below_max(self) -> Settings:
+        if self.journal_trim_to_gb >= self.journal_max_gb:
+            raise ValueError("RCBOT_JOURNAL_TRIM_TO_GB должен быть меньше RCBOT_JOURNAL_MAX_GB")
+        return self
 
     @field_validator("poll_interval_sec")
     @classmethod

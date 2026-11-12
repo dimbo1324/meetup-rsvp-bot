@@ -15,10 +15,11 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from rcbot.bootstrap import build_core
+from rcbot.bootstrap import Core, build_core
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey
 from rcbot.config.settings import Settings
 from rcbot.infrastructure.http.client import SafeHttp
+from rcbot.infrastructure.journal.files import FileJournal
 
 CHAT_ID_WAIT_SEC = 180
 
@@ -30,7 +31,7 @@ def _ask(key: SecretKey, *, hidden: bool, existing: bool) -> str:
 
 
 def cmd_init(_: argparse.Namespace) -> int:
-    core = build_core()
+    core = build_core(command="init")
     if not core.paths.env_file.exists():
         example = core.paths.home / ".env.example"
         shutil.copyfile(example, core.paths.env_file)
@@ -138,8 +139,25 @@ async def _probe_hosts(settings: Settings) -> list[tuple[str, bool, str, float |
     return results
 
 
+def _doctor_journal(core: Core) -> None:
+    s = core.settings
+    if not isinstance(core.journal, FileJournal):
+        _line(None if not s.journal_enabled else False, "Журнал наблюдения на рабочем столе")
+        return
+    root = core.journal.root
+    size = core.journal.size()
+    _line(True, f"Журнал наблюдения: {root} ({size / 2**20:.1f} МБ)")
+    _line(
+        True,
+        f"Квота журнала: больше {s.journal_max_gb:g} ГБ — очистка старых дней до "
+        f"{s.journal_trim_to_gb:g} ГБ",
+    )
+    if any(root.is_relative_to(cloud) for cloud in _onedrive_roots()):
+        _line(None, "Журнал лежит в OneDrive: он будет синхронизироваться в облако")
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
-    core = build_core(console=False)
+    core = build_core(console=False, command="doctor")
     ok = True
     py = sys.version_info
     _line(py[:2] == (3, 14), f"Python {py.major}.{py.minor}.{py.micro} (нужен 3.14)")
@@ -171,6 +189,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
     if in_cloud:
         print("    Исключите каталог из синхронизации: в нём база и логи (секретов там нет).")
+
+    _doctor_journal(core)
 
     probes = [] if args.offline else asyncio.run(_probe_hosts(core.settings))
     for host, reachable, detail, drift in probes:

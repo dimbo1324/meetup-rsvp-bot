@@ -15,7 +15,7 @@ from typing import Any
 
 from rcbot.application.incidents import IncidentBook
 from rcbot.application.messages import MessageComposer
-from rcbot.application.ports import Clock, Coordinator, Notifier
+from rcbot.application.ports import Clock, Coordinator, Journal, Notifier, NullJournal
 from rcbot.application.runtime import RuntimeSettings
 from rcbot.application.session_manager import SessionManager
 from rcbot.domain.events import (
@@ -52,6 +52,7 @@ class AlertOrchestrator:
         runtime: RuntimeSettings,
         clock: Clock,
         coordinator: Coordinator,
+        journal: Journal | None = None,
     ) -> None:
         self._notifiers = notifiers
         self._policies = policies
@@ -64,7 +65,8 @@ class AlertOrchestrator:
         self._repeats: list[asyncio.Task[None]] = []
         self._background: set[asyncio.Task[None]] = set()
         self._stopped = asyncio.Event()
-        self.on_delivery: Callable[[DeliveryResult], None] | None = None
+        self._journal: Journal = journal or NullJournal()
+        self.delivery_listeners: list[Callable[[DeliveryResult], None]] = []
 
     # --- события ---
 
@@ -113,6 +115,7 @@ class AlertOrchestrator:
         had_repeats = any(not t.done() for t in self._repeats)
         self._cancel_repeats()
         incident = await self._book.ack()
+        self._journal.event("alert.ack", "владелец подтвердил тревогу: повторы остановлены")
         return had_repeats or incident is not None
 
     async def service(self, text: str) -> None:
@@ -164,6 +167,8 @@ class AlertOrchestrator:
         if not targets:
             logger.warning("тревога %s: нет включённых каналов", alert.kind)
             return []
+        channels = ", ".join(n.channel.value for n in targets)
+        self._journal.event(f"alert.{alert.kind}", f"рассылка ({channels}), попытка {attempt}")
         async with asyncio.TaskGroup() as group:
             tasks = [group.create_task(self._send_one(n, alert, attempt)) for n in targets]
         results = [task.result() for task in tasks]
@@ -183,8 +188,18 @@ class AlertOrchestrator:
         except Exception as error:  # канал не должен уронить рассылку по остальным
             logger.exception("канал %s упал", notifier.channel)
             result = DeliveryResult(notifier.channel, False, 0.0, attempt, type(error).__name__)
-        if self.on_delivery is not None:
-            self.on_delivery(result)
+        level = "INFO" if result.ok else "WARNING"
+        outcome = "доставлено" if result.ok else f"не доставлено: {result.error}"
+        self._journal.event(
+            "delivery",
+            f"{result.channel}: {outcome} за {result.latency_ms:.0f} мс",
+            level,
+            channel=result.channel.value,
+            attempt=result.attempt,
+            ok=result.ok,
+        )
+        for listener in self.delivery_listeners:
+            listener(result)
         return result
 
     def _cancel_repeats(self) -> None:

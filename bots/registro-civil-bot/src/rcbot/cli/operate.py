@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 from playwright.async_api import Error as PlaywrightError
 
-from rcbot.application.ports import AvailabilitySource
+from rcbot.application.ports import AvailabilitySource, CheckRecord
 from rcbot.bootstrap import (
     Core,
     browser_options,
@@ -24,7 +24,7 @@ from rcbot.bootstrap import (
 )
 from rcbot.config.secrets import SecretKey
 from rcbot.domain.errors import ManualStepRequired, RcbotError, SessionExpired
-from rcbot.domain.models import AvailabilitySnapshot, DeliveryResult, Slot
+from rcbot.domain.models import AvailabilitySnapshot, DeliveryResult, Slot, SourceKind
 from rcbot.infrastructure.gubuy.discovery import DiscoveryRecorder
 from rcbot.infrastructure.gubuy.pages import PageKind
 from rcbot.infrastructure.gubuy.probe import probe_agenda
@@ -46,7 +46,7 @@ PROBE_MESSAGES = {
 
 
 def cmd_discover(_: argparse.Namespace) -> int:
-    core = build_core()
+    core = build_core(command="discover")
     s = core.settings
     core.secrets.get(SecretKey.DOC_NUMBER)  # регистрирует номер документа в фильтре очистки
     recorder = DiscoveryRecorder(
@@ -101,7 +101,7 @@ async def _check_once(core: Core) -> AvailabilitySnapshot:
 
 
 def cmd_login(args: argparse.Namespace) -> int:
-    core = build_core()
+    core = build_core(command="login")
     try:
         cookies = asyncio.run(build_authenticator(core).login())
     except RcbotError as error:
@@ -117,15 +117,39 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 
 def cmd_check(_: argparse.Namespace) -> int:
-    core = build_core()
+    core = build_core(command="check")
     try:
         snapshot = asyncio.run(_check_once(core))
-    except ManualStepRequired:
-        print("Сайт требует шаг 1: пройдите его в своём браузере и повторите.", file=sys.stderr)
-        return 1
     except RcbotError as error:
-        print(f"Проверка не удалась: {type(error).__name__}: {error}", file=sys.stderr)
+        core.journal.check(
+            CheckRecord(
+                core.clock.now(),
+                SourceKind.DOM,
+                False,
+                frozenset(),
+                0.0,
+                "check-once",
+                0.0,
+                type(error).__name__,
+                str(error),
+            )
+        )
+        if isinstance(error, ManualStepRequired):
+            print("Сайт требует шаг 1: пройдите его в своём браузере и повторите.", file=sys.stderr)
+        else:
+            print(f"Проверка не удалась: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
+    core.journal.check(
+        CheckRecord(
+            snapshot.observed_at,
+            snapshot.source,
+            True,
+            snapshot.slots,
+            snapshot.latency_ms,
+            "check-once",
+            0.0,
+        )
+    )
     _print_snapshot(snapshot)
     return 0
 
@@ -159,7 +183,7 @@ def _exclusive(core: Core, body: Callable[[], int]) -> int:
 
 def cmd_run(_: argparse.Namespace) -> int:
     # pythonw.exe (Планировщик) запускается без консоли: пишем только в файл лога
-    core = build_core(console=sys.stderr is not None)
+    core = build_core(console=sys.stderr is not None, command="run")
     return _exclusive(core, lambda: asyncio.run(run_app(core), loop_factory=_loop_factory()))
 
 
@@ -171,7 +195,7 @@ def _print_delivery(result: DeliveryResult) -> None:
 
 
 def cmd_simulate(args: argparse.Namespace) -> int:
-    core = build_core()
+    core = build_core(command="simulate")
 
     def body() -> int:
         return asyncio.run(

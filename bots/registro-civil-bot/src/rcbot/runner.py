@@ -21,6 +21,8 @@ from rcbot.application.control import Controller
 from rcbot.application.health import HealthMonitor
 from rcbot.application.housekeeping import Housekeeping
 from rcbot.application.incidents import IncidentBook
+from rcbot.application.journal_feed import JournalFeed
+from rcbot.application.liveness import LivenessMonitor
 from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import AvailabilitySource, NoopCoordinator, Notifier
@@ -140,9 +142,18 @@ async def run_app(
         bus = EventBus()
         composer = MessageComposer(s.tz, s.agenda_url, s.tramite_id)
         alerts = AlertOrchestrator(
-            notifiers, _policies(core), composer, book, session, runtime, clock, NoopCoordinator()
+            notifiers,
+            _policies(core),
+            composer,
+            book,
+            session,
+            runtime,
+            clock,
+            NoopCoordinator(),
+            journal=core.journal,
         )
-        alerts.on_delivery = on_delivery
+        if on_delivery is not None:
+            alerts.delivery_listeners.append(on_delivery)
         loop = PollLoop(
             primary=primary,
             fallback=fallback,
@@ -153,13 +164,37 @@ async def run_app(
             runtime=runtime,
             runtime_store=runtime_store,
             stats=storage.stats,
-            journal=storage.events,
+            event_log=storage.events,
             target=target,
             jitter=s.poll_jitter,
+            journal=core.journal,
         )
+        poll = loop
         _wire(bus, alerts, book)
+        JournalFeed(core.journal, clock).subscribe(bus)
 
-        housekeeping = Housekeeping(storage.maintenance, FileJanitor(core.paths), storage.kv, clock)
+        housekeeping = Housekeeping(
+            storage.maintenance, FileJanitor(core.paths), storage.kv, clock, core.journal
+        )
+
+        async def restart_poll() -> None:
+            # Закрытый браузер прерывает зависшую проверку, затем цикл запускается заново
+            await poll.reset_source()
+            await supervisor.restart("poll")
+
+        async def liveness_extra() -> dict[str, object]:
+            incident = await book.current()
+            days = sorted({x.day.isoformat() for x in incident.slots}) if incident else []
+            return {
+                "incident_open": incident is not None,
+                "incident_days": days,
+                "alert_repeating": alerts.repeating() if alerts else False,
+                "logins_last_hour": session.logins_last_hour(),
+            }
+
+        liveness = LivenessMonitor(
+            loop, core.journal, clock, alerts.service, restart_poll, liveness_extra
+        )
         controller = Controller(
             loop,
             alerts,
@@ -170,6 +205,9 @@ async def run_app(
             clock,
             cleanup=housekeeping.run_once,
             folder_size=housekeeping.folder_size,
+            journal=core.journal,
+            journal_size=core.journal.size,
+            liveness=liveness.diagnose,
         )
         watchdog = None
         if s.watchdog_url:
@@ -203,19 +241,28 @@ async def run_app(
         if simulate_wait_sec is not None:
             return await _simulate(alerts, clock_sleep=clock.sleep, wait_sec=simulate_wait_sec)
 
+        await housekeeping.journal_quota_once()
         supervisor.start("housekeeping", housekeeping.run_forever)
+        supervisor.start("journal-quota", housekeeping.journal_quota_forever)
         supervisor.start("reports", health.daily_reports)
         supervisor.start("watchdog", health.watchdog)
         supervisor.start("poll", loop.run)
+        supervisor.start("liveness", liveness.run)
         interval = loop.current_interval(clock.now())
+        core.journal.event(
+            "bot.start", f"бот запущен: источник {primary.kind}, интервал ≈ {interval:.0f} с"
+        )
         await alerts.service(
             texts.STARTED.format(source=primary.kind.value.upper(), interval=interval)
         )
-        await supervisor.wait_any()
+        # Работает до остановки процесса (Ctrl+C или Планировщик); упавшие задачи перезапускает
+        # супервизор, зависший цикл опроса — монитор живости
+        await asyncio.Future()
         return 0
     finally:
         await _shutdown(loop, alerts, supervisor, closers)
         await storage.close()
+        core.journal.event("bot.stop", "бот остановлен")
 
 
 def _wire(bus: EventBus, alerts: AlertOrchestrator, book: IncidentBook) -> None:

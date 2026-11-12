@@ -85,7 +85,10 @@ def status_text(view: StatusView, tz: ZoneInfo) -> str:
         f"входов за час: {view.logins_last_hour}",
         f"Работает: {_uptime(view.now - s.started_at)}",
         f"Размер папки: {human_size(view.folder_bytes)}",
+        f"Журнал на рабочем столе: {human_size(view.journal_bytes)}",
     ]
+    if view.hung_reason:
+        lines.insert(0, f"⚠️ Цикл опроса завис: {view.hung_reason}")
     if view.channels_off:
         lines.append("Выключены каналы: " + ", ".join(CHANNEL_NAMES[c] for c in view.channels_off))
     if view.incident is not None:

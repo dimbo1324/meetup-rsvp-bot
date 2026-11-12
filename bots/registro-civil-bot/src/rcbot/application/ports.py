@@ -139,6 +139,70 @@ class FileStore(Protocol):
     def folder_size(self) -> int: ...
 
 
+@dataclass(frozen=True)
+class CheckRecord:
+    """Итог одной проверки календаря для журнала наблюдения (решение R6)."""
+
+    at: datetime
+    source: SourceKind
+    ok: bool
+    slots: frozenset[Slot]
+    latency_ms: float
+    state: str
+    interval_sec: float
+    error_kind: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class OpeningRecord:
+    """Появление, изменение или пропажа мест — строка статистики окон записи."""
+
+    at: datetime
+    kind: str
+    slots: frozenset[Slot]
+    source: SourceKind
+    incident_open_sec: float | None = None
+
+
+class Journal(Protocol):
+    """Журнал наблюдения: каждая проверка, каждое действие, окна записи, текущее состояние."""
+
+    def check(self, record: CheckRecord) -> None: ...
+
+    def event(self, code: str, message: str, level: str = "INFO", **data: object) -> None: ...
+
+    def opening(self, record: OpeningRecord) -> None: ...
+
+    def status(self, snapshot: dict[str, object]) -> None: ...
+
+    def enforce_quota(self) -> tuple[int, int]: ...
+
+    def size(self) -> int: ...
+
+
+class NullJournal:
+    """Журнал выключен (RCBOT_JOURNAL_ENABLED=false) или не нужен команде CLI."""
+
+    def check(self, record: CheckRecord) -> None:
+        """Ничего не пишет."""
+
+    def event(self, code: str, message: str, level: str = "INFO", **data: object) -> None:
+        """Ничего не пишет."""
+
+    def opening(self, record: OpeningRecord) -> None:
+        """Ничего не пишет."""
+
+    def status(self, snapshot: dict[str, object]) -> None:
+        """Ничего не пишет."""
+
+    def enforce_quota(self) -> tuple[int, int]:
+        return 0, 0
+
+    def size(self) -> int:
+        return 0
+
+
 class WatchdogPinger(Protocol):
     async def ping(self) -> bool: ...
 

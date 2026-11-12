@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.incidents import IncidentBook
 from rcbot.application.poll_loop import PollLoop
-from rcbot.application.ports import Clock, EventLog, IncidentRepository
+from rcbot.application.ports import Clock, EventLog, IncidentRepository, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
 from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
@@ -37,6 +37,8 @@ class StatusView:
     quiet_remaining_sec: float
     channels_off: frozenset[Channel]
     folder_bytes: int | None
+    journal_bytes: int | None
+    hung_reason: str
     now: datetime
 
 
@@ -53,21 +55,27 @@ class Controller:
         alerts: AlertOrchestrator,
         book: IncidentBook,
         incidents: IncidentRepository,
-        journal: EventLog,
+        event_log: EventLog,
         session: SessionManager,
         clock: Clock,
         cleanup: Callable[[], Awaitable[dict[str, int]]] | None = None,
         folder_size: Callable[[], int] | None = None,
+        journal: Journal | None = None,
+        journal_size: Callable[[], int] | None = None,
+        liveness: Callable[[], str] | None = None,
     ) -> None:
         self._loop = loop
         self._alerts = alerts
         self._book = book
         self._incidents = incidents
-        self._journal = journal
+        self._event_log = event_log
         self._session = session
         self._clock = clock
         self._cleanup = cleanup
         self._folder_size = folder_size
+        self._journal: Journal = journal or NullJournal()
+        self._journal_size = journal_size
+        self._liveness = liveness
 
     async def status(self) -> StatusView:
         now = self._clock.now()
@@ -85,24 +93,32 @@ class Controller:
             quiet_remaining_sec=self._session.quiet_remaining(),
             channels_off=frozenset(runtime.channels_off),
             folder_bytes=self._folder_size() if self._folder_size else None,
+            journal_bytes=self._journal_size() if self._journal_size else None,
+            hung_reason=self._liveness() if self._liveness else "",
             now=now,
         )
 
     async def pause(self, minutes: int | None) -> datetime:
         until = self._clock.now() + (timedelta(minutes=minutes) if minutes else FOREVER)
         await self._loop.pause(until)
+        self._journal.event("command.pause", f"пауза до {until.isoformat()}")
         return until
 
     async def resume(self) -> None:
         await self._loop.resume()
+        self._journal.event("command.resume", "опрос продолжен")
 
     async def set_interval(self, seconds: float) -> float:
         if seconds < MIN_POLL_INTERVAL_SEC:
             raise IntervalTooSmall(f"меньше {MIN_POLL_INTERVAL_SEC:.0f} с нельзя")
-        return await self._loop.set_interval(seconds)
+        value = await self._loop.set_interval(seconds)
+        self._journal.event("command.interval", f"базовый интервал {value:.0f} с")
+        return value
 
     async def set_months(self, months: int) -> int:
-        return await self._loop.set_months(months)
+        value = await self._loop.set_months(months)
+        self._journal.event("command.months", f"месяцев вперёд: {value}")
+        return value
 
     async def toggle_channel(self, channel: Channel) -> bool:
         runtime = self._loop.runtime
@@ -111,18 +127,23 @@ class Controller:
         else:
             runtime.channels_off.add(channel)
         await self._loop.save_runtime()
-        return channel not in runtime.channels_off
+        enabled = channel not in runtime.channels_off
+        self._journal.event("command.channel", f"{channel}: {'включён' if enabled else 'выключен'}")
+        return enabled
 
     async def test(self, channel: Channel | None = None) -> list[DeliveryResult]:
+        self._journal.event("command.test", f"тест каналов: {channel or 'все'}")
         return await self._alerts.test({channel} if channel else None)
 
     async def ack(self) -> bool:
         return await self._alerts.ack()
 
     def manual_done(self) -> None:
+        self._journal.event("command.manual_done", "владелец прошёл шаг 1")
         self._loop.manual_done()
 
     async def relogin(self) -> str:
+        self._journal.event("command.relogin", "повторный вход по команде")
         try:
             await self._loop.relogin()
         except RcbotError as error:
@@ -130,11 +151,13 @@ class Controller:
         return ""
 
     async def cleanup(self) -> dict[str, int]:
-        return await self._cleanup() if self._cleanup else {}
+        removed = await self._cleanup() if self._cleanup else {}
+        self._journal.event("command.cleanup", f"очистка: {removed}")
+        return removed
 
     async def last(self, limit: int = 5) -> list[IncidentView]:
         incidents = await self._incidents.last(limit)
         return [IncidentView(i, await self._incidents.deliveries_for(i.id)) for i in incidents]
 
     async def recent_errors(self, limit: int = 5) -> list[AppEvent]:
-        return await self._journal.last(limit, "WARNING")
+        return await self._event_log.last(limit, "WARNING")

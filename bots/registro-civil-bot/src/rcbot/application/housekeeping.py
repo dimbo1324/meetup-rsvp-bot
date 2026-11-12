@@ -6,7 +6,14 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from rcbot.application.ports import Clock, FileStore, KeyValueStore, Maintenance
+from rcbot.application.ports import (
+    Clock,
+    FileStore,
+    Journal,
+    KeyValueStore,
+    Maintenance,
+    NullJournal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +32,24 @@ FILE_RETENTION: dict[str, tuple[timedelta, int | None]] = {
     "shots": (timedelta(days=3), 20),
 }
 LOG_RETENTION = timedelta(days=14)
+# Квота журнала проверяется часто: за 10 минут журнал вырасти на гигабайты не успеет
+JOURNAL_QUOTA_EVERY_SEC = 600.0
 
 
 class Housekeeping:
     def __init__(
-        self, maintenance: Maintenance, files: FileStore, kv: KeyValueStore, clock: Clock
+        self,
+        maintenance: Maintenance,
+        files: FileStore,
+        kv: KeyValueStore,
+        clock: Clock,
+        journal: Journal | None = None,
     ) -> None:
         self._maintenance = maintenance
         self._files = files
         self._kv = kv
         self._clock = clock
+        self._journal: Journal = journal or NullJournal()
 
     def start(self) -> int:
         """Временные файлы очищаются при каждом запуске."""
@@ -57,6 +72,7 @@ class Housekeeping:
         removed = {k: v for k, v in removed.items() if v}
         if removed:
             logger.info("очистка: %s", removed)
+            self._journal.event("housekeeping", f"очистка по срокам: {removed}")
         return removed
 
     async def _compact_due(self, now: datetime) -> bool:
@@ -65,6 +81,19 @@ class Housekeeping:
 
     def folder_size(self) -> int:
         return self._files.folder_size()
+
+    async def journal_quota_once(self) -> tuple[int, int]:
+        files, freed = await asyncio.to_thread(self._journal.enforce_quota)
+        if files:
+            message = f"квота журнала: удалено {files} старых файлов, {freed / 2**30:.2f} ГБ"
+            logger.warning(message)
+            self._journal.event("journal.quota", message, "WARNING")
+        return files, freed
+
+    async def journal_quota_forever(self) -> None:
+        while True:
+            await self.journal_quota_once()
+            await self._clock.sleep(JOURNAL_QUOTA_EVERY_SEC)
 
     async def run_forever(self) -> None:
         while True:

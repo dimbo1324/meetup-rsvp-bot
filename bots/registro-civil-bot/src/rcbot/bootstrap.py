@@ -11,6 +11,7 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from rcbot import __version__
+from rcbot.application.ports import Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
@@ -31,6 +32,8 @@ from rcbot.infrastructure.gubuy.auth import PlaywrightAuthenticator
 from rcbot.infrastructure.gubuy.browser import BrowserOptions
 from rcbot.infrastructure.gubuy.dom_source import DomSource
 from rcbot.infrastructure.http.client import SafeHttp
+from rcbot.infrastructure.journal.desktop import journal_dir
+from rcbot.infrastructure.journal.files import FileJournal
 from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.infrastructure.logging.setup import setup_logging
 from rcbot.infrastructure.sentry import init_sentry
@@ -48,9 +51,16 @@ class Core:
     settings: Settings
     secrets: SecretStore
     clock: SystemClock = field(default_factory=SystemClock)
+    journal: Journal = field(default_factory=NullJournal)
+
+    def close(self) -> None:
+        if isinstance(self.journal, FileJournal):
+            self.journal.close()
 
 
-def build_core(paths: Paths | None = None, *, console: bool = True, level: str = "INFO") -> Core:
+def build_core(
+    paths: Paths | None = None, *, console: bool = True, level: str = "INFO", command: str = ""
+) -> Core:
     paths = paths or Paths.default()
     paths.ensure()
     paths.apply_process_env()
@@ -59,7 +69,31 @@ def build_core(paths: Paths | None = None, *, console: bool = True, level: str =
     REDACTOR.register_many(v for v in (settings.tramite_id, _etapa(settings.agenda_url)) if v)
     secrets = SecretStore(on_read=REDACTOR.register)
     init_sentry(settings.sentry_enabled, settings.sentry_dsn, f"rcbot@{__version__}")
-    return Core(paths, settings, secrets)
+    core = Core(paths, settings, secrets)
+    core.journal = build_journal(core)
+    if command:
+        core.journal.event(f"cli.{command}", f"запущена команда rcbot {command}")
+    return core
+
+
+def build_journal(core: Core) -> Journal:
+    """Журнал наблюдения на рабочем столе (R6); если папка недоступна — бот работает без него."""
+    s = core.settings
+    if not s.journal_enabled:
+        return NullJournal()
+    try:
+        journal = FileJournal(
+            journal_dir(s.journal_dir),
+            s.tz,
+            core.clock,
+            max_bytes=int(s.journal_max_gb * 2**30),
+            trim_to_bytes=int(s.journal_trim_to_gb * 2**30),
+        )
+    except OSError as error:
+        logger.warning("журнал наблюдения недоступен: %s", type(error).__name__)
+        return NullJournal()
+    journal.attach_log_handler()
+    return journal
 
 
 def _etapa(agenda_url: str) -> str:

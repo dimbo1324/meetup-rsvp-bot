@@ -40,7 +40,7 @@ def cmd_purge(_: argparse.Namespace) -> int:
 
 
 def cmd_uninstall(_: argparse.Namespace) -> int:
-    core = build_core(console=False)
+    core = build_core(console=False, command="uninstall")
     if not _not_running(core.paths):
         return 3
     answer = input(

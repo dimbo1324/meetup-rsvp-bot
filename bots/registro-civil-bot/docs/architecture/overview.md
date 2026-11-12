@@ -19,12 +19,14 @@ ntfy и CallMeBot ещё не запускался — это этап 3. Тес
 | | `alerting.py`, `messages.py` | Первая волна во все каналы через `TaskGroup`, повторы 60 с × 30, 120 с × 10, 180 с × 5 до «Вижу» или пропажи мест; служебные сообщения только в Telegram; прогрев каналов раз в 4 минуты; тексты SPEC 2.4 |
 | | `incidents.py`, `bus.py` | Запись инцидентов и доставок после отправки; шина событий без ожидания подписчиков |
 | | `runtime.py`, `control.py`, `status.py` | Настройки из Telegram в `kv_settings`; фасад управления для Telegram и CLI |
-| | `housekeeping.py`, `health.py`, `supervisor.py` | Сроки хранения SPEC 2.7, VACUUM раз в неделю; ежедневный отчёт, пинг «сторожа»; перезапуск упавших задач |
+| | `housekeeping.py`, `health.py`, `supervisor.py` | Сроки хранения SPEC 2.7, VACUUM раз в неделю, квота журнала каждые 10 минут; ежедневный отчёт, пинг «сторожа»; перезапуск упавших задач (и по запросу) |
+| | `journal_feed.py`, `liveness.py` | Каждое доменное событие — в журнал наблюдения, окна записи — в `openings.csv`; `status.json` раз в 30 с, обнаружение зависания цикла опроса и его перезапуск (R6) |
 | Инфраструктура | `infrastructure/gubuy/` | `auth.py` (вход через ID Uruguay в Playwright без профиля), `dom_source.py` (чтение зелёных дней), `api_source.py` (каркас; разбор — заглушка до разведки), `sae_source.py` (не реализован, D6), `discovery.py` (разведка), `pages.py`, `parsers.py`, `quarantine.py`, `probe.py` |
 | | `infrastructure/http/client.py` | `SafeHttp`: только https и хосты SPEC 2.6, TLS всегда |
 | | `infrastructure/notify/` | Telegram (aiogram), ntfy, CallMeBot (запасной английский голос, D8), «сторож» |
 | | `infrastructure/db/` | SQLite в WAL, таблицы SPEC 3.2 (время — ISO-строки UTC), миграция `0001`, репозитории |
 | | `infrastructure/logging/` | Ротация 5 × 2 МБ, `RedactionFilter` на всех обработчиках |
+| | `infrastructure/journal/` | Журнал на рабочем столе (R6): дневные файлы проверок, событий и подробного лога, `openings.csv`, `status.json`, квота 10 → 5 ГБ |
 | | `infrastructure/win/`, `files.py`, `sentry.py`, `clock.py` | Мьютекс + lock-файл, защита от сна, очистка файлов, Sentry (выключен), системные часы |
 | Интерфейс | `bot/` | Только владелец (внешний middleware), команды SPEC 2.5, «Вижу», «Готово», слово «ок», меню на aiogram-dialog |
 | | `cli/`, `__main__.py` | `rcbot init`, `doctor` (`--offline`, `--full`), `discover`, `login [--check]`, `check --once`, `run`, `simulate`, `purge`, `uninstall` |
@@ -41,6 +43,9 @@ ntfy и CallMeBot ещё не запускался — это этап 3. Тес
 - **Признаки страниц и шаги входа** взяты из записи экрана и на живом сайте не проверены
   (`pages.py`, `auth.py`); проверка — `rcbot login --check` на этапе 3.
 - **Шаг 1** бот не проходит: `NEEDS_MANUAL`, кнопка «Готово», перепроверка раз в 15 минут.
+- **Журнал наблюдения** — `Desktop\rcbot-journal` (R6): каждая проверка и каждое действие, окна
+  записи в `openings.csv`, `status.json` с `alive_at` и признаком зависания. Проверка дольше 150 с
+  прерывается; если цикл всё же встал, монитор живости перезапускает его и браузер.
 
 ## Проверено без сети при разработке
 

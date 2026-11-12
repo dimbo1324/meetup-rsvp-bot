@@ -18,11 +18,22 @@ class Supervisor:
     def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._specs: dict[str, tuple[Callable[[], Awaitable[None]], bool]] = {}
 
     def start(
         self, name: str, factory: Callable[[], Awaitable[None]], *, restart: bool = True
     ) -> None:
+        self._specs[name] = (factory, restart)
         self._tasks[name] = asyncio.create_task(self._guard(name, factory, restart), name=name)
+
+    async def restart(self, name: str) -> None:
+        """Принудительный перезапуск задачи (например, зависшего цикла опроса)."""
+        task = self._tasks.get(name)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait({task}, timeout=10)
+        factory, restart = self._specs[name]
+        self.start(name, factory, restart=restart)
 
     async def _guard(
         self, name: str, factory: Callable[[], Awaitable[None]], restart: bool
@@ -41,12 +52,6 @@ class Supervisor:
             await self._clock.sleep(delay)
             delay = min(delay * 2, RESTART_MAX_SEC)
             logger.warning("задача «%s» перезапускается", name)
-
-    async def wait_any(self) -> str:
-        """Ждёт завершения любой задачи (обычно — цикла опроса при остановке)."""
-        done, _ = await asyncio.wait(set(self._tasks.values()), return_when=asyncio.FIRST_COMPLETED)
-        task = next(iter(done))
-        return task.get_name()
 
     async def stop(self, wait_sec: float = 10.0) -> None:
         for task in self._tasks.values():

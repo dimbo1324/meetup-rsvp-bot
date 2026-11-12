@@ -15,7 +15,15 @@ from datetime import datetime
 from typing import Any
 
 from rcbot.application.bus import EventBus
-from rcbot.application.ports import AvailabilitySource, Clock, EventLog, StatsRepository
+from rcbot.application.ports import (
+    AvailabilitySource,
+    CheckRecord,
+    Clock,
+    EventLog,
+    Journal,
+    NullJournal,
+    StatsRepository,
+)
 from rcbot.application.runtime import RuntimeSettings, RuntimeStore, clamp_interval
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
@@ -26,6 +34,7 @@ from rcbot.domain.errors import (
     LoginFailed,
     ManualStepRequired,
     RateLimited,
+    RcbotError,
     ReloginBudgetExceeded,
     ReloginDeferred,
     SessionExpired,
@@ -34,7 +43,14 @@ from rcbot.domain.errors import (
     UnexpectedResponse,
 )
 from rcbot.domain.events import ManualActionRequired, PollerStateChanged, SourceSwitched
-from rcbot.domain.models import AppEvent, PollState, PollStatsHour, SourceKind, WatchTarget
+from rcbot.domain.models import (
+    AppEvent,
+    AvailabilitySnapshot,
+    PollState,
+    PollStatsHour,
+    SourceKind,
+    WatchTarget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +61,8 @@ MANUAL_RECHECK_SEC = 900.0
 REAUTH_RETRY_SEC = 30.0
 REAUTH_FAILURES_TO_BACKOFF = 3
 UNEXPECTED_TO_SWITCH = 3
+# Проверка дольше этого прерывается, браузер перезапускается (защита от зависания)
+FETCH_TIMEOUT_SEC = 150.0
 
 
 class PollLoop:
@@ -60,10 +78,11 @@ class PollLoop:
         runtime: RuntimeSettings,
         runtime_store: RuntimeStore,
         stats: StatsRepository,
-        journal: EventLog,
+        event_log: EventLog,
         target: WatchTarget,
         jitter: float,
         rng: random.Random | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self._source = primary
         self._fallback = fallback
@@ -74,7 +93,8 @@ class PollLoop:
         self.runtime = runtime
         self._runtime_store = runtime_store
         self._stats = stats
-        self._journal = journal
+        self._event_log = event_log
+        self._journal: Journal = journal or NullJournal()
         self._target = target
         self._jitter = jitter
         self._rng = rng or random.Random()
@@ -87,6 +107,9 @@ class PollLoop:
         self._reauth_failures = 0
         self._unexpected_streak = 0
         self._hour: PollStatsHour | None = None
+        # Ход цикла для обнаружения зависаний (application/liveness.py)
+        self.tick_started_at: float | None = None
+        self.last_tick_finished_at: float | None = None
 
     # --- управление (Telegram, CLI) ---
 
@@ -144,7 +167,9 @@ class PollLoop:
             if self.runtime.paused(now):
                 self._set_state(PollState.PAUSED, "пауза по команде")
                 until = self.runtime.paused_until
-                await self._wait((until - now).total_seconds() if until else BACKOFF_MAX_SEC)
+                pause_sec = (until - now).total_seconds() if until else BACKOFF_MAX_SEC
+                self._next_due = self._clock.monotonic() + pause_sec
+                await self._wait(pause_sec)
                 continue
             if self.status.state is PollState.PAUSED:
                 self._set_state(PollState.RUNNING, "пауза закончилась")
@@ -173,21 +198,18 @@ class PollLoop:
     async def _tick(self) -> float:
         target = replace(self._target, months_ahead=self.runtime.months_ahead)
         logins_before = self._session.logins
+        started = self._clock.monotonic()
+        self.tick_started_at = started
         try:
-            snapshot = await self._source.fetch(target)
-        except SessionExpired as error:
-            return await self._reauth(str(error))
-        except ManualStepRequired as error:
-            return self._needs_manual(str(error))
-        except RateLimited as error:
-            return await self._rate_limited(str(error))
-        except UnexpectedResponse as error:
-            return self._unexpected(str(error))
-        except SourceNotConfigured as error:
-            return self._switch_to_fallback(str(error)) or self._backoff(str(error))
-        except (SiteUnavailable, HostNotAllowed) as error:
-            return self._backoff(str(error))
+            async with asyncio.timeout(FETCH_TIMEOUT_SEC):
+                snapshot = await self._source.fetch(target)
+        except (TimeoutError, RcbotError) as error:
+            delay = await self._handle_error(error)
+            self._record_check(None, (self._clock.monotonic() - started) * 1000, error)
+            return delay
         finally:
+            self.tick_started_at = None
+            self.last_tick_finished_at = self._clock.monotonic()
             if self._session.logins != logins_before:
                 self._count(relogin=True)
 
@@ -202,7 +224,83 @@ class PollLoop:
         event = self._detector.compare(snapshot)
         if event is not None:
             self._bus.publish(event)
-        return self._schedule_next()
+        delay = self._schedule_next()
+        self._record_check(snapshot, snapshot.latency_ms, None)
+        return delay
+
+    async def _handle_error(self, error: BaseException) -> float:
+        if isinstance(error, TimeoutError):
+            # Зависшая проверка: браузер или соединение закрываются и создаются заново
+            reason = f"проверка не уложилась в {FETCH_TIMEOUT_SEC:.0f} с и прервана"
+            self._journal.event("check.timeout", reason, "WARNING")
+            self._spawn(self.reset_source())
+            return self._backoff(reason)
+        if isinstance(error, SessionExpired):
+            return await self._reauth(str(error))
+        if isinstance(error, ManualStepRequired):
+            return self._needs_manual(str(error))
+        if isinstance(error, RateLimited):
+            return await self._rate_limited(str(error))
+        if isinstance(error, UnexpectedResponse):
+            return self._unexpected(str(error))
+        if isinstance(error, SourceNotConfigured):
+            return self._switch_to_fallback(str(error)) or self._backoff(str(error))
+        if isinstance(error, (SiteUnavailable, HostNotAllowed)):
+            return self._backoff(str(error))
+        return self._backoff(f"{type(error).__name__}: {error}")
+
+    def _record_check(
+        self, snapshot: AvailabilitySnapshot | None, latency_ms: float, error: BaseException | None
+    ) -> None:
+        self._journal.check(
+            CheckRecord(
+                at=self._clock.now(),
+                source=self._source.kind,
+                ok=error is None,
+                slots=snapshot.slots if snapshot else frozenset(),
+                latency_ms=latency_ms,
+                state=self.status.state.value,
+                interval_sec=self.status.interval_sec,
+                error_kind=type(error).__name__ if error else "",
+                error=str(error) if error else "",
+            )
+        )
+
+    async def reset_source(self) -> None:
+        try:
+            await self._source.close()
+        except Exception as error:  # закрытие сломанного браузера может падать по-разному
+            logger.warning("источник не закрылся чисто: %s", type(error).__name__)
+
+    @property
+    def next_due(self) -> float:
+        return self._next_due
+
+    def snapshot(self) -> dict[str, object]:
+        """Состояние для status.json журнала наблюдения."""
+        s = self.status
+        now = self._clock.now()
+        mono = self._clock.monotonic()
+        paused = self.runtime.paused_until if self.runtime.paused(now) else None
+        in_progress = None if self.tick_started_at is None else mono - self.tick_started_at
+        return {
+            "state": s.state.value,
+            "state_reason": s.state_reason,
+            "source": self._source.kind.value,
+            "interval_sec": round(self.current_interval(now), 1),
+            "base_interval_sec": self.runtime.base_interval_sec,
+            "months_ahead": self.runtime.months_ahead,
+            "paused_until": paused.isoformat() if paused else None,
+            "started_at": s.started_at.isoformat(),
+            "last_check_at": s.last_check_at.isoformat() if s.last_check_at else None,
+            "last_latency_ms": s.last_latency_ms,
+            "next_check_in_sec": round(max(0.0, self._next_due - mono), 1),
+            "check_in_progress_sec": None if in_progress is None else round(in_progress, 1),
+            "checks_total": s.checks_total,
+            "errors_total": s.errors_total,
+            "last_error": s.last_error,
+            "last_error_at": s.last_error_at.isoformat() if s.last_error_at else None,
+        }
 
     def _schedule_next(self) -> float:
         now_mono = self._clock.monotonic()
@@ -224,6 +322,7 @@ class PollLoop:
     async def _reauth(self, reason: str) -> float:
         self._set_state(PollState.REAUTH, reason)
         self._session.mark_expired()
+        self._journal.event("login.start", f"вход на сайт: {reason}")
         try:
             await self._session.relogin(reason)
         except ReloginDeferred:
@@ -233,6 +332,7 @@ class PollLoop:
             return self._delay(BACKOFF_MAX_SEC)
         except (LoginFailed, SiteUnavailable, RateLimited) as error:
             self._reauth_failures += 1
+            self._journal.event("login.failed", f"вход не удался: {error}", "WARNING")
             self._error(f"вход не удался: {error}")
             if self._reauth_failures >= REAUTH_FAILURES_TO_BACKOFF:
                 self._set_state(
@@ -242,6 +342,7 @@ class PollLoop:
                 return self._delay(self._backoff_delay())
             return self._delay(REAUTH_RETRY_SEC)
         self._reauth_failures = 0
+        self._journal.event("login.ok", "вход выполнен")
         self._set_state(PollState.RUNNING, "вход выполнен")
         return self._delay(0.0)
 
@@ -304,7 +405,7 @@ class PollLoop:
         self._bus.publish(PollerStateChanged(self._clock.now(), old, state, reason))
         level = "INFO" if state in (PollState.RUNNING, PollState.PAUSED) else "WARNING"
         self._spawn(
-            self._journal.write(AppEvent(self._clock.now(), level, f"state.{state}", reason))
+            self._event_log.write(AppEvent(self._clock.now(), level, f"state.{state}", reason))
         )
         logger.info("состояние опроса %s → %s: %s", old, state, reason)
 
