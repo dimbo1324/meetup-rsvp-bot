@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ from rcbot.domain.errors import RcbotError
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, Incident, SourceKind
 
 FOREVER = timedelta(days=3650)
+MAX_PAUSE_MINUTES = 525_600  # год
 
 
 class IntervalTooSmall(ValueError):
@@ -99,6 +101,11 @@ class Controller:
         )
 
     async def pause(self, minutes: int | None) -> datetime:
+        if minutes is not None and not 0 <= minutes <= MAX_PAUSE_MINUTES:
+            # timedelta(minutes=10**12) падает OverflowError: отказ должен быть понятным
+            raise ValueError(
+                f"пауза от 1 минуты до {MAX_PAUSE_MINUTES} (год); без числа — до /resume"
+            )
         until = self._clock.now() + (timedelta(minutes=minutes) if minutes else FOREVER)
         await self._loop.pause(until)
         self._journal.event("command.pause", f"пауза до {until.isoformat()}")
@@ -109,8 +116,9 @@ class Controller:
         self._journal.event("command.resume", "опрос продолжен")
 
     async def set_interval(self, seconds: float) -> float:
-        if seconds < MIN_POLL_INTERVAL_SEC:
-            raise IntervalTooSmall(f"меньше {MIN_POLL_INTERVAL_SEC:.0f} с нельзя")
+        # NaN не меньше минимума ни в одном сравнении: проверяем число отдельно
+        if not math.isfinite(seconds) or seconds < MIN_POLL_INTERVAL_SEC:
+            raise IntervalTooSmall(f"меньше {MIN_POLL_INTERVAL_SEC:.0f} с или не число нельзя")
         value = await self._loop.set_interval(seconds)
         self._journal.event("command.interval", f"базовый интервал {value:.0f} с")
         return value

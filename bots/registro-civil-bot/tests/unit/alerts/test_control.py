@@ -169,7 +169,13 @@ async def test_готово_пишет_в_журнал_и_будит_цикл_о
     assert len(ctl.source.calls) == 1  # первая проверка; следующая — через минуту
     ctl.controller.manual_done()
     await settle()
-    assert len(ctl.source.calls) == 2  # владелец прошёл шаг 1: проверка сразу
+    # Владелец прошёл шаг 1: цикл просыпается, но минимум между проверками для DomSource — 60 с
+    # (SPEC 0.3, правило 3; решение T2): раньше проверка не пойдёт
+    assert len(ctl.source.calls) == 1
+    await ctl.rig.clock.advance(59)
+    assert len(ctl.source.calls) == 1
+    await ctl.rig.clock.advance(1)
+    assert len(ctl.source.calls) == 2  # и сразу по истечении минимума, а не через обычный период
     assert "command.manual_done" in ctl.rig.journal.codes()
     ctl.loop.stop()
     await ctl.rig.clock.advance(1)
@@ -182,6 +188,9 @@ async def test_смена_интервала_будит_цикл_опроса() 
     await settle()
     await ctl.controller.set_interval(30.0)
     await settle()
+    # Команда будит цикл, но интервал между проверками не сокращается ниже минимума DomSource
+    assert len(ctl.source.calls) == 1
+    await ctl.rig.clock.advance(60)
     assert len(ctl.source.calls) == 2
     ctl.loop.stop()
     await ctl.rig.clock.advance(1)

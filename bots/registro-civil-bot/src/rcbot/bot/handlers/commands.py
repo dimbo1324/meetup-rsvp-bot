@@ -10,12 +10,11 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 from aiogram_dialog import DialogManager, StartMode
 
-from rcbot.application.control import Controller, IntervalTooSmall
+from rcbot.application.control import MAX_PAUSE_MINUTES, Controller, IntervalTooSmall
 from rcbot.bot import texts
 from rcbot.bot.dialogs.states import MenuSG
 
 # Дольше года пауза «на минуты» не бывает; для паузы без срока есть /pause без числа
-MAX_PAUSE_MINUTES = 525_600
 PAUSE_BAD = "Нужно число минут от 1 до 525600: /pause 30 (или просто /pause)"
 
 
