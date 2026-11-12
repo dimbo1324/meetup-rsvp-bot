@@ -21,8 +21,9 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import IO
 from zoneinfo import ZoneInfo
@@ -70,7 +71,10 @@ class _DailyWriter:
             if day != self._day or self._file is None:
                 self._close()
                 self._directory.mkdir(parents=True, exist_ok=True)
-                self._file = self.path_for(day).open("a", encoding="utf-8", newline="\n")
+                # errors="replace": одиночный суррогат в тексте не должен ронять запись
+                self._file = self.path_for(day).open(
+                    "a", encoding="utf-8", errors="replace", newline="\n"
+                )
                 self._day = day
             self._file.write(line if line.endswith("\n") else line + "\n")
             self._file.flush()
@@ -112,6 +116,28 @@ class DailyLogHandler(logging.Handler):
         super().close()
 
 
+def _scrub(value: object) -> object:
+    """Вырезает секреты в каждом значении по отдельности, а не в готовом JSON-тексте.
+
+    Редактор вырезает «до конца строки» (`Cookie: …`, `password=…`): по готовому JSON он съедал
+    закрывающие кавычки и скобки, и запись ломалась. Числа проверяются как текст: длинный номер
+    (chat_id) заменяется на `***`.
+    """
+    if isinstance(value, str):
+        return REDACTOR.redact(value)
+    if isinstance(value, dict):
+        return {REDACTOR.redact(str(key)): _scrub(item) for key, item in value.items()}
+    if isinstance(value, list | tuple | set | frozenset):
+        return [_scrub(item) for item in value]
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        text = str(value)
+        redacted = REDACTOR.redact(text)
+        return value if redacted == text else redacted
+    return REDACTOR.redact(str(value))
+
+
 def _slots(slots: frozenset[Slot]) -> list[str]:
     return sorted(slot.label() for slot in slots)
 
@@ -138,7 +164,13 @@ class FileJournal:
     def attach_log_handler(self, level: int = logging.DEBUG) -> DailyLogHandler:
         handler = DailyLogHandler(self.root / "logs", self._tz)
         handler.setLevel(level)
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+        # Файл дня выбирается по поясу журнала: время в строках обязано быть в том же поясе,
+        # а не в поясе машины (иначе строка 23:50 могла бы лежать в файле следующего дня)
+        formatter.converter = lambda seconds: datetime.fromtimestamp(
+            seconds or 0.0, self._tz
+        ).timetuple()
+        handler.setFormatter(formatter)
         logging.getLogger().addHandler(handler)
         self.log_handler = handler
         return handler
@@ -171,16 +203,14 @@ class FileJournal:
             "message": REDACTOR.redact(message),
         }
         if data:
-            line["data"] = json.loads(
-                REDACTOR.redact(json.dumps(data, ensure_ascii=False, default=str))
-            )
+            line["data"] = _scrub(data)
         self._safe(self._events, line, at)
 
     def opening(self, record: OpeningRecord) -> None:
         days = sorted({s.day.isoformat() for s in record.slots})
         row = (
             self._local(record.at),
-            record.at.isoformat(timespec="seconds"),
+            record.at.astimezone(UTC).isoformat(timespec="seconds"),
             record.kind,
             len(days),
             " ".join(days),
@@ -190,14 +220,15 @@ class FileJournal:
         path = self.root / "openings.csv"
         with self._openings_lock:
             try:
-                new = not path.exists()
+                new = not path.exists() or path.stat().st_size == 0
                 buffer = io.StringIO()
                 writer = csv.writer(buffer, delimiter=";")
                 if new:
                     writer.writerow(OPENINGS_HEADER)
                 writer.writerow(row)
                 # utf-8-sig: Excel открывает русские заголовки без ручного выбора кодировки
-                with path.open("a", encoding="utf-8-sig" if new else "utf-8", newline="") as f:
+                encoding = "utf-8-sig" if new else "utf-8"
+                with path.open("a", encoding=encoding, errors="replace", newline="") as f:
                     f.write(buffer.getvalue())
             except OSError as error:
                 logger.warning("журнал: openings.csv не записан: %s", type(error).__name__)
@@ -206,8 +237,8 @@ class FileJournal:
         path = self.root / "status.json"
         tmp = self.root / "status.json.tmp"
         try:
-            text = REDACTOR.redact(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
-            tmp.write_text(text, encoding="utf-8")
+            text = json.dumps(_scrub(snapshot), ensure_ascii=False, indent=2)
+            tmp.write_text(text, encoding="utf-8", errors="replace")
             os.replace(tmp, path)
         except OSError:
             # Файл открыт в редакторе — не страшно, запишем при следующем обновлении
@@ -221,21 +252,25 @@ class FileJournal:
 
     # --- размер и квота ---
 
-    def _files(self) -> list[Path]:
-        return [p for p in self.root.rglob("*") if p.is_file()]
-
-    def size(self) -> int:
-        total = 0
-        for path in self._files():
+    def _files(self) -> list[tuple[Path, int]]:
+        """Все файлы папки с размерами; один `stat` на файл (в Windows это самая дорогая часть)."""
+        found = []
+        for path in self.root.rglob("*"):
             try:
-                total += path.stat().st_size
+                info = path.stat()
             except OSError:
                 continue
-        return total
+            if stat.S_ISREG(info.st_mode):
+                found.append((path, info.st_size))
+        return found
+
+    def size(self) -> int:
+        return sum(size for _, size in self._files())
 
     def enforce_quota(self) -> tuple[int, int]:
         """Больше квоты → удаляются самые старые дни до целевого размера. (файлов, байт)."""
-        total = self.size()
+        files = self._files()
+        total = sum(size for _, size in files)
         if total <= self._max:
             return 0, 0
         protected = {p for p in (self._checks.today(), self._events.today()) if p is not None}
@@ -243,16 +278,15 @@ class FileJournal:
             protected.add(today)
         today_iso = self._clock.now().astimezone(self._tz).date().isoformat()
         dated = []
-        for path in self._files():
+        for path, size in files:
             match = DATED.search(path.name)
             if match and path not in protected and match.group(1) < today_iso:
-                dated.append((match.group(1), path))
+                dated.append((match.group(1), path, size))
         removed_files = removed_bytes = 0
-        for _, path in sorted(dated):
+        for _, path, size in sorted(dated):
             if total <= self._target:
                 break
             try:
-                size = path.stat().st_size
                 path.unlink()
             except OSError:
                 continue
