@@ -53,20 +53,35 @@ def cmd_uninstall(_: argparse.Namespace) -> int:
     for key in SecretKey:
         if store.delete(key):
             print(f"Секрет удалён: {key.value}")
-    if sys.platform == "win32":
-        result = subprocess.run(
-            ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        print(
-            "Задание Планировщика удалено."
-            if result.returncode == 0
-            else "Задания Планировщика нет."
-        )
+    task_removed = _remove_scheduler_task() if sys.platform == "win32" else True
     print(
         f"Готово. Чтобы убрать всё остальное: `rcbot purge`, затем можно удалить каталог\n"
         f"{core.paths.home} (база, .env и Chromium лежат в нём)."
     )
-    return 0
+    return 0 if task_removed else 1
+
+
+def _remove_scheduler_task() -> bool:
+    """Нет задания — норма; задание есть, но не удалилось — об этом нужно сказать (SPEC 8.10)."""
+    exists = _schtasks("/Query")
+    if exists.returncode != 0:
+        print("Задания Планировщика нет.")
+        return True
+    if _schtasks("/Delete", "/F").returncode == 0:
+        print("Задание Планировщика удалено.")
+        return True
+    print(
+        f"Задание Планировщика не удалено: выполните `schtasks /Delete /TN {TASK_NAME} /F` "
+        "от имени владельца задания.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _schtasks(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["schtasks", args[0], "/TN", TASK_NAME, *args[1:]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )

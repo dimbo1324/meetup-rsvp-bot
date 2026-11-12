@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiogram import Bot
+from aiogram import Bot, Dispatcher
 
 from rcbot.application.alerting import AlertOrchestrator, RepeatPolicy
 from rcbot.application.bus import EventBus
@@ -73,11 +73,23 @@ class Closers:
         self.items.append(closer)
 
     async def close_all(self) -> None:
+        interrupted: asyncio.CancelledError | None = None
         for closer in self.items:
             try:
                 await closer()
+            except asyncio.CancelledError as error:
+                # Отмена посреди закрытия не должна оставить остальные ресурсы открытыми
+                interrupted = error
             except Exception:
                 logger.exception("ошибка при закрытии ресурса")
+        if interrupted is not None:
+            raise interrupted
+
+
+async def _polling_forever(bot: Bot, dispatcher: Dispatcher) -> None:
+    await run_polling(bot, dispatcher)
+    # Поллинг не должен возвращаться сам: тихий выход оставил бы бота глухим к владельцу
+    raise RuntimeError("long polling Telegram завершился без команды остановки")
 
 
 def _notifiers(core: Core, bot: Bot, chat_id: int) -> dict[Channel, Notifier]:
@@ -113,6 +125,7 @@ async def run_app(
     supervisor = Supervisor(clock)
     loop: PollLoop | None = None
     alerts: AlertOrchestrator | None = None
+    announce_stop = False
     storage = await open_storage(core)
     try:
         token = core.secrets.require(SecretKey.TELEGRAM_TOKEN).get_secret_value()
@@ -236,9 +249,10 @@ async def run_app(
         closers.add(bot.session.close)
 
         housekeeping.start()
-        supervisor.start("telegram", lambda: run_polling(bot, dispatcher))
+        supervisor.start("telegram", lambda: _polling_forever(bot, dispatcher))
         supervisor.start("warmup", alerts.keep_warm)
         if simulate_wait_sec is not None:
+            announce_stop = True
             return await _simulate(alerts, clock_sleep=clock.sleep, wait_sec=simulate_wait_sec)
 
         await housekeeping.journal_quota_once()
@@ -255,14 +269,18 @@ async def run_app(
         await alerts.service(
             texts.STARTED.format(source=primary.kind.value.upper(), interval=interval)
         )
+        announce_stop = True
         # Работает до остановки процесса (Ctrl+C или Планировщик); упавшие задачи перезапускает
         # супервизор, зависший цикл опроса — монитор живости
         await asyncio.Future()
         return 0
     finally:
-        await _shutdown(loop, alerts, supervisor, closers)
-        await storage.close()
-        core.journal.event("bot.stop", "бот остановлен")
+        try:
+            await _shutdown(loop, alerts if announce_stop else None, supervisor, closers)
+        finally:
+            # База и запись об остановке — даже если закрытие ресурсов прервано отменой
+            await storage.close()
+            core.journal.event("bot.stop", "бот остановлен")
 
 
 def _wire(bus: EventBus, alerts: AlertOrchestrator, book: IncidentBook) -> None:
