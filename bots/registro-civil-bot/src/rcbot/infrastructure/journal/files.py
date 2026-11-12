@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -249,21 +250,25 @@ class FileJournal:
 
     # --- размер и квота ---
 
-    def _files(self) -> list[Path]:
-        return [p for p in self.root.rglob("*") if p.is_file()]
-
-    def size(self) -> int:
-        total = 0
-        for path in self._files():
+    def _files(self) -> list[tuple[Path, int]]:
+        """Все файлы папки с размерами; один `stat` на файл (в Windows это самая дорогая часть)."""
+        found = []
+        for path in self.root.rglob("*"):
             try:
-                total += path.stat().st_size
+                info = path.stat()
             except OSError:
                 continue
-        return total
+            if stat.S_ISREG(info.st_mode):
+                found.append((path, info.st_size))
+        return found
+
+    def size(self) -> int:
+        return sum(size for _, size in self._files())
 
     def enforce_quota(self) -> tuple[int, int]:
         """Больше квоты → удаляются самые старые дни до целевого размера. (файлов, байт)."""
-        total = self.size()
+        files = self._files()
+        total = sum(size for _, size in files)
         if total <= self._max:
             return 0, 0
         protected = {p for p in (self._checks.today(), self._events.today()) if p is not None}
@@ -271,16 +276,15 @@ class FileJournal:
             protected.add(today)
         today_iso = self._clock.now().astimezone(self._tz).date().isoformat()
         dated = []
-        for path in self._files():
+        for path, size in files:
             match = DATED.search(path.name)
             if match and path not in protected and match.group(1) < today_iso:
-                dated.append((match.group(1), path))
+                dated.append((match.group(1), path, size))
         removed_files = removed_bytes = 0
-        for _, path in sorted(dated):
+        for _, path, size in sorted(dated):
             if total <= self._target:
                 break
             try:
-                size = path.stat().st_size
                 path.unlink()
             except OSError:
                 continue
