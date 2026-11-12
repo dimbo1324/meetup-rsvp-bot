@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
+from itertools import pairwise
 
 import pytest
 
 from rcbot.application import poll_loop
 from rcbot.domain.models import Channel, PollState, SourceKind
+from tests.e2e.helpers import MIN_GAP
 from tests.e2e.site import FakeSite, SiteAuthenticator
 from tests.e2e.stand import fake_source
 from tests.fakes import slots
@@ -53,6 +56,7 @@ async def test_зависшая_проверка_прерывается_исто
     t = stand.elapsed
     await stand.next_check()
     assert stand.elapsed - t == pytest.approx(30)
+    await stand.advance(MIN_GAP)  # если сессия потерялась, повторная проверка идёт после входа
     assert stand.journal.read_checks()[-1]["ok"] is True
 
 
@@ -149,35 +153,69 @@ async def test_зависший_вход_тоже_ловится_и_блокир
 # --- задача упала ---
 
 
-async def test_упавшая_задача_опроса_перезапускается_супервизором_с_паузой_5_секунд(
+def check_times(stand) -> list[datetime]:
+    return [datetime.fromisoformat(c["at"]) for c in stand.journal.read_checks()]
+
+
+async def test_исключение_источника_не_роняет_цикл_а_ведёт_в_backoff_30_60_120(
+    make_stand, stand_clock
+) -> None:
+    boom = RuntimeError("секретный-текст-сбоя")
+    source = fake_source(stand_clock, boom, boom, boom, slots(23), kind=SourceKind.API)
+    stand = await make_stand(primary=source, auth=NoLogin())
+    task = stand.supervisor._tasks["poll"]
+    await stand.checks(3)
+
+    times = check_times(stand)
+    assert [(b - a).total_seconds() for a, b in pairwise(times)] == [30, 60, 120]
+    assert not task.done() and stand.supervisor._tasks["poll"] is task, "задача жива и та же"
+    assert stand.loop.status.checks_total == 1 and all(stand.sent(c) for c in Channel)
+    crashes = [e for e in stand.journal.read_events() if e["code"] == "check.crash"]
+    assert len(crashes) == 3 and all(e["level"] == "ERROR" for e in crashes)
+    assert all("RuntimeError" in e["message"] for e in crashes)
+    assert "секретный-текст-сбоя" not in str(
+        stand.journal.read_events() + stand.journal.read_checks()
+    )
+    assert source.closed >= 3, "источник пересоздаётся после каждого сбоя"
+
+
+async def test_сбой_самого_цикла_ловится_и_опрос_продолжается(make_stand, stand_clock) -> None:
+    source = fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API)
+    stand = await make_stand(primary=source, auth=NoLogin())
+    real_compare = stand.detector.compare
+    failures = [ValueError("внутренний сбой")]
+
+    def flaky(snapshot):
+        if failures:
+            raise failures.pop()
+        return real_compare(snapshot)
+
+    stand.detector.compare = flaky  # type: ignore[method-assign]
+    await stand.checks(3)
+
+    assert "poll.crash" in stand.journal.codes()
+    assert not stand.supervisor._tasks["poll"].done()
+    assert all(stand.sent(c) for c in Channel), "после сбоя цикл дошёл до тревоги"
+
+
+async def test_супервизор_перезапускает_упавшую_задачу_с_паузой_5_10_20_секунд(
     make_stand, stand_clock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    source = fake_source(
-        stand_clock, RuntimeError("неожиданный сбой"), slots(23), kind=SourceKind.API
-    )
-    with caplog.at_level(logging.ERROR):
-        stand = await make_stand(primary=source, auth=NoLogin())
-        assert len(source.calls) == 1 and stand.loop.status.checks_total == 0
-        await stand.advance(4.9)
-        assert len(source.calls) == 1, "перезапуск не раньше чем через 5 с"
-        await stand.advance(0.1)
-    assert len(source.calls) == 2 and stand.loop.status.checks_total == 1
-    assert any("«poll» упала" in r.getMessage() for r in caplog.records)
-    assert all(stand.sent(c) for c in Channel), "после перезапуска цикл работает по-настоящему"
-
-
-async def test_пауза_перезапуска_растёт_5_10_20(make_stand, stand_clock) -> None:
-    boom = RuntimeError("снова")
-    source = fake_source(stand_clock, boom, boom, boom, slots(), kind=SourceKind.API)
+    source = fake_source(stand_clock, slots(), kind=SourceKind.API)
     stand = await make_stand(primary=source, auth=NoLogin())
-    marks = []
-    for _ in range(3):
-        before = len(source.calls)
-        start = stand.elapsed
-        while len(source.calls) == before:
-            await stand.advance(1)
-        marks.append(stand.elapsed - start)
-    assert marks == [5, 10, 20]
+    starts: list[float] = []
+
+    async def canary() -> None:
+        starts.append(stand.elapsed)
+        if len(starts) <= 3:
+            raise RuntimeError("задача упала")
+
+    with caplog.at_level(logging.ERROR):
+        stand.supervisor.start("canary", canary)
+        await stand.advance(40)
+
+    assert [round(b - a) for a, b in pairwise(starts)] == [5, 10, 20]
+    assert sum("«canary» упала" in r.getMessage() for r in caplog.records) == 3
 
 
 async def test_остановка_не_оставляет_висящих_задач(make_stand, stand_clock) -> None:

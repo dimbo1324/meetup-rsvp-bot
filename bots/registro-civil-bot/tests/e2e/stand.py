@@ -42,7 +42,6 @@ from rcbot.application.ports import (
     CheckRecord,
     NoopCoordinator,
     Notifier,
-    OpeningRecord,
 )
 from rcbot.application.runtime import K_LADDER_START, RuntimeSettings, RuntimeStore
 from rcbot.application.session_manager import SessionManager
@@ -50,7 +49,7 @@ from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, Storage, ensure_target, open_storage
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import Settings
+from rcbot.config.settings import MIN_POLL_INTERVAL_SEC, Settings
 from rcbot.domain.detector import Detector
 from rcbot.domain.models import Alert, Channel, DeliveryResult, SourceKind, WatchTarget
 from rcbot.infrastructure.files import FileJanitor
@@ -71,6 +70,8 @@ TRAMITE_ID = "TEST-TRAMITE-0001"
 NTFY_TOPIC = "test-topic-random-0123456789abcdefghijklmnop"
 CALL_USER = "@test_owner"
 STOP_MESSAGE_CODE = "bot.stop"
+# Сколько подряд «тихих» оборотов цикла нужно: задача опроса после побудки проходит десяток уступок
+CALM_SPINS = 40
 
 
 # --- журнал и каналы под наблюдением ---
@@ -84,24 +85,17 @@ class StandJournal(FileJournal):
         self.check_count = 0
         self.stall_sec = 0.0
 
-    def _stall(self) -> None:
+    def _write_line(self, writer: Any, text: str, at: Any) -> None:  # type: ignore[override]
         if self.stall_sec:
-            time.sleep(self.stall_sec)  # блокирует цикл событий, как зависший диск
+            time.sleep(self.stall_sec)  # зависший диск: в фоновом режиме стоит поток записи
+        FileJournal._write_line(writer, text, at)
 
     def check(self, record: CheckRecord) -> None:
-        self._stall()
         self.check_count += 1
         super().check(record)
 
-    def event(self, code: str, message: str, level: str = "INFO", **data: object) -> None:
-        self._stall()
-        super().event(code, message, level, **data)
-
-    def opening(self, record: OpeningRecord) -> None:
-        self._stall()
-        super().opening(record)
-
     def _jsonl(self, folder: str) -> list[dict[str, Any]]:
+        self.flush()
         rows: list[dict[str, Any]] = []
         for path in sorted((self.root / folder).glob("*.jsonl")):
             rows += [json.loads(line) for line in path.read_text("utf-8").splitlines() if line]
@@ -117,6 +111,7 @@ class StandJournal(FileJournal):
         return [e["code"] for e in self.read_events()]
 
     def read_openings(self) -> list[dict[str, str]]:
+        self.flush()
         path = self.root / "openings.csv"
         if not path.exists():
             return []
@@ -124,6 +119,7 @@ class StandJournal(FileJournal):
             return list(csv.DictReader(f, delimiter=";"))
 
     def read_status(self) -> dict[str, Any]:
+        self.flush()
         data: dict[str, Any] = json.loads((self.root / "status.json").read_text("utf-8"))
         return data
 
@@ -230,6 +226,7 @@ class Stand:
         jitter: float = 0.0,
         journal_max_bytes: int = 10 * 2**30,
         journal_trim_bytes: int = 5 * 2**30,
+        journal_background: bool = True,
         incidents_open_hook: Callable[[], Awaitable[None]] | None = None,
         start: bool = True,
         ignore: set[str] | None = None,
@@ -245,7 +242,12 @@ class Stand:
         # Как в build_core: номера заявки и этапа не должны попасть ни в журнал, ни в лог
         REDACTOR.register_many([TRAMITE_ID, "TEST-ETAPA"])
         journal = StandJournal(
-            journal_root, settings.tz, clock, journal_max_bytes, journal_trim_bytes
+            journal_root,
+            settings.tz,
+            clock,
+            journal_max_bytes,
+            journal_trim_bytes,
+            background=journal_background,
         )
         core = Core(paths, settings, SecretStore(), clock=clock, journal=journal)  # type: ignore[arg-type]
         storage = await open_storage(core)
@@ -393,7 +395,17 @@ class Stand:
         if start:
             stand.start()
             await stand.quiesce()
+            if site is not None and "tick" not in stand.ignore and "login" not in stand.ignore:
+                await stand.settle_login()
         return stand
+
+    async def settle_login(self) -> None:
+        """Первая проверка без cookies → 302 → вход; повторная идёт не раньше минимума (10 с).
+
+        После неё `t0` переставляется: сценарии отсчитывают расписание от первой успешной проверки.
+        """
+        await self.advance(MIN_POLL_INTERVAL_SEC)
+        self.t0 = self.clock.monotonic()
 
     def start(
         self,
@@ -440,7 +452,7 @@ class Stand:
         """Крутить цикл событий, пока стенд не затихнет (сокеты и потоки SQLite заканчивают)."""
         deadline = time.perf_counter() + limit
         calm = 0
-        while calm < 5:
+        while calm < CALM_SPINS:
             await asyncio.sleep(0)
             if self.busy():
                 calm = 0
@@ -461,8 +473,9 @@ class Stand:
         await self.quiesce()
 
     async def next_check(self) -> None:
-        """Дойти до ближайшей запланированной проверки и дождаться её конца."""
-        wait = max(0.0, self.loop.next_due - self.clock.monotonic())
+        """Дойти до ближайшей возможной проверки (срок и минимум между проверками)."""
+        due = max(self.loop.next_due, self.loop._not_before)
+        wait = max(0.0, due - self.clock.monotonic())
         await self.advance(wait)
 
     async def checks(self, count: int) -> None:

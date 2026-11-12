@@ -209,13 +209,6 @@ async def test_ни_cookies_ни_номера_заявки_ни_темы_ntfy_н
     assert len(files) >= 6, "просмотрены журналы, лог, карантин и база"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: db/repositories.py:SqlTargetRepository.ensure — в таблицу watch_targets пишется "
-        "полный agenda_url с номером этапа; инвариант 6 и решение R1: номер этапа только в .env"
-    ),
-)
 async def test_номер_этапа_не_попадает_в_базу(make_stand, site: FakeSite, tmp_path) -> None:
     stand = await make_stand(site=site)
     await run_everything(stand, site)

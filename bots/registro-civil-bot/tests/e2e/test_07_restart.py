@@ -105,14 +105,6 @@ async def test_настройки_из_telegram_переживают_перез�
     assert len(site.calls) > calls
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: runner.py:_shutdown — после loop.stop() сразу supervisor.stop() отменяет задачу "
-        "опроса, не дожидаясь PollLoop._flush_hour: если сообщение «остановлен» уходит быстрее "
-        "записи часа в БД (Telegram недоступен — отказ мгновенный), статистика часа теряется"
-    ),
-)
 async def test_штатная_остановка_сохраняет_статистику_текущего_часа(
     make_stand, site: FakeSite
 ) -> None:

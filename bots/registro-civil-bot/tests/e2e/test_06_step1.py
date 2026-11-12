@@ -7,7 +7,7 @@ import pytest
 from rcbot.domain.models import AlertAction, Channel, PollState
 from rcbot.infrastructure.notify.telegram import CALLBACK_MANUAL_DONE, keyboard
 from tests.e2e import site as fake
-from tests.e2e.helpers import D23
+from tests.e2e.helpers import D23, MIN_GAP, gaps
 from tests.e2e.site import FakeSite
 
 
@@ -59,7 +59,8 @@ async def test_готово_будит_цикл_проверка_идёт_нем
     stand = await make_stand(site=site)
     step1(site)
     await stand.next_check()
-    site.script.clear()  # владелец прошёл шаг 1
+    await stand.advance(60)  # владелец идёт проходить шаг 1; минимум между проверками давно прошёл
+    site.script.clear()
     site.slots = list(D23)
     requests, waited = len(site.calls), stand.elapsed
 
@@ -89,23 +90,45 @@ async def test_если_владелец_не_нажал_готово_бот_с�
     assert site.calls[-1].mono - stand.t0 == pytest.approx(t + 900)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: poll_loop.py:_wait — после wake() следующая проверка идёт сразу, минимум 10 с "
-        "между запросами (SPEC 0.3, правило 3) не соблюдается: двойное нажатие «Готово»/"
-        "/interval/resume даёт два запроса подряд"
-    ),
-)
+async def test_готово_сразу_после_проверки_ждёт_минимум_между_запросами(
+    make_stand, site: FakeSite
+) -> None:
+    stand = await make_stand(site=site)
+    step1(site)
+    await stand.next_check()
+    t_step1 = site.calls[-1].mono
+    site.script.clear()
+
+    stand.controller.manual_done()
+    await stand.quiesce()
+    assert site.calls[-1].mono == t_step1, "10 с ещё не прошло"
+    await stand.advance(MIN_GAP)
+    assert site.calls[-1].mono == t_step1 + MIN_GAP
+    assert stand.loop.status.state is PollState.RUNNING
+
+
 async def test_двойное_нажатие_готово_не_нарушает_минимум_10_секунд_между_запросами(
     make_stand, site: FakeSite
 ) -> None:
     stand = await make_stand(site=site)
     stand.controller.manual_done()
-    await stand.quiesce()
+    await stand.advance(MIN_GAP)
     await stand.advance(1)
     stand.controller.manual_done()
-    await stand.quiesce()
+    await stand.advance(MIN_GAP)
 
-    last = [c.mono for c in site.calls[-2:]]
-    assert last[1] - last[0] >= 10
+    assert min(gaps(site, 4)) >= MIN_GAP
+
+
+async def test_resume_и_интервал_подряд_не_учащают_запросы_чаще_10_секунд(
+    make_stand, site: FakeSite
+) -> None:
+    stand = await make_stand(site=site, ladder_age_hours=20)
+    for _ in range(3):
+        await stand.controller.pause(5)
+        await stand.controller.resume()
+        await stand.controller.set_interval(15)
+        await stand.advance(3)
+    await stand.advance(60)
+
+    assert min(gaps(site, 6)) >= MIN_GAP

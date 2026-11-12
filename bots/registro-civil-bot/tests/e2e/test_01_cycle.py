@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from rcbot.domain.events import SlotsAppeared, SlotsGone
@@ -184,11 +186,13 @@ async def test_status_json_обновляется_и_показывает_инц
     await stand.advance(30)  # тик монитора живости
 
     status = stand.journal.read_status()
-    assert status["alive_at"] == stand.clock.now().isoformat()
+    alive = datetime.fromisoformat(status["alive_at"])
+    assert timedelta(0) <= stand.clock.now() - alive < timedelta(seconds=30)
     assert status["state"] == "running" and status["hung"] is False
     assert status["incident_open"] is True and status["incident_days"] == ["2027-02-23"]
     assert status["alert_repeating"] is True
     assert status["checks_total"] == stand.loop.status.checks_total >= 2
 
     await stand.advance(30)
-    assert stand.journal.read_status()["alive_at"] == stand.clock.now().isoformat()
+    later = datetime.fromisoformat(stand.journal.read_status()["alive_at"])
+    assert later - alive == timedelta(seconds=30), "метка жизни двигается каждые 30 с"

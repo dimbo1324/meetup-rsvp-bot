@@ -91,18 +91,12 @@ async def test_интервал_меняет_расписание_и_сверх�
     assert await stand.controller.set_interval(45) == 45
     await stand.quiesce()
     await stand.checks(3)
-    assert gaps(site, 4) == [45, 45, 45]
+    # первая проверка по команде — через минимум (10 с) после предыдущей, дальше — по 45 с
+    assert gaps(site, 4) == [10, 45, 45]
     assert await stand.controller.set_interval(100_000) == 3600
     assert "command.interval" in stand.journal.codes()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: control.py:set_interval — NaN (/interval nan) проходит проверку «< 10» и "
-        "сохраняется как «nan»; позже расписание считает max(10, nan·k) = 10 с вместо базового"
-    ),
-)
 async def test_интервал_nan_отклоняется(make_stand, site: FakeSite) -> None:
     stand = await make_stand(site=site, ladder_age_hours=20)
     with pytest.raises((IntervalTooSmall, ValueError)):
@@ -151,11 +145,13 @@ async def test_тест_каналов_идёт_во_все_и_не_создаё
 
 async def test_команда_relogin_входит_сразу_и_будит_проверку(make_stand, site: FakeSite) -> None:
     stand = await make_stand(site=site)
-    calls = len(site.calls)
+    calls, last = len(site.calls), site.calls[-1].mono
     assert await stand.controller.relogin() == ""
     await stand.quiesce()
-    assert stand.session.logins == 2
+    assert stand.session.logins == 2 and len(site.calls) == calls, "минимум 10 с ещё не прошёл"
+    await stand.advance(10)
     assert len(site.calls) == calls + 1 and site.calls[-1].cookie.endswith("SESSION-2-1")
+    assert site.calls[-1].mono - last == 10
     assert "command.relogin" in stand.journal.codes()
 
 
