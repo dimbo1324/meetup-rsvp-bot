@@ -263,6 +263,9 @@ async def run_app(
         supervisor.start("watchdog", health.watchdog)
         supervisor.start("poll", loop.run)
         supervisor.start("liveness", liveness.run)
+        # Фоновые задачи запущены: с этого момента остановка сообщается владельцу. Флаг ставится до
+        # отправки «запущен»: отмена, пришедшая во время неё, тоже должна оставить сообщение
+        announce_stop = True
         interval = loop.current_interval(clock.now())
         core.journal.event(
             "bot.start", f"бот запущен: источник {primary.kind}, интервал ≈ {interval:.0f} с"
@@ -270,7 +273,6 @@ async def run_app(
         await alerts.service(
             texts.STARTED.format(source=primary.kind.value.upper(), interval=interval)
         )
-        announce_stop = True
         # Работает до остановки процесса (Ctrl+C или Планировщик); упавшие задачи перезапускает
         # супервизор, зависший цикл опроса — монитор живости
         await asyncio.Future()
