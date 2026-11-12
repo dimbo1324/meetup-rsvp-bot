@@ -22,12 +22,12 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, async_playwright
 
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch
+from rcbot.infrastructure.gubuy.pages import BPMGOB_HOST, is_bpmgob_session_url
 from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS, month_view
 from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
 
 logger = logging.getLogger(__name__)
 
-BPMGOB_HOST = "bpmgob.mec.gub.uy"
 DROP_HEADERS = {"cookie", "set-cookie", "authorization", "proxy-authorization"}
 PERSONAL_KEYS = re.compile(
     r"(?i)(nombre|apellido|name|mail|correo|tel[eé]fono|phone|celular|documento|"
@@ -173,10 +173,7 @@ class DiscoveryRecorder:
                 page.on("response", self._on_response)
                 await page.goto(self._login_url, wait_until="domcontentloaded")
                 print("Войдите в аккаунт в открывшемся окне. Бот ждёт и ничего не вводит сам…")
-                await page.wait_for_url(
-                    lambda url: BPMGOB_HOST in url and "/autenticacion" not in url,
-                    timeout=wait_login_sec * 1000,
-                )
+                await page.wait_for_url(is_bpmgob_session_url, timeout=wait_login_sec * 1000)
                 await page.goto(self._agenda_url, wait_until="networkidle")
                 await self._walk_calendar(page)
                 await page.wait_for_load_state("networkidle")
