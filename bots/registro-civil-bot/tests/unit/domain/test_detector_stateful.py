@@ -85,6 +85,8 @@ class DetectorMachine(RuleBasedStateMachine):
         self.detector.restore(found)
         if found and not self.was_open:
             self.appeared += 1  # инцидент продолжен из БД без события
+        elif not found and self.was_open:
+            self.gone += 1  # инцидент закрыт восстановлением пустого состояния
         self.was_open, self.known, self.empties = bool(found), found, 0
 
     @invariant()

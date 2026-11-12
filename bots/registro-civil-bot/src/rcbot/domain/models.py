@@ -6,6 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from enum import StrEnum
+from functools import total_ordering
 
 
 class SourceKind(StrEnum):
@@ -50,12 +51,25 @@ class WatchTarget:
     months_ahead: int
 
 
-@dataclass(frozen=True, order=True)
+@total_ordering
+@dataclass(frozen=True)
 class Slot:
-    """Свободное место; время неизвестно, если источник видит только день."""
+    """Свободное место; время неизвестно, если источник видит только день.
+
+    Порядок: день, затем время; слот «только день» идёт раньше слотов со временем того же дня
+    (встроенное сравнение кортежей падало бы на `None < time`).
+    """
 
     day: date
     at: time | None = None
+
+    def _sort_key(self) -> tuple[date, bool, time]:
+        return (self.day, self.at is not None, self.at or time.min)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Slot):
+            return NotImplemented
+        return self._sort_key() < other._sort_key()
 
     def label(self) -> str:
         return (
