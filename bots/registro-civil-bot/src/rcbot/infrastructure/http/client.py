@@ -59,10 +59,12 @@ class SafeHttp:
             connector = aiohttp.TCPConnector(
                 limit=self._limit, keepalive_timeout=75, ttl_dns_cache=300
             )
+            if self._jar is None:
+                # Хранилище cookies живёт дольше сессии: после сброса зависшего источника
+                # (закрытие и новая сессия) вход не теряется и не тратит лимит 6 входов в час
+                self._jar = aiohttp.CookieJar()
             self._session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=self._timeout,
-                cookie_jar=self._jar if self._jar is not None else aiohttp.CookieJar(),
+                connector=connector, timeout=self._timeout, cookie_jar=self._jar
             )
         return self._session
 

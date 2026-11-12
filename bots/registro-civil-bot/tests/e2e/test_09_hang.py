@@ -72,15 +72,6 @@ async def test_два_зависания_подряд_уводят_в_backoff_и
     assert stand.loop.status.state is PollState.RUNNING
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-T9: http/client.py:SafeHttp.session + poll_loop.reset_source — после сброса "
-        "источника сессия aiohttp создаётся с пустым CookieJar, SessionManager об этом не знает "
-        "и повторный вход не делает: следующий запрос уходит без cookies (302) и стоит лишнего "
-        "входа из лимита 6 в час (а в окне D5 — 10 минут слепоты)"
-    ),
-)
 async def test_после_сброса_зависшего_источника_сессия_не_теряется(
     make_stand, site: FakeSite, short_timeout
 ) -> None:

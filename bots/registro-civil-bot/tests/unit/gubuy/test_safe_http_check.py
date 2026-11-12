@@ -135,3 +135,18 @@ async def test_запрос_с_запрещённым_хостом_не_созд
     with pytest.raises(HostNotAllowed):
         http.request("GET", "https://evil.com/")
     assert http._session is None  # проверка идёт до любой сети
+
+
+async def test_cookies_переживают_закрытие_и_новую_сессию(tls_server) -> None:
+    # Находка T9 №4: после reset_source клиент создавал сессию с пустым хранилищем cookies
+    # и бот терял вход
+    from rcbot.infrastructure.http.client import SafeHttp
+
+    http = SafeHttp({"127.0.0.1"}, 5, ssl_context=tls_server.client_ssl)
+    try:
+        jar_before = http.cookie_jar
+        await http.close()
+        jar_after = http.cookie_jar  # новая сессия
+        assert jar_after is jar_before
+    finally:
+        await http.close()
