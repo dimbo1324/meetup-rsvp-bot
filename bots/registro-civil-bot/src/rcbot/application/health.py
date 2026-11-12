@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from rcbot.application.ports import Clock, IncidentRepository, StatsRepository, WatchdogPinger
-from rcbot.domain.models import PollStatsHour
+from rcbot.domain.models import Incident, PollStatsHour
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +69,42 @@ class HealthMonitor:
 
     async def build_report(self) -> str:
         now = self._clock.now()
-        hours = await self._stats.since(now - timedelta(hours=24))
+        # Строки статистики помечены началом часа, а отчёт уходит чуть позже ровного часа:
+        # без округления вниз сутки потеряли бы свой первый час
+        window = (now - timedelta(hours=24)).replace(minute=0, second=0, microsecond=0)
+        hours = await self._stats.since(window)
         if (current := self._current_hour()) is not None:
             hours.append(current)
-        incidents = [
-            i for i in await self._incidents.last(50) if i.opened_at >= now - timedelta(days=1)
-        ]
+        incidents = await self._incidents_since(now - timedelta(days=1))
         return report_text(hours, len(incidents), self._folder_size())
+
+    async def _incidents_since(self, since: datetime) -> list[Incident]:
+        limit = 50
+        while True:
+            found = await self._incidents.last(limit)
+            # Список идёт от новых к старым: если самый старый ещё внутри суток, запрашиваем больше
+            if len(found) < limit or found[-1].opened_at < since:
+                return [i for i in found if i.opened_at >= since]
+            limit *= 2
 
     async def daily_reports(self) -> None:
         while True:
             now = self._clock.now()
             due = next_report_at(now, self._tz, self._hour)
             await self._clock.sleep((due - now).total_seconds())
-            await self._send(await self.build_report())
+            try:
+                await self._send(await self.build_report())
+            except Exception:  # один неудавшийся отчёт не должен останавливать отчёты навсегда
+                logger.exception("ежедневный отчёт не отправлен")
 
     async def watchdog(self) -> None:
         """Пустой запрос раз в минуту; если запросов нет 5 минут, сервис сам напишет владельцу."""
         if self._watchdog is None:
             return
         while True:
-            if not await self._watchdog.ping():
-                logger.info("«сторож» не ответил")
+            try:
+                if not await self._watchdog.ping():
+                    logger.info("«сторож» не ответил")
+            except Exception:  # сбой пинга не должен останавливать сторожа
+                logger.exception("пинг «сторожа» упал")
             await self._clock.sleep(WATCHDOG_EVERY_SEC)
