@@ -9,7 +9,7 @@ from aiogram.types import BotCommand
 from aiogram_dialog import setup_dialogs
 
 from rcbot.application.control import Controller
-from rcbot.bot.dialogs.menu import menu_dialog
+from rcbot.bot.dialogs.menu import build_menu_dialog
 from rcbot.bot.handlers import ack, commands
 from rcbot.bot.middlewares import OwnerOnlyMiddleware
 
@@ -34,9 +34,9 @@ def build_dispatcher(controller: Controller, tz: ZoneInfo, owner_chat_id: int) -
     # Фильтр стоит снаружи: чужое обновление не доходит ни до команд, ни до меню
     dispatcher.message.outer_middleware(owner_only)
     dispatcher.callback_query.outer_middleware(owner_only)
-    dispatcher.include_router(ack.router)
-    dispatcher.include_router(commands.router)
-    dispatcher.include_router(menu_dialog)
+    dispatcher.include_router(ack.build_router())
+    dispatcher.include_router(commands.build_router())
+    dispatcher.include_router(build_menu_dialog())
     setup_dialogs(dispatcher)
     return dispatcher
 
