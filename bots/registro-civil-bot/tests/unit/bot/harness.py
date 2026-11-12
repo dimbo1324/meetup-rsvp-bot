@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -40,9 +41,9 @@ from tests.fakes import (
     AGENDA_URL,
     TARGET,
     FakeAuthenticator,
-    FakeClock,
     FakeNotifier,
     FakeSource,
+    ManualClock,
     MemoryEventLog,
     MemoryIncidentRepository,
     MemoryKV,
@@ -110,6 +111,7 @@ class FakeSession(BaseSession):
         timeout: int | None = None,  # noqa: ASYNC109 — сигнатура задана BaseSession
     ) -> Any:
         self.calls.append(Call(method, timeout))
+        await asyncio.sleep(0)  # как настоящая сеть: отдаёт управление циклу событий
         queue = self._script.get(type(method))
         outcome = queue.pop(0) if queue else None
         if isinstance(outcome, BaseException):
@@ -141,6 +143,8 @@ class FakeSession(BaseSession):
                 "chat": {"id": chat_id, "type": "private"},
                 "text": getattr(method, "text", ""),
             }
+        if getattr(returning, "__origin__", None) is list:
+            return []
         if returning is User:
             return {"id": 123456, "is_bot": True, "first_name": "rcbot", "username": "rcbot_test"}
         return True
@@ -170,7 +174,7 @@ class Rig:
     book: IncidentBook
     runtime: RuntimeSettings
     kv: MemoryKV
-    clock: FakeClock
+    clock: ManualClock
     source: FakeSource
     auth: FakeAuthenticator
     notifiers: dict[Channel, FakeNotifier]
@@ -189,7 +193,7 @@ async def make_rig(
     journal_bytes: int | None = 2048,
     relogin_failures: tuple[BaseException, ...] = (),
 ) -> Rig:
-    clock = FakeClock()
+    clock = ManualClock()
     kv = MemoryKV()
     store = RuntimeStore(kv)
     runtime = await store.load(20.0, 6, clock.now())
