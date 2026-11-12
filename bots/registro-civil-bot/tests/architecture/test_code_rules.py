@@ -33,21 +33,44 @@ TIME_CALLS = {
 TIME_ALLOWED: set[tuple[str, str]] = set()
 
 
-def _dotted(call: ast.Call) -> tuple[str, str]:
+def _aliases(tree: ast.AST) -> dict[str, tuple[str, str]]:
+    """Локальное имя → (модуль, имя): `import time as t`, `from datetime import datetime as D`."""
+    found: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found[alias.asname or alias.name] = (alias.name, "")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                found[alias.asname or alias.name] = (node.module, alias.name)
+    return found
+
+
+def _dotted(call: ast.Call, aliases: dict[str, tuple[str, str]] | None = None) -> tuple[str, str]:
+    """(владелец, имя) вызова с раскрытием псевдонимов: `_dt.now()` → ("datetime", "now")."""
+    aliases = aliases or {}
     func = call.func
     if isinstance(func, ast.Attribute):
         base = func.value
         owner = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
-        return owner, func.attr
-    return "", getattr(func, "id", "")
+        module, imported = aliases.get(owner, (owner, ""))
+        return (imported or module.split(".")[-1]), func.attr
+    name = getattr(func, "id", "")
+    module, imported = aliases.get(name, ("", name))
+    return (module.split(".")[-1], imported or name) if module else ("", name)
+
+
+def _resolved(m: Module) -> list[tuple[ast.Call, tuple[str, str]]]:
+    aliases = _aliases(m.tree)
+    return [(call, _dotted(call, aliases)) for call, _ in calls(m)]
 
 
 def test_время_в_domain_и_application_только_через_clock() -> None:
     found = [
-        f"{m.rel}:{call.lineno}: {'.'.join(_dotted(call))}"
+        f"{m.rel}:{call.lineno}: {'.'.join(dotted)}"
         for m in CORE
-        for call, _ in calls(m)
-        if _dotted(call) in TIME_CALLS - TIME_ALLOWED
+        for call, dotted in _resolved(m)
+        if dotted in TIME_CALLS - TIME_ALLOWED
     ]
     assert found == []
 
@@ -62,8 +85,7 @@ def test_datetime_всегда_с_часовым_поясом_во_всём_ко
     """DTZ: naive-datetime запрещены; время для людей — только через явную зону."""
     found = []
     for m in ALL:
-        for call, _ in calls(m):
-            owner, name = _dotted(call)
+        for call, (owner, name) in _resolved(m):
             has_tz = (
                 (name == "now" and len(call.args) >= 1)
                 or (name == "fromtimestamp" and len(call.args) >= 2)
@@ -77,7 +99,7 @@ def test_datetime_всегда_с_часовым_поясом_во_всём_ко
 
 
 def test_datetime_now_только_в_адаптере_часов_и_диагностике_cli() -> None:
-    owners = {m.rel for m in ALL for call, _ in calls(m) if _dotted(call) == ("datetime", "now")}
+    owners = {m.rel for m in ALL for _, dotted in _resolved(m) if dotted == ("datetime", "now")}
     assert owners <= {"infrastructure/clock.py", "cli/setup.py"}
     assert "infrastructure/clock.py" in owners
 
