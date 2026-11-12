@@ -15,6 +15,8 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+from aiogram.exceptions import TelegramAPIError
+
 from rcbot.bootstrap import Core, build_core
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey
 from rcbot.config.settings import Settings
@@ -66,13 +68,23 @@ def cmd_init(_: argparse.Namespace) -> int:
     token = core.secrets.get(SecretKey.TELEGRAM_TOKEN)
     if token is not None and not present[SecretKey.TELEGRAM_CHAT_ID]:
         print(f"Напишите своему боту /start в Telegram — жду до {CHAT_ID_WAIT_SEC} секунд…")
-        chat = asyncio.run(_wait_owner_chat(token.get_secret_value()))
+        try:
+            chat = asyncio.run(_wait_owner_chat(token.get_secret_value()))
+        except TelegramAPIError as error:
+            print(
+                f"Telegram отклонил запрос ({type(error).__name__}): проверьте токен и сеть, "
+                "затем запустите `rcbot init` ещё раз."
+            )
+            return 1
         if chat is None:
             print("Сообщение не пришло. Запустите `rcbot init` ещё раз.")
             return 1
         chat_id, name = chat
         core.secrets.set(SecretKey.TELEGRAM_CHAT_ID, str(chat_id))
         print(f"Владелец определён: {name}. Бот будет отвечать только ему.")
+    if missing := [k for k in REQUIRED if not core.secrets.present()[k]]:
+        print(f"\nНе хватает обязательного ({len(missing)}): запустите `rcbot init` ещё раз.")
+        return 1
     print("\nГотово. Дальше: `rcbot doctor`.")
     return 0
 
