@@ -56,17 +56,20 @@ async def test_тело_json_ровно_по_spec(tls_server: LocalTlsServer) ->
         "message": alert.push_text,
         "priority": 5,
         "tags": ["rotating_light"],
-        "click": AGENDA_URL,
     }
 
 
-async def test_click_только_если_задан(tls_server: LocalTlsServer) -> None:
+async def test_ссылки_click_нет_никогда_ntfy_сторонний_сервис(tls_server: LocalTlsServer) -> None:
+    # Решение R10: ссылка на шаг «Agenda» содержит номер этапа и остаётся только в Telegram.
+    # Даже если ссылка попала в текст тревоги, в push уходит лишь push_text или общая фраза
     tls_server.respond("POST", "/", text="{}")
-    alert = Alert(AlertKind.APPEARED, "текст", push_title="Заголовок", push_text="Свободно: 23.02")
+    alert = Alert(AlertKind.APPEARED, f"текст {AGENDA_URL}", push_text="Свободно: 23.02")
     channel = notifier(tls_server)
     await channel.send(alert, 1)
     await channel.close()
-    assert "click" not in body_of(tls_server)
+    body = body_of(tls_server)
+    assert "click" not in body
+    assert AGENDA_URL not in json.dumps(body, ensure_ascii=False)
 
 
 async def test_заголовок_по_умолчанию_когда_не_задан(tls_server: LocalTlsServer) -> None:

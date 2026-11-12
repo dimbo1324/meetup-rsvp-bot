@@ -132,7 +132,6 @@ class Alert:
     call_text: str = ""
     push_title: str = ""
     push_text: str = ""
-    click_url: str = ""
     action: AlertAction = AlertAction.NONE
     incident_id: int | None = None
     # Сервисные и неподтверждённые сообщения идут только в Telegram, без звонка (SPEC 2.3–2.4)

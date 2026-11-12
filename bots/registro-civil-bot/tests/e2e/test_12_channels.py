@@ -33,8 +33,7 @@ async def test_ntfy_получает_json_по_spec_только_с_датами
     body = request.body
     assert body["topic"] == NTFY_TOPIC and body["priority"] == 5
     assert body["tags"] == ["rotating_light"]
-    # SPEC 2.4 велит класть ссылку на «Agenda» в click (вопрос Q-M4 решает владелец)
-    assert body["click"] == AGENDA_URL
+    assert "click" not in body  # решение R10: ссылка с номером этапа только в Telegram
     visible = f"{body['title']} {body['message']}"
     assert re.search(r"23\.02", visible) and "Срочно" in visible
     assert TRAMITE_ID not in visible and "Заявка" not in visible and "http" not in visible

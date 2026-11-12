@@ -78,7 +78,6 @@ class MessageComposer:
             call_text=CALL_TEXT_RU[:CALL_MAX_CHARS],
             push_title="Registro Civil: появились места",
             push_text=f"Свободные даты: {days}. Срочно записывайтесь.",
-            click_url=self.agenda_url,
             action=AlertAction.ACK,
         )
 
@@ -114,6 +113,5 @@ class MessageComposer:
             call_text="Это проверка бота Регистро Сивиль. Мест нет, ничего делать не нужно.",
             push_title="rcbot: проверка",
             push_text="Это тест уведомлений. Мест нет.",
-            click_url=self.agenda_url,
             action=AlertAction.ACK,
         )

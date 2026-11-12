@@ -117,30 +117,24 @@ def test_ntfy_получает_только_даты_и_общую_фразу(ar
     for request in art.ntfy:
         payload = json.loads(request.body)
         assert payload["topic"] == C.ntfy_topic  # адрес доставки — единственное разрешённое
-        visible = {k: v for k, v in payload.items() if k not in ("topic", "click")}
+        visible = {k: v for k, v in payload.items() if k != "topic"}
         text = json.dumps(visible, ensure_ascii=False)
         assert [v for v in C.all_values() if v in text] == []
-        assert set(payload) <= {"topic", "title", "message", "priority", "tags", "click"}
+        assert set(payload) <= {"topic", "title", "message", "priority", "tags"}
         assert "Свободные даты" in payload["message"] or "тест" in payload["message"].lower()
         assert payload["priority"] == 5
         lowered = {k.lower() for k in request.headers}
         assert not lowered & {"cookie", "authorization", "set-cookie"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: ntfy click = SPEC 2.4, а в нём номер этапа на стороннем сервисе; "
-    "открытый вопрос Q-M4 (решает владелец)",
-)
-def test_ntfy_click_не_содержит_номера_этапа(art: Artifacts) -> None:
+def test_ntfy_без_ссылки_и_без_номера_этапа(art: Artifacts) -> None:
+    """Решение R10 (закрывает Q-M4): ссылка на шаг «Agenda» в ntfy не уходит вовсе."""
+    assert art.ntfy
     for request in art.ntfy:
-        assert C.etapa not in json.dumps(json.loads(request.body), ensure_ascii=False)
-
-
-def test_ntfy_click_сейчас_равен_ссылке_из_spec_и_только_она(art: Artifacts) -> None:
-    """Фиксирует текущее поведение Q-M4: утечка ограничена одной ссылкой на шаг «Agenda»."""
-    clicks = {json.loads(r.body).get("click") for r in art.ntfy}
-    assert clicks == {f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{C.etapa}/1"}
+        payload = json.loads(request.body)
+        assert "click" not in payload
+        text = json.dumps(payload, ensure_ascii=False)
+        assert C.etapa not in text and "bpmgob" not in text
 
 
 def test_звонок_callmebot_содержит_только_общую_фразу_и_адресата(art: Artifacts) -> None:

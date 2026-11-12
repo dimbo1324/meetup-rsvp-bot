@@ -13,7 +13,8 @@ from rcbot.infrastructure.http.client import SafeHttp
 logger = logging.getLogger(__name__)
 
 # ntfy — сторонний сервис (SPEC 2.4): без `push_text` полный `alert.text` с номером заявки и
-# ссылкой туда не уходит, только общая фраза
+# ссылкой туда не уходит, только общая фраза. Поля `click` нет вовсе (решение R10): ссылка на
+# шаг «Agenda» содержит номер этапа и остаётся только в Telegram
 GENERIC_PUSH_TEXT = "Есть новости от бота. Подробности — в Telegram."
 
 
@@ -36,8 +37,6 @@ class NtfyNotifier:
             "priority": 5,
             "tags": ["rotating_light"],
         }
-        if alert.click_url:
-            payload["click"] = alert.click_url
         error = ""
         try:
             async with self._http.request("POST", f"{self._server}/", json=payload) as response:

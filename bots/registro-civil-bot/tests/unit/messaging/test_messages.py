@@ -55,7 +55,6 @@ def test_тревога_по_образцу_spec_два_с_временем_од
     ]
     assert alert.kind is AlertKind.APPEARED
     assert alert.action is AlertAction.ACK
-    assert alert.click_url == AGENDA_URL
     assert alert.channels == ALL_CHANNELS
     assert alert.incident_id is None
 
@@ -122,11 +121,10 @@ def test_пустой_номер_заявки_не_оставляет_мусор
     assert "None" not in text and "  " not in text
 
 
-def test_адрес_с_лишними_символами_передаётся_как_есть_в_тексте_и_ссылке() -> None:
+def test_адрес_с_лишними_символами_передаётся_как_есть_в_тексте() -> None:
     url = "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA/1?a=1&b=<x>#ф"
     alert = composer(url=url).slots_alert(snapshot(feb(23)), T0)
     assert url in alert.text.splitlines()
-    assert alert.click_url == url
 
 
 def test_изменение_добавляет_строку_новых_и_меняет_заголовок() -> None:
@@ -216,9 +214,12 @@ def test_свойство_внешние_тексты_не_содержат_ид
     assert len(alert.call_text) <= CALL_MAX_CHARS
 
 
-def test_ссылка_для_нажатия_на_push_это_адрес_agenda_по_spec_2_4() -> None:
-    # Q-M4 (open-questions): ссылка с номером этапа уходит в ntfy полем click — так велит SPEC 2.4
-    assert composer().slots_alert(snapshot(feb(23)), T0).click_url == AGENDA_URL
+def test_ссылка_на_agenda_только_в_тексте_для_telegram_а_не_в_push_и_звонке() -> None:
+    # Решение R10 (закрывает Q-M4): ссылка с номером этапа не уходит на сторонние сервисы
+    alert = composer().slots_alert(snapshot(feb(23)), T0)
+    assert AGENDA_URL in alert.text
+    for other in (alert.push_title, alert.push_text, alert.call_text):
+        assert AGENDA_URL not in other
 
 
 # --- служебные, неподтверждённые, тестовые ---
@@ -229,7 +230,7 @@ def test_неподтверждённая_находка_только_в_telegra
     assert alert.kind is AlertKind.UNCONFIRMED
     assert alert.channels == TELEGRAM_ONLY == frozenset({Channel.TELEGRAM})
     assert alert.action is AlertAction.NONE
-    assert alert.call_text == "" and alert.push_text == "" and alert.click_url == ""
+    assert alert.call_text == "" and alert.push_text == ""
     assert alert.text.splitlines()[0].startswith("🟡 SAE")
     assert "• 23.02.2027 (вт)" in alert.text
 
