@@ -12,8 +12,26 @@ from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
+from yarl import URL
 
 from rcbot.domain.errors import HostNotAllowed
+
+# Параметры, которыми вызывающий мог бы обойти защиту: TLS проверяется всегда (SPEC 2.6),
+# переадресации не выполняются (иначе 302 уводит мимо списка хостов), прокси не используются (0.3)
+_FORBIDDEN_OPTIONS = frozenset(
+    {
+        "ssl",
+        "verify_ssl",
+        "ssl_context",
+        "fingerprint",
+        "allow_redirects",
+        "max_redirects",
+        "proxy",
+        "proxy_auth",
+        "proxy_headers",
+        "trust_env",
+    }
+)
 
 
 class SafeHttp:
@@ -57,12 +75,26 @@ class SafeHttp:
         host = (parsed.hostname or "").lower()
         if parsed.scheme != "https" or host not in self._allowed:
             raise HostNotAllowed(f"запрос к {parsed.scheme}://{host} не разрешён")
+        # Соединение откроет aiohttp (yarl), а список проверен по urllib: адрес, который они
+        # читают по-разному (например, с обратной косой чертой), отклоняется до сети
+        try:
+            connect_host = (URL(url).host or "").lower()
+        except ValueError:
+            connect_host = ""
+        if connect_host != host:
+            raise HostNotAllowed(f"адрес с хостом {host} разобран неоднозначно, запрос не разрешён")
 
     def request(self, method: str, url: str, **kwargs: Any) -> Any:
-        """Возвращает контекстный менеджер ответа aiohttp; переадресации проверяются тоже."""
+        """Возвращает контекстный менеджер ответа aiohttp.
+
+        Переадресации не выполняются: ответ 302 возвращается как есть, решает вызывающий.
+        """
+        banned = _FORBIDDEN_OPTIONS & kwargs.keys()
+        if banned:
+            raise TypeError(f"параметры {sorted(banned)} запросу SafeHttp не разрешён")
         self.check(url)
-        kwargs.setdefault("ssl", self._ssl)
-        kwargs.setdefault("allow_redirects", False)
+        kwargs["ssl"] = self._ssl
+        kwargs["allow_redirects"] = False
         return self.session.request(method, url, **kwargs)
 
     async def close(self) -> None:

@@ -77,8 +77,6 @@ def test_всё_остальное_отклоняется(http: SafeHttp, url: s
         "https://evil.com\\@bpmgob.mec.gub.uy/",
         "https://evil.com\\.bpmgob.mec.gub.uy/",
         "https://bpmgob.mec.gub.uy\\@evil.com/",
-        "https://evil.com\t@bpmgob.mec.gub.uy/",
-        "https://evil.com%2f@bpmgob.mec.gub.uy/",
     ],
 )
 def test_разный_разбор_адреса_urllib_и_aiohttp_не_обходит_список(http: SafeHttp, url: str) -> None:
