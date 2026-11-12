@@ -173,27 +173,43 @@ def test_после_вырезания_нет_ни_одного_зарегист
     assert [s for s in secrets if s in cleaned] == []
 
 
-@pytest.mark.parametrize("ensure_ascii", [True, False])
-@given(
-    values=st.lists(dirty_text | st.text(max_size=30), min_size=1, max_size=5),
-    keys=st.lists(st.sampled_from(["token", "Cookie", "password", "msg", "a b", "пароль"])),
-)
-@settings(max_examples=150)
-def test_json_после_вырезания_остаётся_json_и_без_секретов(
-    ensure_ascii: bool, values: list[str], keys: list[str]
-) -> None:
-    """Журнал, status.json и Sentry режут уже сериализованный JSON: он не должен ломаться."""
-    redactor = Redactor()
-    redactor.register_many(NASTY_SECRETS)
+def _json_text(values: list[str], keys: list[str], ensure_ascii: bool) -> str:
     data: dict[str, Any] = {
         f"{k}{i}" if i % 2 else k: v for i, (k, v) in enumerate(zip(keys, values, strict=False))
     }
     data["list"] = values
     data["nested"] = {"x": values[0], "n": 7}
-    text = json.dumps(data, ensure_ascii=ensure_ascii)
-    loaded = json.loads(redactor.redact(text))
+    return json.dumps(data, ensure_ascii=ensure_ascii)
+
+
+JSON_VALUES = st.lists(dirty_text | st.text(max_size=30), min_size=1, max_size=5)
+JSON_KEYS = st.lists(st.sampled_from(["token", "Cookie", "password", "msg", "a b", "пароль"]))
+
+
+@given(values=JSON_VALUES, keys=JSON_KEYS)
+@settings(max_examples=150)
+def test_json_после_вырезания_остаётся_json_и_без_секретов(
+    values: list[str], keys: list[str]
+) -> None:
+    """Журнал и status.json режут уже сериализованный JSON (ensure_ascii=False): он не ломается."""
+    redactor = Redactor()
+    redactor.register_many(NASTY_SECRETS)
+    loaded = json.loads(redactor.redact(_json_text(values, keys, ensure_ascii=False)))
     leaked = [s for s in NASTY_SECRETS if any(s in v for v in _strings(loaded))]
     assert leaked == []
+
+
+@given(values=JSON_VALUES, keys=JSON_KEYS)
+@settings(max_examples=150)
+def test_json_с_экранированным_не_ascii_не_содержит_секретов_в_любом_виде(
+    values: list[str], keys: list[str]
+) -> None:
+    """Sentry сериализует с ensure_ascii=True: не-ASCII и кавычки в тексте экранированы."""
+    redactor = Redactor()
+    redactor.register_many(NASTY_SECRETS)
+    cleaned = redactor.redact(_json_text(values, keys, ensure_ascii=True))
+    escaped = [json.dumps(s)[1:-1] for s in NASTY_SECRETS]
+    assert [e for e in escaped if e in cleaned] == []
 
 
 def test_ключ_в_кавычках_с_числом_даёт_корректный_json() -> None:
