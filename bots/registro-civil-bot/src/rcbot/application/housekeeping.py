@@ -77,7 +77,16 @@ class Housekeeping:
 
     async def _compact_due(self, now: datetime) -> bool:
         last = await self._kv.get(K_LAST_COMPACT)
-        return last is None or now - datetime.fromisoformat(last) >= COMPACT_EVERY
+        if last is None:
+            return True
+        try:
+            age = now - datetime.fromisoformat(last)
+        except ValueError, TypeError:
+            # Мусор в настройке не должен ронять очистку на каждом запуске: уплотняем заново
+            logger.warning("момент последнего уплотнения повреждён, БД уплотняется заново")
+            return True
+        # Отрицательный возраст — часы переводили назад: ждать «будущего» недели нельзя
+        return age < timedelta(0) or age >= COMPACT_EVERY
 
     def folder_size(self) -> int:
         return self._files.folder_size()
