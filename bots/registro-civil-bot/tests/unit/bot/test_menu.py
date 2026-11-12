@@ -203,6 +203,15 @@ async def test_подделанное_число_месяцев_не_приме�
     assert snapshot_of_state(setup.rig) == before
 
 
+@pytest.mark.parametrize("forged", ["-5", "x", "10", "99999999999999999999", "1.5"])
+async def test_подделанная_пауза_не_применяется(forged: str) -> None:
+    setup, screen = await open_menu()
+    await screen.click("🔎 Сканирование")
+    before = snapshot_of_state(setup.rig)
+    await screen.forge("30 мин", forged)
+    assert snapshot_of_state(setup.rig) == before
+
+
 @pytest.mark.parametrize(("minutes", "label"), PAUSES[:3])
 async def test_пауза_на_выбранное_время(minutes: str, label: str) -> None:
     setup, screen = await open_menu()
