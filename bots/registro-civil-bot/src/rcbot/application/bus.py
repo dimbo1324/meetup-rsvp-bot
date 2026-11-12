@@ -47,3 +47,5 @@ class EventBus:
             _, pending = await asyncio.wait(set(self._tasks), timeout=wait_sec)
             for task in pending:
                 task.cancel()
+            # Отмену доводим до конца: задача не остаётся висеть «наполовину отменённой»
+            await asyncio.gather(*pending, return_exceptions=True)
