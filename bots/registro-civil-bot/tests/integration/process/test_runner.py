@@ -160,6 +160,40 @@ async def test_источник_выбирается_dom_если_api_не_на�
     assert rig.dom.closed == 1
 
 
+async def test_с_настроенным_api_он_основной_а_dom_запасной_и_оба_закрываются(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = build_rig(monkeypatch.setattr, script=[frozenset()], api_script=[frozenset()])
+    async with running(rig):
+        await rig.started()
+        await rig.until(lambda: len(rig.api.calls) >= 1, "проверка через API")
+        assert rig.dom.calls == []
+        assert rig.sent_texts() == [texts.STARTED.format(source="API", interval=60)]
+    assert is_subsequence(["api.close", "source.close"], rig.order)
+
+
+async def test_после_перезапуска_открытый_инцидент_продолжается_без_повторной_тревоги(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Планировщик перезапускает бот; места, о которых уже сообщено, не должны тревожить снова."""
+    first = build_rig(monkeypatch.setattr, script=[slots(23)])
+    async with running(first):
+        await first.started()
+        await first.until(lambda: "slots.appeared" in first.journal.codes(), "инцидент открыт")
+        await first.until(lambda: len(first.notifiers[Channel.NTFY].sent) >= 1, "рассылка")
+    assert any(a.kind is AlertKind.APPEARED for a, _ in first.notifiers[Channel.TELEGRAM].sent)
+
+    second = build_rig(monkeypatch.setattr, script=[slots(23)])
+    async with running(second):
+        await second.started()
+        await second.until(lambda: len(second.dom.calls) >= 1, "проверка после перезапуска")
+        await second.clock.advance(70)
+        await second.until(lambda: len(second.dom.calls) >= 2, "вторая проверка")
+        await asyncio.sleep(0.1)  # события второй проверки успели дойти до рассылки
+        alerts = [a for a, _ in second.notifiers[Channel.TELEGRAM].sent]
+        assert [a.kind for a in alerts] == [AlertKind.SERVICE]  # только «запущен»
+
+
 # --- остановка ---
 
 

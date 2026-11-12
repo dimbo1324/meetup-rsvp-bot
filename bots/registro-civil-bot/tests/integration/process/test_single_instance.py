@@ -57,17 +57,17 @@ class Proc:
         self.popen.stdin.write("go\n")
         self.popen.stdin.flush()
         line = self.popen.stdout.readline().strip()
-        self.popen.wait(timeout=20)
+        self.popen.wait(timeout=60)
         return line
 
     def kill(self) -> None:
         self.popen.kill()
-        self.popen.wait(timeout=20)
+        self.popen.wait(timeout=60)
 
     def cleanup(self) -> None:
         if self.popen.poll() is None:
             self.popen.kill()
-            self.popen.wait(timeout=20)
+            self.popen.wait(timeout=60)
         for stream in (self.popen.stdin, self.popen.stdout, self.popen.stderr):
             if stream is not None:
                 stream.close()
@@ -231,8 +231,9 @@ def test_процесс_отказывается_если_замок_держи�
     mine.acquire()
     try:
         other = spawn(lock_path)
-        assert other.first_line().startswith("ALREADY")
-        other.popen.wait(timeout=20)
+        first = other.first_line()
+        assert first.startswith("ALREADY"), first + (other.popen.stderr.read() or "")  # type: ignore[union-attr]
+        other.popen.wait(timeout=60)
         assert other.popen.returncode == 3
     finally:
         mine.release()

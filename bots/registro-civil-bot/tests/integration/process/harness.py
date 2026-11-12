@@ -31,7 +31,7 @@ from rcbot.application.session_manager import SessionManager
 from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, Storage, build_core
 from rcbot.config.secrets import SecretKey, SecretStore
-from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult
+from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult, SourceKind
 
 TOKEN = "123456789:AAH-synthetic-token-abcdefghijklmnopqrstuvwxyz0123"
 CHAT_ID = "777"
@@ -90,6 +90,20 @@ class FakeApi:
 
     async def close(self) -> None:
         return None
+
+
+class ConfiguredApi(FakeSource):
+    """Источник API после разведки: адрес задан, он основной, DomSource — запасной."""
+
+    configured = True
+
+    def __init__(self, rig: Rig, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, kind=SourceKind.API, **kwargs)
+        self._rig = rig
+
+    async def close(self) -> None:
+        self._rig.order.append("api.close")
+        await super().close()
 
 
 class FakeBot:
@@ -155,6 +169,7 @@ class Rig:
     watchdogs: list[FakeWatchdog] = field(default_factory=list)
     sigint_on_started: bool = False
     task: asyncio.Task[Any] | None = None
+    api: Any = None
     dispatcher_args: list[tuple[Any, ...]] = field(default_factory=list)
 
     async def until(self, condition: Callable[[], bool], what: str, seconds: float = 15.0) -> None:
@@ -184,6 +199,7 @@ def build_rig(
     with_secrets: bool = True,
     script: list[Any] | None = None,
     channels: tuple[Channel, ...] = (Channel.TELEGRAM, Channel.NTFY),
+    api_script: list[Any] | None = None,
 ) -> Rig:
     core = build_core(console=False)
     clock = ManualClock()
@@ -260,7 +276,9 @@ def build_rig(
     patch(runner, "run_polling", run_polling)
     patch(runner, "_notifiers", lambda core_, bot, chat_id: rig.notifiers)
     patch(runner, "build_session", make_session)
-    patch(runner, "build_api_source", lambda core_: FakeApi())
+    api = ConfiguredApi(rig, api_script, clock=clock) if api_script is not None else FakeApi()
+    rig.api = api
+    patch(runner, "build_api_source", lambda core_: api)
     patch(runner, "build_dom_source", lambda core_: rig.dom)
     patch(runner, "EventBus", RecordingBus)
     patch(runner, "Supervisor", RecordingSupervisor)
