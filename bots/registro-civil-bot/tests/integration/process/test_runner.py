@@ -114,7 +114,10 @@ async def test_цикл_опроса_работает_и_при_истекшей
     rig = build_rig(monkeypatch.setattr, script=[SessionExpired("нет входа"), frozenset()])
     async with running(rig):
         await rig.started()
-        await rig.until(lambda: rig.auth.logins == 1 and len(rig.dom.calls) >= 2, "вход и опрос")
+        await rig.until(lambda: rig.auth.logins == 1, "вход")
+        # DomSource не чаще раза в 60 с (SPEC 2.3): проверка после входа ждёт минимум
+        await rig.clock.advance(61)
+        await rig.until(lambda: len(rig.dom.calls) >= 2, "повторный опрос после входа")
         # cookies нового входа переданы источнику: подписка источника на сессию собрана
         assert rig.dom.cookie_history == [rig.auth.cookies]
         assert rig.dom.calls[0].name == "registro-civil"

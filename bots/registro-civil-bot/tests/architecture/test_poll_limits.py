@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import random
 from datetime import timedelta
 from pathlib import Path
@@ -41,13 +43,14 @@ from rcbot.config.settings import (
 )
 from rcbot.domain.detector import Detector
 from rcbot.domain.errors import ReloginBudgetExceeded, SessionExpired
-from rcbot.domain.models import SourceKind
+from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
 from tests.fakes import (
     T0,
     TARGET,
     FakeAuthenticator,
     FakeClock,
     FakeSource,
+    ManualClock,
     MemoryEventLog,
     MemoryIncidentRepository,
     MemoryKV,
@@ -136,8 +139,9 @@ def make_loop(
     auth: FakeAuthenticator | None = None,
     kv: MemoryKV | None = None,
     ladder_age: timedelta = timedelta(hours=40),
-) -> tuple[PollLoop, FakeClock, MemoryKV, SessionManager]:
-    clock = FakeClock()
+    clock: FakeClock | ManualClock | None = None,
+) -> tuple[PollLoop, FakeClock | ManualClock, MemoryKV, SessionManager]:
+    clock = clock or FakeClock()
     kv = kv or MemoryKV()
     runtime = RuntimeSettings(base, 6, T0 - ladder_age)
     session = SessionManager(auth or FakeAuthenticator(), clock, 6)
@@ -283,16 +287,31 @@ def test_режим_dom_не_чаще_раза_в_минуту_и_с_разбр�
     assert loop._schedule_next() >= MIN_DOM_POLL_INTERVAL_SEC
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-T8: после успешного входа poll_loop._reauth возвращает задержку 0 с и следующая "
-    "проверка идёт сразу (poll_loop.py:~310). Если сайт снова отвечает «сессия истекла», запросы "
-    "идут подряд (до 6 входов в час) и пол 10 с не соблюдается. Ожидается задержка ≥ 10 с",
-)
-async def test_после_входа_следующая_проверка_не_раньше_десяти_секунд() -> None:
-    source = FakeSource([SessionExpired("страница входа")])
-    loop, _, _, _ = make_loop(source=source)
-    assert await loop._tick() >= MIN_POLL_INTERVAL_SEC
+@pytest.mark.parametrize(("kind", "minimum"), [(SourceKind.API, 10.0), (SourceKind.DOM, 60.0)])
+async def test_после_входа_проверки_идут_не_чаще_минимума_источника(
+    kind: SourceKind, minimum: float
+) -> None:
+    """Сайт всё время отвечает «сессия истекла», вход мгновенный: запросы не должны идти подряд."""
+    clock = ManualClock()
+    stamps: list[float] = []
+
+    class Expired(FakeSource):
+        async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
+            stamps.append(clock.monotonic())
+            raise SessionExpired("страница входа")
+
+    loop, _, _, _ = make_loop(kind=kind, source=Expired(kind=kind), clock=clock)
+    task = asyncio.create_task(loop.run())
+    try:
+        for _ in range(60):
+            await clock.advance(20)
+    finally:
+        loop.stop()
+        await clock.advance(1000)
+        await asyncio.wait_for(task, 5)
+    gaps = [b - a for a, b in itertools.pairwise(stamps)]
+    assert len(stamps) >= 3
+    assert min(gaps) >= minimum - 1e-6
 
 
 # --- не больше 6 входов в час ---

@@ -45,6 +45,9 @@ class Proc:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            # Консоль Windows по умолчанию cp1252: русский текст ошибки уронил бы print в
+            # дочернем процессе (код 1 вместо 3), а тест зависел бы от локали машины
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
 
     def first_line(self) -> str:
