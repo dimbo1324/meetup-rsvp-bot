@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 from tests.fakes import T0, FakeAuthenticator, settle, slots
 from tests.unit.alerts.helpers import appeared, gone, make_control
 
-from rcbot.application.control import FOREVER, IntervalTooSmall
+from rcbot.application.control import FOREVER, MAX_PAUSE_MINUTES, IntervalTooSmall
 from rcbot.application.runtime import K_CHANNELS_OFF, K_INTERVAL, K_MONTHS, K_PAUSED_UNTIL
 from rcbot.config.settings import MAX_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
 from rcbot.domain.errors import LoginFailed, ReloginBudgetExceeded
@@ -82,12 +82,26 @@ async def test_пауза_на_минуты_ставит_срок_сохраня
     assert view.paused_until == until
 
 
-@pytest.mark.parametrize("minutes", [None, 0])
-async def test_пауза_без_срока_это_бессрочная_пауза(minutes: int | None) -> None:
-    # 0 минут в меню Telegram означает «без срока» (`int(item) or None`)
+async def test_пауза_без_срока_это_бессрочная_пауза() -> None:
+    # Меню Telegram превращает пункт «без срока» в None (`int(item) or None`)
     ctl = make_control()
-    until = await ctl.controller.pause(minutes)
+    until = await ctl.controller.pause(None)
     assert until == T0 + FOREVER
+
+
+@pytest.mark.parametrize("minutes", [0, -1, MAX_PAUSE_MINUTES + 1])
+async def test_пауза_вне_диапазона_отклоняется_и_не_ставится(minutes: int) -> None:
+    # Раньше 0 молча превращался в бессрочную паузу на 10 лет
+    ctl = make_control()
+    with pytest.raises(ValueError, match=f"от 1 до {MAX_PAUSE_MINUTES} минут"):
+        await ctl.controller.pause(minutes)
+    assert ctl.rig.runtime.paused_until is None
+
+
+@pytest.mark.parametrize("minutes", [1, MAX_PAUSE_MINUTES])
+async def test_пауза_на_границах_диапазона_допустима(minutes: int) -> None:
+    ctl = make_control()
+    assert await ctl.controller.pause(minutes) == T0 + timedelta(minutes=minutes)
 
 
 async def test_продолжение_снимает_паузу_и_сохраняет() -> None:

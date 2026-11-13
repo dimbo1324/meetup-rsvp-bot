@@ -101,12 +101,13 @@ class Controller:
         )
 
     async def pause(self, minutes: int | None) -> datetime:
-        if minutes is not None and not 0 <= minutes <= MAX_PAUSE_MINUTES:
+        """`None` — бессрочная пауза (до /resume); иначе — от 1 минуты до года."""
+        if minutes is not None and not 1 <= minutes <= MAX_PAUSE_MINUTES:
             # timedelta(minutes=10**12) падает OverflowError: отказ должен быть понятным
             raise ValueError(
-                f"пауза от 1 минуты до {MAX_PAUSE_MINUTES} (год); без числа — до /resume"
+                f"пауза от 1 до {MAX_PAUSE_MINUTES} минут (год); без числа — до /resume"
             )
-        until = self._clock.now() + (timedelta(minutes=minutes) if minutes else FOREVER)
+        until = self._clock.now() + (FOREVER if minutes is None else timedelta(minutes=minutes))
         await self._loop.pause(until)
         self._journal.event("command.pause", f"пауза до {until.isoformat()}")
         return until
