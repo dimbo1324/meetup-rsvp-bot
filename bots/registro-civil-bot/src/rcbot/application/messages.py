@@ -76,6 +76,7 @@ class MessageComposer:
             kind=AlertKind.CHANGED if changed else AlertKind.APPEARED,
             text="\n".join(lines),
             call_text=CALL_TEXT_RU[:CALL_MAX_CHARS],
+            call_fallback_text=CALL_TEXT_EN[:CALL_MAX_CHARS],
             push_title="Registro Civil: появились места",
             push_text=f"Свободные даты: {days}. Срочно записывайтесь.",
             action=AlertAction.ACK,

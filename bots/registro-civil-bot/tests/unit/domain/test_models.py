@@ -259,6 +259,7 @@ def test_тревога_по_умолчанию_идёт_во_все_три_ка
     assert alert.action is AlertAction.NONE
     assert alert.incident_id is None
     assert (alert.call_text, alert.push_title, alert.push_text) == ("",) * 3
+    assert alert.call_fallback_text == ""
 
 
 def test_тревога_и_результат_доставки_и_событие_неизменяемы() -> None:

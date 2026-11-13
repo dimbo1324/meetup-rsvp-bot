@@ -277,6 +277,26 @@ def test_тревога_о_местах_не_путается_с_тестово�
     assert "проверка" in test.lower()
 
 
+@pytest.mark.parametrize("changed", [False, True])
+def test_запасной_английский_текст_звонка_только_у_настоящей_тревоги(changed: bool) -> None:
+    added = feb(23) if changed else None
+    alert = composer().slots_alert(snapshot(feb(23)), T0, added=added)
+    assert alert.call_fallback_text == CALL_TEXT_EN
+    assert len(alert.call_fallback_text) <= CALL_MAX_CHARS
+
+
+def test_тестовый_звонок_без_запасного_текста_о_появлении_мест() -> None:
+    # Раньше запасной голос подставлял «Free appointments appeared» и в тестовый звонок
+    assert composer().test(T0).call_fallback_text == ""
+    for alert in (
+        composer().gone(T0),
+        composer().service("x"),
+        composer().unconfirmed_alert(snapshot(feb(23))),
+        composer().manual_step("x"),
+    ):
+        assert alert.call_fallback_text == ""
+
+
 def test_composer_неизменяем_и_local_переводит_aware_момент() -> None:
     c = composer()
     assert c.local(T0).utcoffset() == timedelta(hours=-3)

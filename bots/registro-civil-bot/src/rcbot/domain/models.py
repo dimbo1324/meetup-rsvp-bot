@@ -144,6 +144,8 @@ class Alert:
     kind: AlertKind
     text: str
     call_text: str = ""
+    # Запасной текст звонка на другом голосе, если основной не принят; пусто — без запасного
+    call_fallback_text: str = ""
     push_title: str = ""
     push_text: str = ""
     action: AlertAction = AlertAction.NONE
