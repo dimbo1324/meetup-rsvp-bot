@@ -33,6 +33,9 @@ _FORBIDDEN_OPTIONS = frozenset(
     }
 )
 
+# Соединений на сайт одновременно: опрос идёт по одному, запас нужен только на сброс зависшего
+CONNECTOR_LIMIT = 4
+
 
 class SafeHttp:
     def __init__(
@@ -40,7 +43,6 @@ class SafeHttp:
         allowed_hosts: Iterable[str],
         timeout_sec: float,
         *,
-        limit: int = 4,
         cookie_jar: aiohttp.abc.AbstractCookieJar | None = None,
         ssl_context: ssl.SSLContext | None = None,
     ) -> None:
@@ -49,7 +51,6 @@ class SafeHttp:
         self._ssl: ssl.SSLContext | bool = ssl_context if ssl_context is not None else True
         self._allowed = frozenset(host.lower() for host in allowed_hosts)
         self._timeout = aiohttp.ClientTimeout(total=timeout_sec)
-        self._limit = limit
         self._jar = cookie_jar
         self._session: aiohttp.ClientSession | None = None
 
@@ -57,7 +58,7 @@ class SafeHttp:
     def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(
-                limit=self._limit, keepalive_timeout=75, ttl_dns_cache=300
+                limit=CONNECTOR_LIMIT, keepalive_timeout=75, ttl_dns_cache=300
             )
             if self._jar is None:
                 # Хранилище cookies живёт дольше сессии: после сброса зависшего источника

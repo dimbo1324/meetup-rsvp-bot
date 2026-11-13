@@ -1,9 +1,10 @@
 """Разведка (SPEC 6.2, D1): запись запросов шага «Agenda», чтобы написать `ApiSource`.
 
 Браузер открывается с окном, вход выполняет владелец сам — бот паролей не вводит. Записываются
-только ответы XHR/fetch с bpmgob и скрипт календаря; страницы целиком не пишутся (в них имя
-владельца). Очистка — до записи на диск: без заголовков `Cookie`, `Set-Cookie`, `Authorization`;
-номер документа, почта, телефоны и поля с личными данными в JSON заменяются на `***`.
+только ответы XHR/fetch с bpmgob и скрипт календаря. Тело пишется только у JSON и скрипта;
+HTML, текст и прочее — только длина, sha256 и вид страницы (в странице имя владельца). Очистка —
+до записи на диск: без заголовков `Cookie`, `Set-Cookie`, `Authorization`; номер документа,
+почта, телефоны и поля с личными данными в JSON заменяются на `***`.
 """
 
 from __future__ import annotations
@@ -22,9 +23,16 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, async_playwright
 
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch
+from rcbot.infrastructure.gubuy.calendar import CALENDAR, next_month, select_office
 from rcbot.infrastructure.gubuy.pages import BPMGOB_HOST, is_bpmgob_session_url
 from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS, month_view
-from rcbot.infrastructure.logging.redaction import MASK, REDACTOR, SECRET_KEY_NAMES
+from rcbot.infrastructure.gubuy.quarantine import body_digest, keeps_body
+from rcbot.infrastructure.logging.redaction import (
+    MASK,
+    REDACTOR,
+    SECRET_KEY_NAMES,
+    TRUNCATE_MARGIN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +55,9 @@ PERSONAL_KEYS = re.compile(
     r"c[eé]dula|pasaporte|passport|usuario|user|direcci[oó]n|address)"
 )
 MAX_BODY_CHARS = 200_000
-# Запас на секрет, разрезанный границей усечения (см. quarantine.py)
-_REDACT_MARGIN = 1000
+# Глубже этого вложения значения JSON не разбираются, а заменяются маской: рекурсия маскирования
+# не должна упираться в предел интерпретатора на враждебном ответе
+MAX_JSON_DEPTH = 64
 API_MARKER = "agenda_sae_api_disponibilidades"
 
 
@@ -60,32 +69,59 @@ def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _mask_json(value: Any) -> Any:
+def _mask_json(value: Any, depth: int = 0) -> Any:
+    if depth > MAX_JSON_DEPTH:
+        return MASK
     if isinstance(value, dict):
         return {
             # Сам ключ тоже может быть личным («адрес почты → данные»): прогоняем и его
             REDACTOR.redact(str(k)): (
                 MASK
                 if PERSONAL_KEYS.search(str(k)) or SECRET_KEYS.search(str(k))
-                else _mask_json(v)
+                else _mask_json(v, depth + 1)
             )
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_mask_json(v) for v in value]
+        return [_mask_json(v, depth + 1) for v in value]
     if isinstance(value, str):
         return REDACTOR.redact(value)
     return value
 
 
-def clean_body(content_type: str, body: str) -> Any:
+_NOT_JSON = object()
+_UNSAFE_JSON = object()
+
+
+def _masked_json(text: str) -> Any:
+    """Разобранный и замаскированный JSON; `_NOT_JSON`, если это не JSON.
+
+    Длина проверяется до разбора: `json.loads` строит весь объект в памяти. Слишком длинный или
+    слишком глубокий для разбора текст — `_UNSAFE_JSON`: он не пишется, только сведения о нём.
+    """
+    if len(text) > MAX_BODY_CHARS:
+        return _UNSAFE_JSON
+    try:
+        return _mask_json(json.loads(text))
+    except RecursionError:
+        return _UNSAFE_JSON
+    except ValueError:
+        return _NOT_JSON
+
+
+def clean_body(content_type: str, body: str, *, url: str = "", status: int | None = None) -> Any:
+    """JSON — с маской личных ключей, скрипт — через редактор; страница — только сведения о ней."""
+    if not body:
+        return ""
+    if not keeps_body(content_type, body):
+        return body_digest(body, url, status)
     if "json" in content_type.lower():
-        try:
-            return _mask_json(json.loads(body))
-        except ValueError:
-            pass
-    # Сначала вырезаем секреты, потом усекаем: иначе секрет на границе протечёт префиксом
-    return REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS]
+        masked = _masked_json(body)
+        if masked is _UNSAFE_JSON:
+            return body_digest(body, url, status)
+        if masked is not _NOT_JSON:
+            return masked
+    return REDACTOR.redact_truncated(body, MAX_BODY_CHARS)
 
 
 def _mask_pairs(query: str) -> str:
@@ -102,14 +138,19 @@ def clean_url(url: str) -> str:
     return REDACTOR.redact(base + mark + _mask_pairs(query))
 
 
-def clean_post_data(data: str) -> str:
-    """Тело запроса: JSON чистится как ответ, форма — по именам полей, прочее — редактором."""
-    try:
-        return json.dumps(_mask_json(json.loads(data)), ensure_ascii=False)
-    except ValueError:
-        return REDACTOR.redact(_mask_pairs(data[: MAX_BODY_CHARS + _REDACT_MARGIN]))[
-            :MAX_BODY_CHARS
-        ]
+def clean_post_data(data: str) -> Any:
+    """Тело запроса: JSON чистится как ответ, форма — по именам полей, прочее — редактором.
+
+    Слишком длинное или глубокое тело не пишется: только сведения о нём, как о странице.
+    """
+    masked = _masked_json(data)
+    if masked is _UNSAFE_JSON:
+        return body_digest(data)
+    if masked is not _NOT_JSON:
+        return json.dumps(masked, ensure_ascii=False)
+    return REDACTOR.redact_truncated(
+        _mask_pairs(data[: MAX_BODY_CHARS + TRUNCATE_MARGIN]), MAX_BODY_CHARS
+    )
 
 
 @dataclass
@@ -169,7 +210,7 @@ class DiscoveryRecorder:
                 "post_data": clean_post_data(request.post_data or ""),
                 "response_headers": _clean_headers(await response.all_headers()),
                 "content_type": content_type,
-                "body": clean_body(content_type, body),
+                "body": clean_body(content_type, body, url=url, status=response.status),
             }
         )
 
@@ -208,16 +249,13 @@ class DiscoveryRecorder:
 
     async def _walk_calendar(self, page: Page) -> None:
         """Выбор офиса и перелистывание месяцев — те же действия только чтения, что в DomSource."""
-        radio = page.get_by_role("radio", name=re.compile(re.escape(self._location), re.I))
-        if await radio.count() and not await radio.first.is_checked():
-            await radio.first.check()
-        await page.wait_for_selector(".ui-datepicker-calendar", state="visible")
+        await select_office(page, self._location, strict=False)
+        await page.wait_for_selector(CALENDAR, state="visible")
         for _ in range(self._months - 1):
             view = month_view(await page.evaluate(READ_MONTH_JS))
             if not view.has_next:
                 break
-            await page.locator(".ui-datepicker-next").first.click()
-            await page.wait_for_load_state("networkidle")
+            await next_month(page, view.title, strict=False)
 
     def _write(self, at: datetime) -> DiscoveryResult:
         self._out_dir.mkdir(parents=True, exist_ok=True)

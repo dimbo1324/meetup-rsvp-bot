@@ -47,19 +47,20 @@ ACTIONS = {
 }
 AMBIGUOUS = {"check", "clear", "type"}
 
-# Где что разрешено: вход (auth), радиокнопка офиса и стрелка месяца (dom_source, discovery)
+# Где что разрешено: вход (auth), радиокнопка офиса и стрелка месяца (calendar)
 ALLOWED = {
     "infrastructure/gubuy/auth.py": {
         "_choose": {"select_option", "click"},
         "_click_text": {"click"},
         "_fill_identity": {"fill"},
     },
-    "infrastructure/gubuy/dom_source.py": {
-        "_select_location": {"check"},
-        "_read_months": {"click"},
+    # Общий модуль чтения календаря: им пользуются и DomSource, и разведка
+    "infrastructure/gubuy/calendar.py": {
+        "select_office": {"check"},
+        "next_month": {"click"},
     },
-    "infrastructure/gubuy/discovery.py": {"_walk_calendar": {"check", "click"}},
 }
+CALENDAR_USERS = ("infrastructure/gubuy/dom_source.py", "infrastructure/gubuy/discovery.py")
 
 
 def _actions(module: Module) -> list[tuple[str, str, str, int]]:
@@ -92,21 +93,34 @@ def test_разрешённые_действия_действительно_ес
     assert expected <= found
 
 
-def test_клик_в_dom_source_и_разведке_только_по_стрелке_следующего_месяца() -> None:
-    for rel in ("infrastructure/gubuy/dom_source.py", "infrastructure/gubuy/discovery.py"):
-        module = next(m for m in ALL if m.rel == rel)
-        clicks = [r for _, a, r, _ in _actions(module) if a == "click"]
-        assert clicks, rel
-        for target in clicks:
-            assert "NEXT_MONTH" in target or "ui-datepicker-next" in target, (rel, target)
+def test_клик_в_календаре_только_по_стрелке_следующего_месяца() -> None:
+    module = next(m for m in ALL if m.rel == "infrastructure/gubuy/calendar.py")
+    clicks = [r for _, a, r, _ in _actions(module) if a == "click"]
+    assert clicks
+    for target in clicks:
+        assert "NEXT_MONTH" in target or "ui-datepicker-next" in target, target
 
 
-def test_check_в_dom_source_и_разведке_только_по_радиокнопке_офиса() -> None:
-    for rel in ("infrastructure/gubuy/dom_source.py", "infrastructure/gubuy/discovery.py"):
+def test_check_в_календаре_только_по_радиокнопке_офиса() -> None:
+    module = next(m for m in ALL if m.rel == "infrastructure/gubuy/calendar.py")
+    checks = [r for _, a, r, _ in _actions(module) if a == "check"]
+    assert checks
+    assert all(r.startswith("radio") for r in checks), checks
+
+
+def test_dom_source_и_разведка_листают_и_выбирают_офис_только_через_calendar() -> None:
+    """Сами они страницу не трогают: действия есть только в общем модуле (набор не расширен)."""
+    for rel in CALENDAR_USERS:
         module = next(m for m in ALL if m.rel == rel)
-        checks = [r for _, a, r, _ in _actions(module) if a == "check"]
-        assert checks, rel
-        assert all(r.startswith("radio") for r in checks), (rel, checks)
+        assert _actions(module) == [], rel
+        imported = {
+            name
+            for node in ast.walk(module.tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "rcbot.infrastructure.gubuy.calendar"
+            for name in (alias.name for alias in node.names)
+        }
+        assert {"next_month", "select_office"} & imported, rel
 
 
 def test_в_поля_входа_вводятся_только_номер_документа_и_пароль() -> None:

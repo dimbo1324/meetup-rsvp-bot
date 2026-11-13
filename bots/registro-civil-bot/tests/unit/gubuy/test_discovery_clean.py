@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -86,9 +87,59 @@ def test_json_верхнего_уровня_не_словарь_разбирае
     assert clean_body(JSON, scalar) == json.loads(scalar)
 
 
-def test_не_json_идёт_через_редактор_как_текст() -> None:
-    cleaned = clean_body("text/html", "<p>Письмо для test.person@example.org</p>")
-    assert cleaned == f"<p>Письмо для {MASK}</p>"
+def test_скрипт_календаря_идёт_через_редактор_как_текст() -> None:
+    cleaned = clean_body("application/javascript", "// Письмо для test.person@example.org")
+    assert cleaned == f"// Письмо для {MASK}"
+
+
+OWNER_PAGE = "<html><div>Titular: Ana Prueba Testova, pasaporte TEST000000</div></html>"
+
+
+@pytest.mark.parametrize(
+    "content_type", ["text/html", "text/plain; charset=utf-8", "", "application/xml", JSON]
+)
+def test_страница_не_пишется_только_длина_хеш_и_вид(content_type: str) -> None:
+    url = "https://bpmgob.mec.gub.uy/autenticacion/login"
+    cleaned = clean_body(content_type, OWNER_PAGE, url=url, status=200)
+    assert cleaned == {
+        "omitted": True,
+        "chars": len(OWNER_PAGE),
+        "sha256": hashlib.sha256(OWNER_PAGE.encode()).hexdigest(),
+        "page": "login",
+    }
+    text = json.dumps(cleaned, ensure_ascii=False)
+    for leaked in ("Ana", "Prueba", "Testova", "TEST000000", "Titular"):
+        assert leaked not in text
+
+
+async def test_страница_с_именем_владельца_не_попадает_в_файл_дампа(tmp_path: Path) -> None:
+    async def headers() -> dict[str, str]:
+        return {}
+
+    async def text() -> str:
+        return OWNER_PAGE
+
+    request = SimpleNamespace(
+        method="GET", resource_type="xhr", all_headers=headers, post_data=None
+    )
+    response = SimpleNamespace(
+        request=request,
+        url="https://bpmgob.mec.gub.uy/api/fragmento",
+        status=200,
+        headers={"content-type": "text/html; charset=utf-8"},
+        text=text,
+        all_headers=headers,
+    )
+    recorder = discovery.DiscoveryRecorder(
+        "https://l/", "https://a/", "офис", 1, tmp_path, discovery.BrowserOptions()
+    )
+    await recorder._collect(response)  # type: ignore[arg-type]
+    from datetime import UTC, datetime
+
+    raw = recorder._write(datetime(2026, 11, 12, tzinfo=UTC)).path.read_text(encoding="utf-8")
+    for leaked in ("Ana", "Prueba", "Testova", "TEST000000", "Titular"):
+        assert leaked not in raw
+    assert '"omitted": true' in raw
 
 
 def test_битый_json_с_json_типом_падает_в_редактор_а_не_в_исключение() -> None:
@@ -101,6 +152,47 @@ def test_тип_содержимого_json_проверяется_без_учё
     assert clean_body("Application/JSON", '{"nombre": "x"}') == {"nombre": MASK}
 
 
+def test_json_длиннее_предела_не_разбирается_и_не_пишется(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery, "MAX_BODY_CHARS", 50)
+    body = json.dumps({"nombre": "Ana Prueba", "relleno": "x" * 100})
+    loads: list[str] = []
+    monkeypatch.setattr(discovery.json, "loads", lambda text: loads.append(text))
+    cleaned = clean_body(JSON, body)
+    assert loads == []  # предел проверен до json.loads
+    assert cleaned["omitted"] is True
+    assert cleaned["chars"] == len(body)
+    assert "Ana" not in json.dumps(cleaned)
+
+
+def test_глубокий_json_маскируется_ниже_предела_глубины() -> None:
+    depth = discovery.MAX_JSON_DEPTH + 10
+    body = "[" * depth + '"глубоко"' + "]" * depth
+    cleaned = clean_body(JSON, body)
+    node = cleaned
+    for _ in range(discovery.MAX_JSON_DEPTH + 1):
+        assert isinstance(node, list)
+        node = node[0]
+    assert node == MASK
+
+
+def test_json_глубже_рекурсии_интерпретатора_не_роняет_разведку() -> None:
+    depth = 100_000
+    body = "[" * depth + "]" * depth
+    assert len(body) <= MAX_BODY_CHARS
+    cleaned = clean_body(JSON, body)
+    assert cleaned["omitted"] is True
+
+
+def test_тело_запроса_длиннее_предела_не_пишется(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery, "MAX_BODY_CHARS", 50)
+    data = json.dumps({"nombre": "Ana Prueba", "relleno": "x" * 100})
+    cleaned = clean_post_data(data)
+    assert cleaned["omitted"] is True
+    assert "Ana" not in json.dumps(cleaned)
+
+
 def test_пустое_тело_и_пустой_тип() -> None:
     assert clean_body("", "") == ""
     assert clean_body(JSON, "") == ""
@@ -111,7 +203,7 @@ def test_тело_усекается_после_очистки_и_секрет_�
     REDACTOR.register(secret)
     # Слова с пробелами: редактор на длинной строке без разделителей работает квадратично
     body = ("слово " * MAX_BODY_CHARS)[: MAX_BODY_CHARS - 12] + secret + " хвост" * 50
-    cleaned = clean_body("text/html", body)
+    cleaned = clean_body("application/javascript", body)
     assert isinstance(cleaned, str)
     assert len(cleaned) <= MAX_BODY_CHARS
     assert "ДЛИННЫЙ" not in cleaned

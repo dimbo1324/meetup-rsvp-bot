@@ -48,7 +48,9 @@ async def test_три_мусорных_ответа_карантин_один_п
         record = json.loads(raw)
         assert set(record) == {"at", "source", "status", "content_type", "body"}
         assert record["status"] == 200 and record["content_type"].startswith("text/html")
-        assert "***" in record["body"]
+        # страница не пишется (аудит SEC-3): вместо тела — длина, хеш и вид страницы
+        assert record["body"]["omitted"] is True
+        assert record["body"]["chars"] > 0
         for leak in LEAKS:
             assert leak not in raw, leak
 

@@ -12,14 +12,12 @@ import time as monotonic_time
 from collections.abc import Sequence
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import urlparse
 
 import aiohttp
 from yarl import URL
 
 from rcbot.application.ports import Clock, SessionCookie
 from rcbot.domain.errors import (
-    ManualStepRequired,
     RateLimited,
     SessionExpired,
     SiteUnavailable,
@@ -27,24 +25,54 @@ from rcbot.domain.errors import (
     UnexpectedResponse,
 )
 from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
-from rcbot.infrastructure.gubuy.pages import LOGIN_HOST, PageKind, classify
+from rcbot.infrastructure.gubuy.pages import (
+    PAGE_ERRORS,
+    RATE_LIMIT_STATUSES,
+    PageKind,
+    classify,
+    is_login_redirect,
+)
 from rcbot.infrastructure.gubuy.quarantine import quarantine
 from rcbot.infrastructure.gubuy.schemas import parse_disponibilidades
 from rcbot.infrastructure.http.client import SafeHttp
 
-BPMGOB_HOST = "bpmgob.mec.gub.uy"
+# Прежнее имя функции: переадресация на вход распознаётся в pages.py
+_is_login_redirect = is_login_redirect
+
+# Чем источник объясняет страницу, пришедшую вместо ответа API
+_PAGE_TEXTS = {
+    PageKind.LOGIN: "вместо ответа API пришла страница входа",
+    PageKind.STEP1: "сайт требует пройти шаг 1",
+    PageKind.BLOCKED: "страница блокировки вместо ответа API",
+}
+
+# Предел ответа API (после распаковки): календарь на полгода — единицы килобайт. Больший ответ
+# не читается в память целиком и считается неожиданным
+MAX_RESPONSE_BYTES = 1024 * 1024
 
 
-def _is_login_redirect(location: str) -> bool:
-    """Переадресация на вход: страница ID Uruguay или `/autenticacion` самого bpmgob.
+async def _read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
+    """Тело не длиннее `MAX_RESPONSE_BYTES` и признак «ответ больше предела»."""
+    declared = response.content_length
+    if declared is not None and declared > MAX_RESPONSE_BYTES:
+        return "", True
+    raw = bytearray()
+    # read(n) отдаёт сколько есть в буфере, не обязательно n: читаем до конца или до предела
+    while len(raw) <= MAX_RESPONSE_BYTES:
+        chunk = await response.content.read(MAX_RESPONSE_BYTES + 1 - len(raw))
+        if not chunk:
+            break
+        raw += chunk
+    too_large = len(raw) > MAX_RESPONSE_BYTES
+    return _decode(bytes(raw[:MAX_RESPONSE_BYTES]), response.charset), too_large
 
-    Разбираем адрес, а не ищем подстроку: чужой адрес с «mi.iduruguay.gub.uy» в запросе — не вход.
-    """
-    parsed = urlparse(location)
-    host = (parsed.hostname or "").lower()
-    if host == LOGIN_HOST:
-        return True
-    return host in ("", BPMGOB_HOST) and parsed.path.startswith("/autenticacion")
+
+def _decode(raw: bytes, charset: str | None) -> str:
+    """Как `response.text(errors="replace")`: кодировка из заголовка, без неё — UTF-8."""
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
 
 
 class ApiSource:
@@ -89,27 +117,27 @@ class ApiSource:
                 status = response.status
                 location = response.headers.get("Location", "")
                 content_type = response.headers.get("Content-Type", "")
-                body = await response.text(errors="replace")
+                body, too_large = await _read_limited(response)
         except (aiohttp.ClientError, TimeoutError) as error:
             raise SiteUnavailable(f"API недоступен: {type(error).__name__}") from None
         latency_ms = (monotonic_time.perf_counter() - started) * 1000
 
         if 300 <= status < 400:
-            if _is_login_redirect(location):
+            if is_login_redirect(location):
                 raise SessionExpired("API переадресует на вход")
             raise self._unexpected(status, content_type, body, "неожиданная переадресация")
-        if status in (403, 429):
+        if status in RATE_LIMIT_STATUSES:
             raise RateLimited(f"API ответил {status}")
         if status >= 500:
             raise SiteUnavailable(f"API ответил {status}")
+        if too_large:
+            raise self._unexpected(
+                status, content_type, body, f"ответ API больше {MAX_RESPONSE_BYTES} байт"
+            )
         if "json" not in content_type.lower():
             page = classify(self._api_url, body, status)
-            if page is PageKind.LOGIN:
-                raise SessionExpired("вместо ответа API пришла страница входа")
-            if page is PageKind.STEP1:
-                raise ManualStepRequired("сайт требует пройти шаг 1")
-            if page is PageKind.BLOCKED:
-                raise RateLimited("страница блокировки вместо ответа API")
+            if (page_error := PAGE_ERRORS.get(page)) is not None:
+                raise page_error(_PAGE_TEXTS[page])
             raise self._unexpected(status, content_type, body, "HTML вместо ответа API")
         try:
             slots = parse_disponibilidades(json.loads(body))
@@ -121,7 +149,13 @@ class ApiSource:
         self, status: int, content_type: str, body: str, why: str
     ) -> UnexpectedResponse:
         path = quarantine(
-            self._quarantine_dir, self._clock.now(), "api", status, content_type, body
+            self._quarantine_dir,
+            self._clock.now(),
+            "api",
+            status,
+            content_type,
+            body,
+            url=self._api_url,
         )
         return UnexpectedResponse(f"{why}; снимок в карантине: {path.name}")
 

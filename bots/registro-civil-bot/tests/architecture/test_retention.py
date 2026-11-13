@@ -19,6 +19,7 @@ from rcbot.application.housekeeping import (
     Housekeeping,
 )
 from rcbot.config.settings import Settings
+from rcbot.infrastructure import gubuy
 from rcbot.infrastructure.gubuy import dom_source, quarantine
 from rcbot.infrastructure.logging import setup as logging_setup
 from tests.fakes import T0, FakeClock, MemoryKV
@@ -51,6 +52,10 @@ def test_сроки_файлов_как_в_таблице_spec() -> None:
     assert "`data/discovery/` | 7 дней" in SPEC
     assert quarantine.MAX_FILES == 20
     assert dom_source.MAX_SHOTS == 20
+    assert (
+        quarantine.MAX_FILES is dom_source.MAX_SHOTS or quarantine.MAX_FILES == dom_source.MAX_SHOTS
+    )
+    assert gubuy.MAX_STORED_FILES == 20
 
 
 def test_логи_ротация_пять_по_два_мегабайта_и_четырнадцать_дней() -> None:
