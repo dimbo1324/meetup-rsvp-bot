@@ -6,11 +6,11 @@ from tests.fakes import T0, ManualClock, RecordingJournal, settle, slots, slots_
 
 from rcbot.application.bus import EventBus
 from rcbot.application.journal_feed import JournalFeed
+from rcbot.domain import events
 from rcbot.domain.events import (
     DomainEvent,
     ManualActionRequired,
     PollerStateChanged,
-    SessionExpired,
     SlotsAppeared,
     SlotsChanged,
     SlotsGone,
@@ -144,10 +144,32 @@ async def test_неподтверждённые_места_SAE() -> None:
     assert feed.journal.openings == []  # неподтверждённое не попадает в статистику окон
 
 
-async def test_неизвестное_событие_пишется_по_имени_класса() -> None:
-    feed = Feed()
-    await feed.send(SessionExpired(T0, "страница входа"))
-    assert feed.journal.events == [("event", "SessionExpired", "INFO", {})]
+async def test_каждый_вид_доменного_события_разобран_явно() -> None:
+    # Запасной ветки «неизвестное событие» нет: новое событие без своей ветки молча пропало бы
+    examples: dict[type[DomainEvent], DomainEvent] = {
+        SlotsAppeared: SlotsAppeared(T0, snapshot(slots(23))),
+        SlotsChanged: SlotsChanged(T0, snapshot(slots(23)), slots(23)),
+        SlotsGone: SlotsGone(T0, snapshot()),
+        ManualActionRequired: ManualActionRequired(T0, "шаг 1"),
+        SourceSwitched: SourceSwitched(T0, SourceKind.API, SourceKind.DOM, "x"),
+        PollerStateChanged: PollerStateChanged(T0, PollState.RUNNING, PollState.BACKOFF, "x"),
+        UnconfirmedSlotsSeen: UnconfirmedSlotsSeen(T0, snapshot(slots(23))),
+    }
+    defined = {
+        cls
+        for cls in vars(events).values()
+        if isinstance(cls, type) and issubclass(cls, DomainEvent) and cls is not DomainEvent
+    }
+    assert defined == set(examples)
+    for event in examples.values():
+        feed = Feed()
+        await feed.send(event)
+        assert len(feed.journal.events) == 1, type(event).__name__
+
+
+def test_доменного_события_SessionExpired_нет_есть_только_исключение() -> None:
+    # Одноимённые событие и исключение путали импорты; событие никто не публиковал
+    assert not hasattr(events, "SessionExpired")
 
 
 async def test_каждое_событие_даёт_запись_и_порядок_сохраняется() -> None:

@@ -64,5 +64,3 @@ class JournalFeed:
                 self._journal.event(
                     "sae.seen", f"SAE: {len(snapshot.slots)} мест (неподтверждённые)"
                 )
-            case _:
-                self._journal.event("event", type(event).__name__)
