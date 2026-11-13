@@ -9,8 +9,9 @@ Push-Location $repoRoot
 try {
     uv run python dev.py setup --bot registro-civil-bot
     if ($LASTEXITCODE -ne 0) { throw 'dev.py setup завершился с ошибкой' }
-    uv run --all-packages rcbot init
-    uv run --all-packages rcbot doctor
+    # Окружение уже собрано по uv.lock шагом выше: здесь ничего не переразрешается и не ставится
+    uv run --no-sync rcbot init
+    uv run --no-sync rcbot doctor
 } finally {
     Pop-Location
 }
