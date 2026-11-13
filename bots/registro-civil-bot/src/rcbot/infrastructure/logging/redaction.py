@@ -30,6 +30,9 @@ SECRET_KEY_NAMES = re.compile(
     r"(?i)cookie|authoriz|passw|contrase|token|secret|api[-_]?key|csrf|xsrf|session"
 )
 _MIN_SECRET_LEN = 4
+# Запас на секрет, разрезанный границей усечения (`Redactor.redact_truncated`): длиннее любого
+# значения, которое редактор вырезает целиком
+TRUNCATE_MARGIN = 1000
 
 # Значение после «ключ=» или «"ключ": »: в кавычках — целиком; без них — до пробела или знака,
 # который в JSON, URL и скобках уже не часть значения. Префикс Bearer/Basic входит в значение.
@@ -145,6 +148,16 @@ class Redactor:
         for pattern, replacement in _PATTERNS:
             text = pattern.sub(replacement, text)
         return text
+
+    def redact_truncated(self, text: str, limit: int) -> str:
+        """Очищенный текст не длиннее `limit` знаков.
+
+        Сначала вырезаются секреты, потом текст усекается: усечение до очистки оставило бы от
+        значения, разрезанного границей, префикс, который редактор уже не узнает. Редактору
+        отдаётся `limit` плюс запас, а не весь текст: на длинной строке без разделителей шаблоны
+        работают квадратично, а усечённое пишется прямо в цикле опроса.
+        """
+        return self.redact(text[: limit + TRUNCATE_MARGIN])[:limit]
 
 
 REDACTOR = Redactor()

@@ -1,9 +1,10 @@
 """Разведка (SPEC 6.2, D1): запись запросов шага «Agenda», чтобы написать `ApiSource`.
 
 Браузер открывается с окном, вход выполняет владелец сам — бот паролей не вводит. Записываются
-только ответы XHR/fetch с bpmgob и скрипт календаря; страницы целиком не пишутся (в них имя
-владельца). Очистка — до записи на диск: без заголовков `Cookie`, `Set-Cookie`, `Authorization`;
-номер документа, почта, телефоны и поля с личными данными в JSON заменяются на `***`.
+только ответы XHR/fetch с bpmgob и скрипт календаря. Тело пишется только у JSON и скрипта;
+HTML, текст и прочее — только длина, sha256 и вид страницы (в странице имя владельца). Очистка —
+до записи на диск: без заголовков `Cookie`, `Set-Cookie`, `Authorization`; номер документа,
+почта, телефоны и поля с личными данными в JSON заменяются на `***`.
 """
 
 from __future__ import annotations
@@ -24,7 +25,13 @@ from playwright.async_api import Page, Response, async_playwright
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch
 from rcbot.infrastructure.gubuy.pages import BPMGOB_HOST, is_bpmgob_session_url
 from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS, month_view
-from rcbot.infrastructure.logging.redaction import MASK, REDACTOR, SECRET_KEY_NAMES
+from rcbot.infrastructure.gubuy.quarantine import body_digest, keeps_body
+from rcbot.infrastructure.logging.redaction import (
+    MASK,
+    REDACTOR,
+    SECRET_KEY_NAMES,
+    TRUNCATE_MARGIN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +54,6 @@ PERSONAL_KEYS = re.compile(
     r"c[eé]dula|pasaporte|passport|usuario|user|direcci[oó]n|address)"
 )
 MAX_BODY_CHARS = 200_000
-# Запас на секрет, разрезанный границей усечения (см. quarantine.py)
-_REDACT_MARGIN = 1000
 API_MARKER = "agenda_sae_api_disponibilidades"
 
 
@@ -78,14 +83,18 @@ def _mask_json(value: Any) -> Any:
     return value
 
 
-def clean_body(content_type: str, body: str) -> Any:
+def clean_body(content_type: str, body: str, *, url: str = "", status: int | None = None) -> Any:
+    """JSON — с маской личных ключей, скрипт — через редактор; страница — только сведения о ней."""
+    if not body:
+        return ""
+    if not keeps_body(content_type, body):
+        return body_digest(body, url, status)
     if "json" in content_type.lower():
         try:
             return _mask_json(json.loads(body))
         except ValueError:
             pass
-    # Сначала вырезаем секреты, потом усекаем: иначе секрет на границе протечёт префиксом
-    return REDACTOR.redact(body[: MAX_BODY_CHARS + _REDACT_MARGIN])[:MAX_BODY_CHARS]
+    return REDACTOR.redact_truncated(body, MAX_BODY_CHARS)
 
 
 def _mask_pairs(query: str) -> str:
@@ -107,9 +116,9 @@ def clean_post_data(data: str) -> str:
     try:
         return json.dumps(_mask_json(json.loads(data)), ensure_ascii=False)
     except ValueError:
-        return REDACTOR.redact(_mask_pairs(data[: MAX_BODY_CHARS + _REDACT_MARGIN]))[
-            :MAX_BODY_CHARS
-        ]
+        return REDACTOR.redact_truncated(
+            _mask_pairs(data[: MAX_BODY_CHARS + TRUNCATE_MARGIN]), MAX_BODY_CHARS
+        )
 
 
 @dataclass
@@ -169,7 +178,7 @@ class DiscoveryRecorder:
                 "post_data": clean_post_data(request.post_data or ""),
                 "response_headers": _clean_headers(await response.all_headers()),
                 "content_type": content_type,
-                "body": clean_body(content_type, body),
+                "body": clean_body(content_type, body, url=url, status=response.status),
             }
         )
 

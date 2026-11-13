@@ -205,8 +205,13 @@ async def test_карантин_хранит_очищенное_тело_без_
     (file,) = quarantine.glob("*.json")
     record = json.loads(file.read_text(encoding="utf-8"))
     assert [v for v in C.all_values() if v in json.dumps(record, ensure_ascii=False)] == []
-    assert "Error" not in record["body"] or MASK in record["body"]
-    assert MASK in record["body"]  # маска на месте: тело сохранено для разбора, секреты нет
+    # Страница не сохраняется вовсе (аудит SEC-3): вместо тела — длина, хеш и вид страницы
+    body = record["body"]
+    assert isinstance(body, dict)
+    assert body["omitted"] is True
+    assert body["chars"] > 0
+    assert len(body["sha256"]) == 64
+    assert "Error" not in json.dumps(record, ensure_ascii=False)
 
 
 async def test_карантин_не_пишет_секрет_из_content_type(

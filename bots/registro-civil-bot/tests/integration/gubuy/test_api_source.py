@@ -347,14 +347,27 @@ async def test_неверная_кодировка_ответа_не_роняе�
     assert len(quarantined(tmp_path)) == 1
 
 
+@pytest.mark.parametrize(
+    ("body", "content_type", "stored"),
+    [
+        ("<p>УСЛОВНЫЙ-СЕКРЕТ-ТЕСТА, simple_bpm_session=abc123</p>", "text/html", False),
+        ('{"nota": "УСЛОВНЫЙ-СЕКРЕТ-ТЕСТА simple_bpm_session=abc123"}', "application/json", True),
+    ],
+    ids=["страница-не-пишется", "json-через-редактор"],
+)
 async def test_карантин_без_cookies_и_с_вырезанными_секретами(
-    make: Factory, tls_server: LocalTlsServer, tmp_path: Path
+    make: Factory,
+    tls_server: LocalTlsServer,
+    tmp_path: Path,
+    body: str,
+    content_type: str,
+    stored: bool,
 ) -> None:
     REDACTOR.register("УСЛОВНЫЙ-СЕКРЕТ-ТЕСТА")
     answer(
         tls_server,
-        text="<p>УСЛОВНЫЙ-СЕКРЕТ-ТЕСТА, simple_bpm_session=abc123</p>",
-        content_type="text/html",
+        text=body,
+        content_type=content_type,
         headers={"Set-Cookie": "simple_bpm_session=SERVER-TEST; Path=/"},
     )
     with pytest.raises(UnexpectedResponse):
@@ -365,7 +378,12 @@ async def test_карантин_без_cookies_и_с_вырезанными_се
     assert "abc123" not in text
     assert "SERVER-TEST" not in text
     assert "Set-Cookie" not in text
-    assert MASK in text
+    record = json.loads(text)
+    if stored:
+        assert MASK in record["body"]
+    else:
+        assert record["body"]["omitted"] is True
+        assert record["body"]["chars"] == len(body)
 
 
 # --- сбои сети ---

@@ -104,8 +104,8 @@ class ApiSource:
             raise SiteUnavailable(f"API ответил {status}")
         if "json" not in content_type.lower():
             page = classify(self._api_url, body, status)
-            if (error := PAGE_ERRORS.get(page)) is not None:
-                raise error(_PAGE_TEXTS[page])
+            if (page_error := PAGE_ERRORS.get(page)) is not None:
+                raise page_error(_PAGE_TEXTS[page])
             raise self._unexpected(status, content_type, body, "HTML вместо ответа API")
         try:
             slots = parse_disponibilidades(json.loads(body))
@@ -117,7 +117,13 @@ class ApiSource:
         self, status: int, content_type: str, body: str, why: str
     ) -> UnexpectedResponse:
         path = quarantine(
-            self._quarantine_dir, self._clock.now(), "api", status, content_type, body
+            self._quarantine_dir,
+            self._clock.now(),
+            "api",
+            status,
+            content_type,
+            body,
+            url=self._api_url,
         )
         return UnexpectedResponse(f"{why}; снимок в карантине: {path.name}")
 
