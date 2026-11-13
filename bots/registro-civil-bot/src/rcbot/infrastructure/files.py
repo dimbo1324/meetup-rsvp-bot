@@ -13,15 +13,20 @@ from rcbot.config.paths import Paths
 logger = logging.getLogger(__name__)
 
 
+def data_dirs(paths: Paths) -> dict[str, Path]:
+    """Каталоги временных данных: их чистит `FileJanitor` по имени и целиком удаляет `purge`."""
+    return {
+        "discovery": paths.discovery,
+        "quarantine": paths.quarantine,
+        "shots": paths.shots,
+        "tmp": paths.tmp,
+    }
+
+
 class FileJanitor:
     def __init__(self, paths: Paths) -> None:
         self._paths = paths
-        self._dirs = {
-            "discovery": paths.discovery,
-            "quarantine": paths.quarantine,
-            "shots": paths.shots,
-            "tmp": paths.tmp,
-        }
+        self._dirs = data_dirs(paths)
 
     def prune(
         self, name: str, max_age: timedelta, now: datetime, max_files: int | None = None
@@ -62,7 +67,7 @@ class FileJanitor:
         cutoff = (now - max_age).timestamp()
         current = self._paths.log_file.name
         doomed = [
-            p for p in logs.glob("rcbot.log*") if p.name != current and p.stat().st_mtime < cutoff
+            p for p in logs.glob(f"{current}*") if p.name != current and p.stat().st_mtime < cutoff
         ]
         for path in doomed:
             path.unlink(missing_ok=True)
@@ -84,14 +89,7 @@ class FileJanitor:
 def purge(paths: Paths) -> list[Path]:
     """`rcbot purge`: логи, временные данные, карантин, снимки, дампы разведки, кеш байт-кода."""
     removed = []
-    for directory in (
-        paths.logs,
-        paths.tmp,
-        paths.quarantine,
-        paths.shots,
-        paths.discovery,
-        paths.cache,
-    ):
+    for directory in (paths.logs, *data_dirs(paths).values(), paths.cache):
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=True)
             removed.append(directory)

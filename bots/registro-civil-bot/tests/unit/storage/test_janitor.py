@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from rcbot.config.paths import Paths
-from rcbot.infrastructure.files import FileJanitor, purge
+from rcbot.infrastructure.files import FileJanitor, data_dirs, purge
 
 NOW = datetime(2026, 11, 12, 15, 0, 0, tzinfo=UTC)
 DAY = timedelta(days=1)
@@ -269,3 +269,28 @@ def test_purge_отсутствующие_папки_не_попадают_в_р
     paths.ensure()
     assert len(purge(paths)) == 5  # кеша нет
     assert purge(paths) == []
+
+
+def test_purge_и_очистка_по_именам_используют_один_список_каталогов(
+    janitor: FileJanitor, paths: Paths
+) -> None:
+    """DUP-12: всё, что `FileJanitor` чистит по имени, удаляет и `purge`."""
+    for name, folder in data_dirs(paths).items():
+        make(folder, f"{name}.dat", DAY)
+        assert janitor.clear(name) == 1
+        make(folder, f"{name}.dat", DAY)
+    removed = purge(paths)
+    assert set(data_dirs(paths).values()) <= set(removed)
+
+
+def test_ротированные_логи_ищутся_по_имени_файла_лога_из_paths(
+    paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MAG-13: имя лог-файла берётся из `Paths.log_file`, а не повторяется строкой."""
+    monkeypatch.setattr(Paths, "log_file", property(lambda self: self.logs / "другой.log"))
+    paths.ensure()
+    old = make(paths.logs, "другой.log.1", 30 * DAY)
+    current = make(paths.logs, "другой.log", 30 * DAY)
+    foreign = make(paths.logs, "rcbot.log.1", 30 * DAY)
+    assert FileJanitor(paths).prune_logs(timedelta(days=7), NOW) == 1
+    assert not old.exists() and current.exists() and foreign.exists()
