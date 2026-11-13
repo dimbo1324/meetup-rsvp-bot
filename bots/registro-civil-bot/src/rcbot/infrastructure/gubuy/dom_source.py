@@ -22,6 +22,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeout
 from rcbot.application.ports import Clock, SessionCookie
 from rcbot.domain.errors import SiteUnavailable, UnexpectedResponse
 from rcbot.domain.models import AvailabilitySnapshot, Slot, SourceKind, WatchTarget
+from rcbot.infrastructure.gubuy import MAX_STORED_FILES
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch, to_playwright
 from rcbot.infrastructure.gubuy.pages import PAGE_ERRORS, PageKind, classify
 from rcbot.infrastructure.gubuy.parsers import (
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 CALENDAR = ".ui-datepicker-calendar"
 NEXT_MONTH = ".ui-datepicker-next"
 STEP_TIMEOUT_MS = 20_000
-MAX_SHOTS = 20
+MAX_SHOTS = MAX_STORED_FILES
 
 # Чем источник объясняет известную страницу вместо шага «Agenda»
 _PAGE_TEXTS = {

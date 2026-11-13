@@ -54,6 +54,7 @@ def test_включённый_sentry_настроен_без_личных_дан
     assert config["max_request_body_size"] == "never"
     assert config["traces_sample_rate"] == 0.0
     assert config["before_send"] is sentry._before_send
+    assert config["server_name"] == "rcbot"  # без имени компьютера
 
 
 def test_before_send_вырезает_секреты_из_всего_события() -> None:
@@ -108,3 +109,18 @@ def test_before_send_отбрасывает_событие_которое_нел
     circular: dict[str, Any] = {}
     circular["self"] = circular
     assert sentry._before_send(circular, {}) is None
+
+
+def test_before_send_длинное_число_в_событии_маскируется_как_в_журнале() -> None:
+    chat_id = 123456789012
+    cleaned = sentry._before_send({"extra": {"chat_id": chat_id, "n": 5, "x": 1.5}}, {})
+    assert cleaned is not None
+    assert cleaned["extra"] == {"chat_id": MASK, "n": 5, "x": 1.5}
+    assert str(chat_id) not in str(cleaned)
+
+
+def test_before_send_зарегистрированный_секрет_числом_вырезается() -> None:
+    REDACTOR.register("98765432")
+    cleaned = sentry._before_send({"extra": {"code": 98765432}}, {})
+    assert cleaned is not None
+    assert "98765432" not in str(cleaned)

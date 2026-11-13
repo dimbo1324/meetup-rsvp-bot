@@ -202,3 +202,33 @@ def test_источники_объясняют_каждую_страницу_и�
 def test_текст_баннера_без_дат_подставлен_в_js_из_константы() -> None:
     assert f'"{NO_SLOTS_TEXT}"' in READ_MONTH_JS
     assert "__NO_SLOTS_TEXT__" not in READ_MONTH_JS
+
+
+# --- секрет входа вводится только на странице ID Uruguay (аудит SEC-4) ---
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/login",
+        "https://mi.iduruguay.gub.uy.evil.example/login",
+        "https://bpmgob.mec.gub.uy/etapas/home",
+        "about:blank",
+    ],
+)
+def test_секрет_не_вводится_вне_страницы_id_uruguay(url: str) -> None:
+    from types import SimpleNamespace
+
+    from rcbot.domain.errors import LoginFailed
+    from rcbot.infrastructure.gubuy.auth import _require_login_page
+
+    with pytest.raises(LoginFailed, match="не введены"):
+        _require_login_page(SimpleNamespace(url=url))  # type: ignore[arg-type]
+
+
+def test_на_странице_id_uruguay_ввод_разрешён() -> None:
+    from types import SimpleNamespace
+
+    from rcbot.infrastructure.gubuy.auth import _require_login_page
+
+    _require_login_page(SimpleNamespace(url=LOGIN_URL))  # type: ignore[arg-type]

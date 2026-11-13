@@ -14,10 +14,11 @@ from datetime import datetime
 from itertools import count
 from pathlib import Path
 
+from rcbot.infrastructure.gubuy import MAX_STORED_FILES
 from rcbot.infrastructure.gubuy.pages import classify
 from rcbot.infrastructure.logging.redaction import REDACTOR
 
-MAX_FILES = 20
+MAX_FILES = MAX_STORED_FILES
 MAX_BODY_CHARS = 8000
 # Тело пишется только у этих типов: ответ API и скрипт календаря нужны для разбора, и личных
 # данных в них нет по устройству сайта. Всё прочее — страница, её тело не сохраняется

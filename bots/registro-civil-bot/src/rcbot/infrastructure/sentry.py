@@ -10,6 +10,7 @@ from rcbot.infrastructure.logging.redaction import MASK, REDACTOR, SECRET_KEY_NA
 logger = logging.getLogger(__name__)
 
 _MAX_DEPTH = 64
+SERVER_NAME = "rcbot"
 
 
 def _scrub(value: Any, depth: int = 0) -> Any:
@@ -28,8 +29,13 @@ def _scrub(value: Any, depth: int = 0) -> Any:
         }
     if isinstance(value, list | tuple):
         return [_scrub(v, depth + 1) for v in value]
-    if value is None or isinstance(value, bool | int | float):
+    if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, int | float):
+        # Число проверяется как текст, как в журнале: длинный номер (chat_id) становится `***`
+        text = str(value)
+        redacted = REDACTOR.redact(text)
+        return value if redacted == text else redacted
     return REDACTOR.redact(str(value))
 
 
@@ -57,6 +63,8 @@ def init_sentry(enabled: bool, dsn: str, release: str) -> bool:
         max_request_body_size="never",
         before_send=_before_send,
         traces_sample_rate=0.0,
+        # Без имени компьютера: по умолчанию SDK подставляет hostname
+        server_name=SERVER_NAME,
     )
     logger.info("Sentry включён")
     return True

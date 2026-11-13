@@ -150,3 +150,12 @@ async def test_cookies_переживают_закрытие_и_новую_се�
         assert jar_after is jar_before
     finally:
         await http.close()
+
+
+def test_предел_соединений_константа_а_не_параметр_конструктора() -> None:
+    import inspect
+
+    from rcbot.infrastructure.http import client
+
+    assert client.CONNECTOR_LIMIT == 4
+    assert "limit" not in inspect.signature(client.SafeHttp).parameters

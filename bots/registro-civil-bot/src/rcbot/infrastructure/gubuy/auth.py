@@ -64,6 +64,12 @@ async def _click_text(page: Page, pattern: re.Pattern[str]) -> None:
     await target.click()
 
 
+def _require_login_page(page: Page) -> None:
+    """Секрет вводится только на странице ID Uruguay: после переадресации на чужой хост — отказ."""
+    if not is_login_url(page.url):
+        raise LoginFailed("страница входа сменилась на другой сайт: данные входа не введены")
+
+
 class PlaywrightAuthenticator:
     def __init__(
         self,
@@ -127,6 +133,7 @@ class PlaywrightAuthenticator:
             page.get_by_label(re.compile(r"N[úu]mero", re.I)),
             page.get_by_role("textbox", name=re.compile(r"N[úu]mero", re.I)),
         )
+        _require_login_page(page)
         await number.fill(creds.doc_number.get_secret_value())
         await _click_text(page, re.compile(r"^\s*Continuar\s*$", re.I))
 
@@ -136,5 +143,6 @@ class PlaywrightAuthenticator:
             page.locator("input[type=password]"),
         )
         await password.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
+        _require_login_page(page)
         await password.fill(creds.password.get_secret_value())
         await _click_text(page, re.compile(r"^\s*Continuar\s*$", re.I))
