@@ -25,6 +25,8 @@ from rcbot.domain.models import (
     SourceKind,
     WatchTarget,
     fingerprint_of,
+    iso_days,
+    percentile,
 )
 from tests.fakes import T0, slots, slots_at
 
@@ -218,6 +220,27 @@ def test_свойство_перцентиль_внутри_диапазона_�
     low, high = sorted((q1, q2))
     assert min(values) <= stats.percentile(low) <= stats.percentile(high) <= max(values)
     assert stats.percentile(low) in values
+
+
+@given(st.lists(st.floats(0, 1e6, allow_nan=False), max_size=50), st.floats(-1, 2))
+def test_перцентиль_часа_это_общая_функция_домена(values: list[float], q: float) -> None:
+    assert PollStatsHour(T0, latencies_ms=list(values)).percentile(q) == percentile(values, q)
+
+
+def test_общий_перцентиль_не_меняет_входной_список() -> None:
+    values = [3.0, 1.0, 2.0]
+    assert percentile(values, 0.5) == 2.0
+    assert percentile([], 0.95) == 0.0
+    assert values == [3.0, 1.0, 2.0]
+
+
+# --- iso_days ---
+
+
+def test_iso_days_дни_без_повторов_по_порядку_время_не_важно() -> None:
+    mixed = slots_at((24, 9, 0), (23, 10, 30), (23, 11, 0)) | slots(23, 25)
+    assert iso_days(mixed) == ["2027-02-23", "2027-02-24", "2027-02-25"]
+    assert iso_days(frozenset()) == []
 
 
 def test_счётчики_часа_по_умолчанию_нулевые_и_списки_не_общие() -> None:

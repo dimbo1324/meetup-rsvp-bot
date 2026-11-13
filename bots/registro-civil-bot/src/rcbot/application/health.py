@@ -14,6 +14,10 @@ from rcbot.domain.models import Incident, PollStatsHour
 logger = logging.getLogger(__name__)
 
 WATCHDOG_EVERY_SEC = 60.0
+MEDIAN_Q = 0.5
+TAIL_Q = 0.95
+# Инциденты за сутки читаются страницами: первая — столько, дальше вдвое больше
+INCIDENTS_PAGE = 50
 
 
 def next_report_at(now: datetime, tz: ZoneInfo, hour: int) -> datetime:
@@ -28,8 +32,10 @@ def report_text(hours: list[PollStatsHour], incidents_24h: int, size_bytes: int 
     checks = sum(h.checks for h in hours)
     errors = sum(h.errors for h in hours)
     relogins = sum(h.relogins for h in hours)
-    p50 = [h.percentile(0.5) for h in hours if h.checks]
-    p95 = [h.percentile(0.95) for h in hours if h.checks]
+    # Сырые задержки прошлых часов в БД не хранятся: сводим часовые перцентили (медиана медиан,
+    # худший 95-й), а не пересчитываем по всем проверкам суток
+    p50 = [h.percentile(MEDIAN_Q) for h in hours if h.checks]
+    p95 = [h.percentile(TAIL_Q) for h in hours if h.checks]
     lines = [
         "📋 Отчёт rcbot за сутки",
         f"Проверок: {checks}, ошибок: {errors}, входов на сайт: {relogins}",
@@ -79,7 +85,7 @@ class HealthMonitor:
         return report_text(hours, len(incidents), self._folder_size())
 
     async def _incidents_since(self, since: datetime) -> list[Incident]:
-        limit = 50
+        limit = INCIDENTS_PAGE
         while True:
             found = await self._incidents.last(limit)
             # Список идёт от новых к старым: если самый старый ещё внутри суток, запрашиваем больше

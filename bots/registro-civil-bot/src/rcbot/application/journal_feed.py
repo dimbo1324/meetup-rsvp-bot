@@ -15,6 +15,7 @@ from rcbot.domain.events import (
     SourceSwitched,
     UnconfirmedSlotsSeen,
 )
+from rcbot.domain.models import iso_days
 
 
 class JournalFeed:
@@ -30,18 +31,14 @@ class JournalFeed:
         match event:
             case SlotsAppeared(snapshot=snapshot):
                 self._opened_at = self._clock.monotonic()
-                days = sorted({s.day.isoformat() for s in snapshot.slots})
-                self._journal.event(
-                    "slots.appeared", f"появились места: {', '.join(days)}", "WARNING"
-                )
+                days = ", ".join(iso_days(snapshot.slots))
+                self._journal.event("slots.appeared", f"появились места: {days}", "WARNING")
                 self._journal.opening(
                     OpeningRecord(event.at, "появились", snapshot.slots, snapshot.source)
                 )
             case SlotsChanged(snapshot=snapshot, added=added):
-                days = sorted({s.day.isoformat() for s in added})
-                self._journal.event(
-                    "slots.changed", f"добавились места: {', '.join(days)}", "WARNING"
-                )
+                days = ", ".join(iso_days(added))
+                self._journal.event("slots.changed", f"добавились места: {days}", "WARNING")
                 self._journal.opening(OpeningRecord(event.at, "добавились", added, snapshot.source))
             case SlotsGone(snapshot=snapshot):
                 lasted = (
