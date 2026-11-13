@@ -6,6 +6,6 @@ Claude Code загружает этот файл, когда работа кас
 этого каталога (руками не править: меняйте модуль `.ai/`, затем `dev.py sync-agents`).
 
 Требования — `SPEC.md` в этом каталоге. План — `docs/ROADMAP.md`; инварианты —
-`docs/architecture/invariants.md`; решения по размещению в монорепозитории — `docs/open-questions.md`.
+`docs/architecture/invariants.md`; решения владельца и открытые вопросы — `docs/open-questions.md`.
 
 @.ai/10-bot-rules.md
