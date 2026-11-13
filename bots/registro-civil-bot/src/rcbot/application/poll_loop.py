@@ -26,7 +26,12 @@ from rcbot.application.ports import (
     NullJournal,
     StatsRepository,
 )
-from rcbot.application.runtime import RuntimeSettings, RuntimeStore, clamp_interval
+from rcbot.application.runtime import (
+    RuntimeSettings,
+    RuntimeStore,
+    clamp_interval,
+    clamp_months,
+)
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
 from rcbot.domain.detector import Detector
@@ -156,7 +161,7 @@ class PollLoop:
         return self.runtime.base_interval_sec
 
     async def set_months(self, months: int) -> int:
-        self.runtime.months_ahead = max(1, min(12, months))
+        self.runtime.months_ahead = clamp_months(months)
         await self._runtime_store.save(self.runtime)
         return self.runtime.months_ahead
 

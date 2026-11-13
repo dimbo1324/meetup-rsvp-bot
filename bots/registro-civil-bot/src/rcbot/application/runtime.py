@@ -40,6 +40,10 @@ def clamp_interval(seconds: float) -> float:
     return min(max(seconds, MIN_POLL_INTERVAL_SEC), MAX_POLL_INTERVAL_SEC)
 
 
+def clamp_months(months: int) -> int:
+    return min(max(months, MIN_MONTHS_AHEAD), MAX_MONTHS_AHEAD)
+
+
 @dataclass
 class RuntimeSettings:
     base_interval_sec: float
@@ -119,7 +123,7 @@ class RuntimeStore:
         started = now if stored_start is None else min(stored_start, now)
         settings = RuntimeSettings(
             base_interval_sec=clamp_interval(interval),
-            months_ahead=min(max(months, MIN_MONTHS_AHEAD), MAX_MONTHS_AHEAD),
+            months_ahead=clamp_months(months),
             ladder_started_at=started,
             paused_until=_parse(values.get(K_PAUSED_UNTIL), _moment, None),
             channels_off=_channels(values.get(K_CHANNELS_OFF, "")),
