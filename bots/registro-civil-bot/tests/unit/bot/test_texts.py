@@ -337,3 +337,28 @@ def test_шаблоны_подставляются_без_ошибок() -> None
     assert "01.02 03:04" in texts.PAUSED.format(until="01.02 03:04")
     assert "Источник: DOM, интервал ≈ 20 с" in texts.STARTED.format(source="DOM", interval=20)
     assert texts.RELOGIN_FAILED.format(error="причина") == "Вход не удался: причина"
+
+
+# --- тексты с подставленными константами и общие помощники ---
+
+
+def test_тексты_берут_пределы_из_констант_а_не_из_литералов() -> None:
+    from rcbot.application.control import MAX_PAUSE_MINUTES
+    from rcbot.bot.handlers.commands import PAUSE_BAD
+    from rcbot.config.settings import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
+
+    assert f"до {MAX_PAUSE_MINUTES}:" in texts.PAUSE_BAD
+    assert PAUSE_BAD == texts.PAUSE_BAD
+    assert f"не меньше {MIN_POLL_INTERVAL_SEC:.0f}:" in texts.INTERVAL_BAD
+    assert f"(не меньше {MIN_POLL_INTERVAL_SEC:.0f})" in texts.HELP
+    assert f"раза в {MIN_DOM_POLL_INTERVAL_SEC:.0f} с" in texts.INTERVAL_SET.format(value=20)
+    assert "{" not in texts.HELP
+
+
+def test_relogin_text_успех_и_ошибка() -> None:
+    assert texts.relogin_text("") == texts.RELOGIN_OK
+    assert texts.relogin_text("страница входа") == "Вход не удался: страница входа"
+
+
+def test_moment_в_часовом_поясе_владельца() -> None:
+    assert texts.moment(T0, TZ) == f"{T0.astimezone(TZ):%d.%m %H:%M}"

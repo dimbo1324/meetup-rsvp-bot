@@ -3,6 +3,7 @@
 # при сбое каждую минуту до 999 раз, без ограничения по времени, работа и от батареи.
 # Запуск: powershell -ExecutionPolicy Bypass -File bots\registro-civil-bot\scripts\register_task.ps1
 $ErrorActionPreference = 'Stop'
+$TaskName = 'rcbot'
 
 $botDir = Split-Path -Parent $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $botDir '..\..')).Path
@@ -23,8 +24,8 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName 'rcbot' -Action $action -Trigger $trigger -Settings $settings `
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
     -Principal $principal -Description 'rcbot: наблюдение за записью в Registro Civil' -Force | Out-Null
 
-Write-Host 'Задание rcbot зарегистрировано. Запустить сейчас: Start-ScheduledTask -TaskName rcbot'
+Write-Host "Задание $TaskName зарегистрировано. Запустить сейчас: Start-ScheduledTask -TaskName $TaskName"
 Write-Host 'Питание: при работе от сети «Переводить в спящий режим» — Никогда; закрытие крышки — «Ничего не делать».'

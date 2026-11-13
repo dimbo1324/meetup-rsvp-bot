@@ -299,8 +299,8 @@ def test_install_готовит_окружение_спрашивает_секр
     uv = [c for c in ([uv] if isinstance(uv, dict) else uv) if c["name"] == "uv"]
     assert [c["params"]["args"] for c in uv] == [
         "run python dev.py setup --bot registro-civil-bot",
-        "run --all-packages rcbot init",
-        "run --all-packages rcbot doctor",
+        "run --no-sync rcbot init",
+        "run --no-sync rcbot doctor",
     ]
     # Всё выполняется из корня репозитория, после работы каталог возвращается
     assert all(same_path(c["cwd"], BOT_DIR.parents[1]) for c in uv)

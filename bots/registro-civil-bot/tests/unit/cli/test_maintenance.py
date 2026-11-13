@@ -87,7 +87,7 @@ def test_purge_отказывает_пока_бот_запущен_и_ничег
     finally:
         running.release()
 
-    assert "Бот запущен" in capsys.readouterr().out
+    assert "Бот запущен" in capsys.readouterr().err
     for name in CLEARED:
         assert (bot_home / name / "file.dat").exists(), name
 
@@ -238,7 +238,8 @@ def test_uninstall_удаляет_только_существующие_секр
 def test_uninstall_на_не_windows_планировщик_не_трогает(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], schtasks: FakeSchtasks
 ) -> None:
-    monkeypatch.setattr(maintenance, "_not_running", lambda paths: True)
+    # Замок бота на «linux» потребовал бы fcntl: здесь проверяется только Планировщик
+    monkeypatch.setattr(maintenance, "run_exclusive", lambda paths, body: body())
     monkeypatch.setattr(sys, "platform", "linux")
     fill_all_secrets()
     answer(monkeypatch, "да")
@@ -267,7 +268,7 @@ def test_uninstall_отказывает_пока_бот_запущен(
     assert asked == []  # даже не спрашивает
     assert len(present()) == len(SecretKey)
     assert schtasks.commands == []
-    assert "Бот запущен" in capsys.readouterr().out
+    assert "Бот запущен" in capsys.readouterr().err
 
 
 def test_uninstall_без_консоли_не_падает_а_пишет_в_лог_и_ничего_не_удаляет(

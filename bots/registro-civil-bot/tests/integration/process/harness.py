@@ -17,6 +17,7 @@ from typing import Any
 
 import keyring
 from tests.fakes import (
+    AGENDA_URL,
     FakeAuthenticator,
     FakeNotifier,
     FakeSource,
@@ -24,7 +25,7 @@ from tests.fakes import (
     RecordingJournal,
 )
 
-from rcbot import runner
+from rcbot import bootstrap, runner
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.bus import EventBus
 from rcbot.application.session_manager import SessionManager
@@ -202,6 +203,8 @@ def build_rig(
     api_script: list[Any] | None = None,
 ) -> Rig:
     core = build_core(console=False)
+    # Адрес с меткой вместо номера этапа run_app отклоняет: стенду нужен «настроенный» адрес
+    core.settings = core.settings.model_copy(update={"agenda_url": AGENDA_URL})
     clock = ManualClock()
     order: list[str] = []
     journal = OrderedJournal(order)
@@ -278,8 +281,9 @@ def build_rig(
     patch(runner, "build_session", make_session)
     api = ConfiguredApi(rig, api_script, clock=clock) if api_script is not None else FakeApi()
     rig.api = api
-    patch(runner, "build_api_source", lambda core_: api)
-    patch(runner, "build_dom_source", lambda core_: rig.dom)
+    # Выбор основного и запасного источника — настоящий bootstrap.build_sources
+    patch(bootstrap, "build_api_source", lambda core_: api)
+    patch(bootstrap, "build_dom_source", lambda core_: rig.dom)
     patch(runner, "EventBus", RecordingBus)
     patch(runner, "Supervisor", RecordingSupervisor)
     patch(runner, "AlertOrchestrator", RecordingAlerts)

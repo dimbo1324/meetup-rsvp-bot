@@ -25,6 +25,8 @@ function Ask-Yes([string]$question, [bool]$default) {
     return ($answer -in @('д', 'да', 'y', 'yes'))
 }
 
+# Те же каталоги и пути, что _WINDOWS_ROOTS и _WINDOWS_PARTS в src/rcbot/infrastructure/gubuy/
+# browser.py: Python в окружении ещё может не быть. Меняете там — поменяйте и здесь.
 function Find-Browser {
     $roots = @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
     $known = @(

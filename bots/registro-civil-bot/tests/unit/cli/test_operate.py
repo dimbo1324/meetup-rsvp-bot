@@ -15,7 +15,7 @@ from playwright.async_api import Error as PlaywrightError
 from tests.fakes import FakeAuthenticator, FakeClock, FakeSource, slots, slots_at
 from tests.unit.cli.conftest import journal_checks, journal_events
 
-from rcbot import cli
+from rcbot import bootstrap, cli
 from rcbot.application.ports import SessionCookie
 from rcbot.application.session_manager import SessionManager
 from rcbot.bootstrap import Core
@@ -168,8 +168,9 @@ class CheckEnv:
             return self.session
 
         monkeypatch.setattr(operate, "build_session", build_session)
-        monkeypatch.setattr(operate, "build_api_source", lambda core: self.api)
-        monkeypatch.setattr(operate, "build_dom_source", lambda core: dom)
+        # Выбор API/DOM — общий bootstrap.build_sources: подменяются его строители
+        monkeypatch.setattr(bootstrap, "build_api_source", lambda core: self.api)
+        monkeypatch.setattr(bootstrap, "build_dom_source", lambda core: dom)
 
 
 def test_check_печатает_состояние_по_месяцам_и_пишет_запись_в_журнал(
@@ -213,35 +214,48 @@ def test_check_по_умолчанию_не_требует_once(
     assert cli.main(["check"]) == 0
 
 
-def test_check_при_истёкшей_сессии_входит_заново_ровно_один_раз(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    dom = FakeSource([SessionExpired("страница входа"), slots(23)])
-    env = CheckEnv(monkeypatch, dom=dom)
-
-    assert cli.main(["check", "--once"]) == 0
-
-    assert env.auth.logins == 2
-    assert len(dom.calls) == 2
-    assert "Источник: dom" in capsys.readouterr().out
-    assert len(dom.cookie_history) == 2  # источник получил cookies обоих входов
-
-
-def test_check_повторное_истечение_сессии_не_зацикливается(
+def test_check_при_истёкшей_сессии_входит_заново_но_календарь_второй_раз_не_просит(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    dom = FakeSource([SessionExpired("раз"), SessionExpired("два")], repeat_last=False)
+    """DomSource — не чаще раза в 60 с (инвариант): вторая проверка сразу после входа — нельзя."""
+    dom = FakeSource([SessionExpired("страница входа"), slots(23)])
     env = CheckEnv(monkeypatch, dom=dom)
 
     assert cli.main(["check", "--once"]) == 1
 
     assert env.auth.logins == 2
-    assert len(dom.calls) == 2
-    assert "Проверка не удалась: SessionExpired: два" in capsys.readouterr().err
+    assert len(dom.calls) == 1
+    assert len(dom.cookie_history) == 2  # источник получил cookies нового входа
+    err = capsys.readouterr().err
+    assert operate.RELOGGED_RETRY in err
+    assert "Проверка не удалась" not in err
     [record] = journal_checks(tmp_path / "journal")
     assert record["ok"] is False
-    assert record["error_kind"] == "SessionExpired"
+    assert record["error_kind"] == "ReloggedRetryLater"
     assert dom.closed == 1
+
+
+def test_check_неудачный_повторный_вход_после_истечения_сессии_сообщается(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dom = FakeSource([SessionExpired("раз")])
+    env = CheckEnv(monkeypatch, dom=dom)
+
+    class SecondLoginFails(FakeAuthenticator):
+        async def login(self) -> list[SessionCookie]:
+            if self.logins == 1:
+                self.logins += 1
+                raise SiteUnavailable("вход")
+            return await super().login()
+
+    env.auth = SecondLoginFails()
+
+    assert cli.main(["check"]) == 1
+
+    assert len(dom.calls) == 1
+    err = capsys.readouterr().err
+    assert "Проверка не удалась: SiteUnavailable" in err
+    assert operate.RELOGGED_RETRY not in err
 
 
 def test_check_шаг_1_просит_пройти_его_вручную(
@@ -369,7 +383,8 @@ def test_discover_печатает_итог_и_сводку(
     assert str(paths.discovery / "discovery-test.json") in out
     assert "GET  200 xhr    https://x/api/ok" in out
     assert "Замечен socket.io" in out
-    assert "очищен от cookies и личных данных; хранится 7 дней" in out
+    days = operate.FILE_RETENTION["discovery"][0].days
+    assert f"очищен от cookies и личных данных; хранится {days} дней" in out
 
 
 def test_discover_открывает_видимое_окно_и_пишет_в_каталог_разведки(
@@ -492,6 +507,76 @@ def test_run_при_занятом_замке_даёт_код_3_и_ничего_
     assert "Остановите работающий экземпляр" in capsys.readouterr().err
     assert run_spy.calls == []
     assert SpyAwake.events == []
+
+
+@pytest.mark.parametrize("argv", [["check"], ["login"], ["login", "--check"], ["discover"]])
+def test_команды_на_сайт_отказывают_кодом_3_пока_бот_работает(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    paths: Paths,
+    recorder: type[FakeRecorder],
+    argv: list[str],
+) -> None:
+    """Второй вход и второй браузер рядом с работающим ботом сбили бы ему сессию (COL-6)."""
+    auth = FakeLoginAuth()
+    patch_login(monkeypatch, auth, PageKind.AGENDA)
+    env = CheckEnv(monkeypatch, dom=FakeSource([slots(1)]))
+    holder = SingleInstance(paths.lock_file)
+    holder.acquire()
+    try:
+        assert cli.main(argv) == cli.EXIT_RUNNING
+    finally:
+        holder.release()
+    assert "Остановите работающий экземпляр" in capsys.readouterr().err
+    assert auth.logins == 0 and env.auth.logins == 0
+    assert env.dom.calls == []
+    assert recorder.instances == []
+
+
+@pytest.mark.parametrize("argv", [["check"], ["login"], ["discover"]])
+def test_команды_на_сайт_держат_замок_и_отпускают_его(
+    monkeypatch: pytest.MonkeyPatch, paths: Paths, recorder: type[FakeRecorder], argv: list[str]
+) -> None:
+    held: list[bool] = []
+
+    def probe() -> None:
+        lock = SingleInstance(paths.lock_file)
+        try:
+            lock.acquire()
+        except Exception:
+            held.append(True)
+            return
+        held.append(False)
+        lock.release()
+
+    class ProbingAuth(FakeLoginAuth):
+        async def login(self) -> list[SessionCookie]:
+            probe()
+            return await super().login()
+
+    patch_login(monkeypatch, ProbingAuth())
+    CheckEnv(monkeypatch, dom=FakeSource([slots(1)]))
+    real_build_session = operate.build_session
+
+    def build_session(core: Core) -> SessionManager:
+        probe()
+        return real_build_session(core)
+
+    monkeypatch.setattr(operate, "build_session", build_session)
+
+    async def run(_: object) -> DiscoveryResult:
+        probe()
+        assert isinstance(recorder.outcome, DiscoveryResult)
+        return recorder.outcome
+
+    monkeypatch.setattr(FakeRecorder, "run", lambda self, at: run(at))
+
+    cli.main(argv)
+
+    assert held and all(held)
+    again = SingleInstance(paths.lock_file)
+    again.acquire()
+    again.release()
 
 
 def test_замок_и_защита_от_сна_снимаются_при_ошибке_работы(run_spy: RunSpy, paths: Paths) -> None:

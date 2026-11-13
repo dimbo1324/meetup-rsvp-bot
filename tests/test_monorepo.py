@@ -98,3 +98,14 @@ def test_ключи_покрытия_только_для_настроенног�
         "--cov-report=term-missing:skip-covered",
         "--cov-fail-under=85",
     ]
+
+
+def test_dev_setup_ставит_окружение_строго_по_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`dev.py setup` не переразрешает зависимости: расхождение uv.lock и pyproject — отказ."""
+    import dev
+
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(dev, "run", lambda *cmd, **kw: commands.append(cmd) or 1)
+
+    assert dev.cmd_setup([]) == 1
+    assert commands == [("uv", "sync", "--locked", "--all-packages", "--all-groups")]

@@ -21,7 +21,10 @@ from rcbot.domain.models import Channel
 INTERVALS = ("20", "30", "45", "60", "120", "300")
 MONTHS = ("3", "6", "9", "12")
 CHANNEL_IDS = frozenset(c.value for c in Channel)
-PAUSES = (("30", "30 мин"), ("60", "1 ч"), ("180", "3 ч"), ("0", "до /resume"))
+PAUSE_FOREVER = "0"
+PAUSES = (("30", "30 мин"), ("60", "1 ч"), ("180", "3 ч"), (PAUSE_FOREVER, "до /resume"))
+# Telegram обрезает всплывающий ответ на нажатие кнопки до 200 знаков
+CALLBACK_ANSWER_MAX = 200
 
 
 def _controller(manager: DialogManager) -> Controller:
@@ -92,7 +95,7 @@ async def _on_months(callback: CallbackQuery, _: Any, manager: DialogManager, it
 async def _on_pause(callback: CallbackQuery, _: Any, manager: DialogManager, item: str) -> None:
     if item not in {minutes for minutes, _label in PAUSES}:
         return await _stale(callback)
-    await _controller(manager).pause(int(item) or None)
+    await _controller(manager).pause(None if item == PAUSE_FOREVER else int(item))
     await callback.answer("Пауза включена")
 
 
@@ -112,21 +115,19 @@ async def _on_test(callback: CallbackQuery, _: Any, manager: DialogManager, item
     if item not in CHANNEL_IDS:
         return await _stale(callback)
     results = await _controller(manager).test(Channel(item))
-    await callback.answer(texts.deliveries_text(results)[:200], show_alert=True)
+    await callback.answer(texts.deliveries_text(results)[:CALLBACK_ANSWER_MAX], show_alert=True)
 
 
 async def _on_relogin(callback: CallbackQuery, _: Button, manager: DialogManager) -> None:
-    await callback.answer("Вхожу заново…")
+    await callback.answer(texts.RELOGIN_STARTED)
     error = await _controller(manager).relogin()
     if isinstance(callback.message, Message):
-        await callback.message.answer(
-            texts.RELOGIN_FAILED.format(error=error) if error else texts.RELOGIN_OK
-        )
+        await callback.message.answer(texts.relogin_text(error))
 
 
 async def _on_cleanup(callback: CallbackQuery, _: Button, manager: DialogManager) -> None:
     removed = await _controller(manager).cleanup()
-    await callback.answer(texts.cleanup_text(removed)[:200], show_alert=True)
+    await callback.answer(texts.cleanup_text(removed)[:CALLBACK_ANSWER_MAX], show_alert=True)
 
 
 def build_menu_dialog() -> Dialog:

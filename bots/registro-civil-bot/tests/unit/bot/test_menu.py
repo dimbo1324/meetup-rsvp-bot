@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
@@ -227,6 +228,26 @@ async def test_пауза_до_resume() -> None:
     await screen.click("до /resume")
     assert setup.rig.runtime.paused_until is not None
     assert setup.rig.runtime.paused_until - T0 > timedelta(days=365)
+
+
+async def test_пауза_до_resume_передаёт_контроллеру_none_явно(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Бессрочная пауза — `None`, а не «0 минут» (COL-9): контроллер не гадает, что значит 0."""
+    setup, screen = await open_menu()
+    controller = setup.rig.controller
+    seen: list[int | None] = []
+    real_pause = controller.pause
+
+    async def spy(minutes: int | None) -> Any:
+        seen.append(minutes)
+        return await real_pause(minutes)
+
+    monkeypatch.setattr(controller, "pause", spy)
+    await screen.click("🔎 Сканирование")
+    await screen.click("до /resume")
+    await screen.click("30 мин")
+    assert seen == [None, 30]
 
 
 async def test_после_паузы_окно_показывает_паузу_и_продолжить_её_снимает() -> None:

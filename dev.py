@@ -126,7 +126,8 @@ def cmd_doctor(_: list[str]) -> int:
 
 def cmd_setup(args: list[str]) -> int:
     name, _ = split_bot(args)
-    if run("uv", "sync", "--all-packages", "--all-groups") != 0:
+    # --locked: ставится ровно uv.lock; разошёлся с pyproject — отказ, а не тихое переразрешение
+    if run("uv", "sync", "--locked", "--all-packages", "--all-groups") != 0:
         return 1
     for bot in selected_bots(name):
         env, example = bot.path / ".env", bot.path / ".env.example"

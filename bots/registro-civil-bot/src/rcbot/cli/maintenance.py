@@ -7,29 +7,20 @@ import subprocess
 import sys
 
 from rcbot.bootstrap import build_core
+from rcbot.cli.exclusive import run_exclusive
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretKey, SecretStore
 from rcbot.infrastructure.files import purge
-from rcbot.infrastructure.win.single_instance import AlreadyRunning, SingleInstance
 
 TASK_NAME = "rcbot"
 
 
-def _not_running(paths: Paths) -> bool:
-    lock = SingleInstance(paths.lock_file)
-    try:
-        lock.acquire()
-    except AlreadyRunning:
-        print("Бот запущен: остановите его (задание Планировщика или Ctrl+C) и повторите.")
-        return False
-    lock.release()
-    return True
-
-
 def cmd_purge(_: argparse.Namespace) -> int:
     paths = Paths.default()
-    if not _not_running(paths):
-        return 3
+    return run_exclusive(paths, lambda: _purge(paths))
+
+
+def _purge(paths: Paths) -> int:
     removed = purge(paths)
     if not removed:
         print("Удалять нечего.")
@@ -40,9 +31,11 @@ def cmd_purge(_: argparse.Namespace) -> int:
 
 
 def cmd_uninstall(_: argparse.Namespace) -> int:
-    core = build_core(console=False, command="uninstall")
-    if not _not_running(core.paths):
-        return 3
+    with build_core(console=False, command="uninstall") as core:
+        return run_exclusive(core.paths, lambda: _uninstall(core.paths))
+
+
+def _uninstall(paths: Paths) -> int:
     answer = input(
         "Удалить все секреты rcbot из Credential Manager и задание Планировщика? [да/нет] "
     )
@@ -56,7 +49,7 @@ def cmd_uninstall(_: argparse.Namespace) -> int:
     task_removed = _remove_scheduler_task() if sys.platform == "win32" else True
     print(
         f"Готово. Чтобы убрать всё остальное: `rcbot purge`, затем можно удалить каталог\n"
-        f"{core.paths.home} (база, .env и Chromium лежат в нём)."
+        f"{paths.home} (база, .env и Chromium лежат в нём)."
     )
     return 0 if task_removed else 1
 
