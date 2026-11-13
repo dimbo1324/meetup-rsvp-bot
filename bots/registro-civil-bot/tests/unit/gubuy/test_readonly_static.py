@@ -52,23 +52,29 @@ def _action_lines(name: str) -> list[tuple[str, str]]:
     return found
 
 
-@pytest.mark.parametrize("name", ["dom_source.py", "discovery.py"])
+@pytest.mark.parametrize("name", ["dom_source.py", "discovery.py", "calendar.py"])
 def test_в_коде_чтения_календаря_нет_запрещённых_кнопок_в_строках(name: str) -> None:
     for literal in _string_literals((PACKAGE / name).read_text(encoding="utf-8")):
         lowered = literal.lower()
         assert not any(word in lowered for word in FORBIDDEN_WORDS), f"{name}: {literal!r}"
 
 
-@pytest.mark.parametrize("name", ["dom_source.py", "discovery.py"])
-def test_календарь_трогают_только_стрелка_месяца_и_радиокнопка_офиса(name: str) -> None:
-    actions = _action_lines(name)
+def test_календарь_трогают_только_стрелка_месяца_и_радиокнопка_офиса() -> None:
+    actions = _action_lines("calendar.py")
     assert sorted(kind for kind, _ in actions) == ["check", "click"], actions
     by_kind = dict(actions)
     assert "ui-datepicker-next" in by_kind["click"] or "NEXT_MONTH" in by_kind["click"]
     assert "radio" in by_kind["check"]
 
 
-@pytest.mark.parametrize("name", ["dom_source.py", "discovery.py", "probe.py", "api_source.py"])
+@pytest.mark.parametrize("name", ["dom_source.py", "discovery.py"])
+def test_источники_календаря_сами_ничего_на_странице_не_делают(name: str) -> None:
+    assert _action_lines(name) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["dom_source.py", "discovery.py", "calendar.py", "probe.py", "api_source.py"]
+)
 def test_источники_не_вводят_текст_и_не_отправляют_формы(name: str) -> None:
     text = (PACKAGE / name).read_text(encoding="utf-8")
     assert not TEXT_INPUT.search(text)

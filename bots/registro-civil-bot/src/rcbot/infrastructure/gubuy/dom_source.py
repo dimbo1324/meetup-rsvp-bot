@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import time as monotonic_time
 from collections.abc import Sequence
 from datetime import datetime
@@ -17,13 +16,13 @@ from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from rcbot.application.ports import Clock, SessionCookie
 from rcbot.domain.errors import SiteUnavailable, UnexpectedResponse
 from rcbot.domain.models import AvailabilitySnapshot, Slot, SourceKind, WatchTarget
 from rcbot.infrastructure.gubuy import MAX_STORED_FILES
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch, to_playwright
+from rcbot.infrastructure.gubuy.calendar import CALENDAR, ROOT, next_month, select_office
 from rcbot.infrastructure.gubuy.pages import PAGE_ERRORS, PageKind, classify
 from rcbot.infrastructure.gubuy.parsers import (
     READ_MONTH_JS,
@@ -34,8 +33,6 @@ from rcbot.infrastructure.gubuy.parsers import (
 
 logger = logging.getLogger(__name__)
 
-CALENDAR = ".ui-datepicker-calendar"
-NEXT_MONTH = ".ui-datepicker-next"
 STEP_TIMEOUT_MS = 20_000
 MAX_SHOTS = MAX_STORED_FILES
 
@@ -104,7 +101,7 @@ class DomSource:
             self._raise_for_page(
                 page.url, await page.content(), response.status if response else None
             )
-            await self._select_location(page)
+            await select_office(page, self._location, strict=True)
             await page.wait_for_selector(CALENDAR, state="visible")
             slots = await self._read_months(page, target.months_ahead)
         except PlaywrightError as error:
@@ -127,16 +124,6 @@ class DomSource:
         if kind is PageKind.UNKNOWN:
             raise UnexpectedResponse("признаки шага «Agenda» на странице не найдены")
 
-    async def _select_location(self, page: Page) -> None:
-        pattern = re.compile(re.escape(self._location), re.I)
-        radio = page.get_by_role("radio", name=pattern)
-        if await radio.count() == 0:
-            radio = page.get_by_label(pattern)
-        if await radio.count() == 0:
-            raise UnexpectedResponse("переключатель офиса на шаге «Agenda» не найден")
-        if not await radio.first.is_checked():
-            await radio.first.check()
-
     async def _read_months(self, page: Page, months: int) -> frozenset[Slot]:
         found: set[Slot] = set()
         seen: set[tuple[int, int]] = set()
@@ -149,22 +136,14 @@ class DomSource:
             found |= slots_of(view)
             if index == months - 1 or not view.has_next:
                 break
-            await page.locator(NEXT_MONTH).first.click()
-            try:
-                await page.wait_for_function(
-                    "t => (document.querySelector('.ui-datepicker-title') || {}).textContent !== t",
-                    arg=view.title,
-                )
-            except PlaywrightTimeout:
-                # Стрелка была, нажатие её отработало, а месяц не сменился: страница устроена не так
-                raise UnexpectedResponse("календарь не перелистнулся на следующий месяц") from None
+            await next_month(page, view.title, strict=True)
         return frozenset(found)
 
     async def _shot(self, page: Page, at: datetime) -> None:
         """Снимок только элемента календаря: личных данных страницы в нём нет (SPEC 2.6)."""
         try:
             self._shots_dir.mkdir(parents=True, exist_ok=True)
-            await page.locator(".ui-datepicker").first.screenshot(
+            await page.locator(ROOT).first.screenshot(
                 path=str(self._shots_dir / f"{at:%Y%m%dT%H%M%S}.png")
             )
             for old in sorted(self._shots_dir.glob("*.png"))[:-MAX_SHOTS]:

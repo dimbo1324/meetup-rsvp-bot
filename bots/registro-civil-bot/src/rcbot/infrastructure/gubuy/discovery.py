@@ -23,6 +23,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response, async_playwright
 
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch
+from rcbot.infrastructure.gubuy.calendar import CALENDAR, next_month, select_office
 from rcbot.infrastructure.gubuy.pages import BPMGOB_HOST, is_bpmgob_session_url
 from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS, month_view
 from rcbot.infrastructure.gubuy.quarantine import body_digest, keeps_body
@@ -248,16 +249,13 @@ class DiscoveryRecorder:
 
     async def _walk_calendar(self, page: Page) -> None:
         """Выбор офиса и перелистывание месяцев — те же действия только чтения, что в DomSource."""
-        radio = page.get_by_role("radio", name=re.compile(re.escape(self._location), re.I))
-        if await radio.count() and not await radio.first.is_checked():
-            await radio.first.check()
-        await page.wait_for_selector(".ui-datepicker-calendar", state="visible")
+        await select_office(page, self._location, strict=False)
+        await page.wait_for_selector(CALENDAR, state="visible")
         for _ in range(self._months - 1):
             view = month_view(await page.evaluate(READ_MONTH_JS))
             if not view.has_next:
                 break
-            await page.locator(".ui-datepicker-next").first.click()
-            await page.wait_for_load_state("networkidle")
+            await next_month(page, view.title, strict=False)
 
     def _write(self, at: datetime) -> DiscoveryResult:
         self._out_dir.mkdir(parents=True, exist_ok=True)
