@@ -58,6 +58,9 @@ MAX_BODY_CHARS = 200_000
 # Глубже этого вложения значения JSON не разбираются, а заменяются маской: рекурсия маскирования
 # не должна упираться в предел интерпретатора на враждебном ответе
 MAX_JSON_DEPTH = 64
+# Глубже этого JSON не пишется вовсе (только сведения о нём): так отказ не зависит от того,
+# осилит ли разбор такую вложенность конкретная версия интерпретатора
+MAX_PARSE_DEPTH = 500
 API_MARKER = "agenda_sae_api_disponibilidades"
 
 
@@ -69,7 +72,13 @@ def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _mask_json(value: Any, depth: int = 0) -> Any:
+class _TooDeep(Exception):
+    """Вложенность JSON глубже MAX_PARSE_DEPTH."""
+
+
+def _mask_json(value: Any, depth: int = 0, *, strict: bool = False) -> Any:
+    if strict and depth > MAX_PARSE_DEPTH:
+        raise _TooDeep
     if depth > MAX_JSON_DEPTH:
         return MASK
     if isinstance(value, dict):
@@ -78,12 +87,12 @@ def _mask_json(value: Any, depth: int = 0) -> Any:
             REDACTOR.redact(str(k)): (
                 MASK
                 if PERSONAL_KEYS.search(str(k)) or SECRET_KEYS.search(str(k))
-                else _mask_json(v, depth + 1)
+                else _mask_json(v, depth + 1, strict=strict)
             )
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_mask_json(v, depth + 1) for v in value]
+        return [_mask_json(v, depth + 1, strict=strict) for v in value]
     if isinstance(value, str):
         return REDACTOR.redact(value)
     return value
@@ -97,13 +106,13 @@ def _masked_json(text: str) -> Any:
     """Разобранный и замаскированный JSON; `_NOT_JSON`, если это не JSON.
 
     Длина проверяется до разбора: `json.loads` строит весь объект в памяти. Слишком длинный или
-    слишком глубокий для разбора текст — `_UNSAFE_JSON`: он не пишется, только сведения о нём.
+    слишком глубокий текст — `_UNSAFE_JSON`: он не пишется, только сведения о нём.
     """
     if len(text) > MAX_BODY_CHARS:
         return _UNSAFE_JSON
     try:
-        return _mask_json(json.loads(text))
-    except RecursionError:
+        return _mask_json(json.loads(text), strict=True)
+    except RecursionError, _TooDeep:
         return _UNSAFE_JSON
     except ValueError:
         return _NOT_JSON
