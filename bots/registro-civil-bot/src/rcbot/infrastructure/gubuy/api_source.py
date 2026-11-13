@@ -46,6 +46,34 @@ _PAGE_TEXTS = {
     PageKind.BLOCKED: "страница блокировки вместо ответа API",
 }
 
+# Предел ответа API (после распаковки): календарь на полгода — единицы килобайт. Больший ответ
+# не читается в память целиком и считается неожиданным
+MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+async def _read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
+    """Тело не длиннее `MAX_RESPONSE_BYTES` и признак «ответ больше предела»."""
+    declared = response.content_length
+    if declared is not None and declared > MAX_RESPONSE_BYTES:
+        return "", True
+    raw = bytearray()
+    # read(n) отдаёт сколько есть в буфере, не обязательно n: читаем до конца или до предела
+    while len(raw) <= MAX_RESPONSE_BYTES:
+        chunk = await response.content.read(MAX_RESPONSE_BYTES + 1 - len(raw))
+        if not chunk:
+            break
+        raw += chunk
+    too_large = len(raw) > MAX_RESPONSE_BYTES
+    return _decode(bytes(raw[:MAX_RESPONSE_BYTES]), response.charset), too_large
+
+
+def _decode(raw: bytes, charset: str | None) -> str:
+    """Как `response.text(errors="replace")`: кодировка из заголовка, без неё — UTF-8."""
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
 
 class ApiSource:
     def __init__(
@@ -89,7 +117,7 @@ class ApiSource:
                 status = response.status
                 location = response.headers.get("Location", "")
                 content_type = response.headers.get("Content-Type", "")
-                body = await response.text(errors="replace")
+                body, too_large = await _read_limited(response)
         except (aiohttp.ClientError, TimeoutError) as error:
             raise SiteUnavailable(f"API недоступен: {type(error).__name__}") from None
         latency_ms = (monotonic_time.perf_counter() - started) * 1000
@@ -102,6 +130,10 @@ class ApiSource:
             raise RateLimited(f"API ответил {status}")
         if status >= 500:
             raise SiteUnavailable(f"API ответил {status}")
+        if too_large:
+            raise self._unexpected(
+                status, content_type, body, f"ответ API больше {MAX_RESPONSE_BYTES} байт"
+            )
         if "json" not in content_type.lower():
             page = classify(self._api_url, body, status)
             if (page_error := PAGE_ERRORS.get(page)) is not None:

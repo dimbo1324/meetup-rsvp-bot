@@ -54,6 +54,9 @@ PERSONAL_KEYS = re.compile(
     r"c[eé]dula|pasaporte|passport|usuario|user|direcci[oó]n|address)"
 )
 MAX_BODY_CHARS = 200_000
+# Глубже этого вложения значения JSON не разбираются, а заменяются маской: рекурсия маскирования
+# не должна упираться в предел интерпретатора на враждебном ответе
+MAX_JSON_DEPTH = 64
 API_MARKER = "agenda_sae_api_disponibilidades"
 
 
@@ -65,22 +68,44 @@ def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _mask_json(value: Any) -> Any:
+def _mask_json(value: Any, depth: int = 0) -> Any:
+    if depth > MAX_JSON_DEPTH:
+        return MASK
     if isinstance(value, dict):
         return {
             # Сам ключ тоже может быть личным («адрес почты → данные»): прогоняем и его
             REDACTOR.redact(str(k)): (
                 MASK
                 if PERSONAL_KEYS.search(str(k)) or SECRET_KEYS.search(str(k))
-                else _mask_json(v)
+                else _mask_json(v, depth + 1)
             )
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_mask_json(v) for v in value]
+        return [_mask_json(v, depth + 1) for v in value]
     if isinstance(value, str):
         return REDACTOR.redact(value)
     return value
+
+
+_NOT_JSON = object()
+_UNSAFE_JSON = object()
+
+
+def _masked_json(text: str) -> Any:
+    """Разобранный и замаскированный JSON; `_NOT_JSON`, если это не JSON.
+
+    Длина проверяется до разбора: `json.loads` строит весь объект в памяти. Слишком длинный или
+    слишком глубокий для разбора текст — `_UNSAFE_JSON`: он не пишется, только сведения о нём.
+    """
+    if len(text) > MAX_BODY_CHARS:
+        return _UNSAFE_JSON
+    try:
+        return _mask_json(json.loads(text))
+    except RecursionError:
+        return _UNSAFE_JSON
+    except ValueError:
+        return _NOT_JSON
 
 
 def clean_body(content_type: str, body: str, *, url: str = "", status: int | None = None) -> Any:
@@ -90,10 +115,11 @@ def clean_body(content_type: str, body: str, *, url: str = "", status: int | Non
     if not keeps_body(content_type, body):
         return body_digest(body, url, status)
     if "json" in content_type.lower():
-        try:
-            return _mask_json(json.loads(body))
-        except ValueError:
-            pass
+        masked = _masked_json(body)
+        if masked is _UNSAFE_JSON:
+            return body_digest(body, url, status)
+        if masked is not _NOT_JSON:
+            return masked
     return REDACTOR.redact_truncated(body, MAX_BODY_CHARS)
 
 
@@ -111,14 +137,19 @@ def clean_url(url: str) -> str:
     return REDACTOR.redact(base + mark + _mask_pairs(query))
 
 
-def clean_post_data(data: str) -> str:
-    """Тело запроса: JSON чистится как ответ, форма — по именам полей, прочее — редактором."""
-    try:
-        return json.dumps(_mask_json(json.loads(data)), ensure_ascii=False)
-    except ValueError:
-        return REDACTOR.redact_truncated(
-            _mask_pairs(data[: MAX_BODY_CHARS + TRUNCATE_MARGIN]), MAX_BODY_CHARS
-        )
+def clean_post_data(data: str) -> Any:
+    """Тело запроса: JSON чистится как ответ, форма — по именам полей, прочее — редактором.
+
+    Слишком длинное или глубокое тело не пишется: только сведения о нём, как о странице.
+    """
+    masked = _masked_json(data)
+    if masked is _UNSAFE_JSON:
+        return body_digest(data)
+    if masked is not _NOT_JSON:
+        return json.dumps(masked, ensure_ascii=False)
+    return REDACTOR.redact_truncated(
+        _mask_pairs(data[: MAX_BODY_CHARS + TRUNCATE_MARGIN]), MAX_BODY_CHARS
+    )
 
 
 @dataclass

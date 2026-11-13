@@ -152,6 +152,47 @@ def test_тип_содержимого_json_проверяется_без_учё
     assert clean_body("Application/JSON", '{"nombre": "x"}') == {"nombre": MASK}
 
 
+def test_json_длиннее_предела_не_разбирается_и_не_пишется(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery, "MAX_BODY_CHARS", 50)
+    body = json.dumps({"nombre": "Ana Prueba", "relleno": "x" * 100})
+    loads: list[str] = []
+    monkeypatch.setattr(discovery.json, "loads", lambda text: loads.append(text))
+    cleaned = clean_body(JSON, body)
+    assert loads == []  # предел проверен до json.loads
+    assert cleaned["omitted"] is True
+    assert cleaned["chars"] == len(body)
+    assert "Ana" not in json.dumps(cleaned)
+
+
+def test_глубокий_json_маскируется_ниже_предела_глубины() -> None:
+    depth = discovery.MAX_JSON_DEPTH + 10
+    body = "[" * depth + '"глубоко"' + "]" * depth
+    cleaned = clean_body(JSON, body)
+    node = cleaned
+    for _ in range(discovery.MAX_JSON_DEPTH + 1):
+        assert isinstance(node, list)
+        node = node[0]
+    assert node == MASK
+
+
+def test_json_глубже_рекурсии_интерпретатора_не_роняет_разведку() -> None:
+    depth = 100_000
+    body = "[" * depth + "]" * depth
+    assert len(body) <= MAX_BODY_CHARS
+    cleaned = clean_body(JSON, body)
+    assert cleaned["omitted"] is True
+
+
+def test_тело_запроса_длиннее_предела_не_пишется(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery, "MAX_BODY_CHARS", 50)
+    data = json.dumps({"nombre": "Ana Prueba", "relleno": "x" * 100})
+    cleaned = clean_post_data(data)
+    assert cleaned["omitted"] is True
+    assert "Ana" not in json.dumps(cleaned)
+
+
 def test_пустое_тело_и_пустой_тип() -> None:
     assert clean_body("", "") == ""
     assert clean_body(JSON, "") == ""
