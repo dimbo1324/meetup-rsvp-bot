@@ -13,8 +13,8 @@ from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import Clock, EventLog, IncidentRepository, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
-from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.errors import RcbotError
+from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, Incident, SourceKind
 
 FOREVER = timedelta(days=3650)

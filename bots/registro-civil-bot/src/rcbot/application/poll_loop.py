@@ -29,7 +29,6 @@ from rcbot.application.ports import (
 from rcbot.application.runtime import RuntimeSettings, RuntimeStore, clamp_interval
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
-from rcbot.config.settings import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
 from rcbot.domain.detector import Detector
 from rcbot.domain.errors import (
     HostNotAllowed,
@@ -44,6 +43,7 @@ from rcbot.domain.errors import (
     UnexpectedResponse,
 )
 from rcbot.domain.events import ManualActionRequired, PollerStateChanged, SourceSwitched
+from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import (
     AppEvent,
     AvailabilitySnapshot,

@@ -1,6 +1,6 @@
 """Настройки, меняемые из Telegram (таблица `kv_settings`), и лестница частоты опроса (D4).
 
-Нижняя граница интервала зашита в `config.settings` и проверяется здесь ещё раз: ни `.env`, ни
+Нижняя граница интервала зашита в `domain.limits` и проверяется здесь ещё раз: ни `.env`, ни
 Telegram не могут задать меньше 10 с (SPEC 0.3, правило 3; критерий приёмки 9).
 """
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from rcbot.application.ports import KeyValueStore
-from rcbot.config.settings import (
+from rcbot.domain.limits import (
     MAX_MONTHS_AHEAD,
     MAX_POLL_INTERVAL_SEC,
     MIN_MONTHS_AHEAD,

@@ -11,12 +11,12 @@ from zoneinfo import ZoneInfo
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Жёсткие ограничения SPEC 0.3 (правило 3) и 2.3: не настраиваются ни .env, ни Telegram.
-MIN_POLL_INTERVAL_SEC = 10.0
-MIN_DOM_POLL_INTERVAL_SEC = 60.0
-MAX_POLL_INTERVAL_SEC = 3600.0
-MIN_MONTHS_AHEAD = 1
-MAX_MONTHS_AHEAD = 12
+# Пределы живут в домене; здесь — реэкспорт под прежними именами для остальных слоёв
+from rcbot.domain.limits import MAX_MONTHS_AHEAD as MAX_MONTHS_AHEAD
+from rcbot.domain.limits import MAX_POLL_INTERVAL_SEC as MAX_POLL_INTERVAL_SEC
+from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC as MIN_DOM_POLL_INTERVAL_SEC
+from rcbot.domain.limits import MIN_MONTHS_AHEAD as MIN_MONTHS_AHEAD
+from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC as MIN_POLL_INTERVAL_SEC
 
 BPMGOB_HOST = "bpmgob.mec.gub.uy"
 GUBUY_HOSTS = (BPMGOB_HOST, "mi.iduruguay.gub.uy")
