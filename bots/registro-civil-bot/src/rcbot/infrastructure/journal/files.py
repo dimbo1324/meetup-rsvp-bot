@@ -11,6 +11,9 @@
 проходит через тот же редактор, что и логи: секретов, cookies и номеров заявки здесь нет.
 Квота: больше `max_bytes` → удаляются самые старые дневные файлы, пока размер не станет не
 больше `trim_to_bytes`; сегодняшние файлы, `status.json` и `openings.csv` не удаляются.
+Квота видит только файлы журнала: служебные в корне и дневные в своих подпапках (без
+рекурсии). Папку журнала могут указать как Рабочий стол или корень диска — чужие файлы там
+не считаются и не удаляются никогда.
 """
 
 from __future__ import annotations
@@ -34,10 +37,19 @@ from zoneinfo import ZoneInfo
 from rcbot.application.ports import CheckRecord, Clock, OpeningRecord
 from rcbot.domain.models import Slot
 from rcbot.infrastructure.logging.redaction import REDACTOR, RedactionFilter
+from rcbot.infrastructure.logging.setup import FORMAT
 
 logger = logging.getLogger(__name__)
 
+GIB = 2**30
 DATED = re.compile(r"-(\d{4}-\d{2}-\d{2})\.(jsonl|log)$")
+# Подпапка журнала → (префикс, расширение) дневных файлов; другие имена в ней — не журнала
+DAILY = {"checks": ("checks", "jsonl"), "events": ("events", "jsonl"), "logs": ("rcbot", "log")}
+SERVICE_FILES = ("README.txt", "status.json", "status.json.tmp", "openings.csv")
+_OWN_DAILY = {
+    folder: re.compile(rf"{prefix}-\d{{4}}-\d{{2}}-\d{{2}}\.{suffix}")
+    for folder, (prefix, suffix) in DAILY.items()
+}
 OPENINGS_HEADER = ("местное_время", "utc", "событие", "дат", "даты", "источник", "окно_открыто_мин")
 README = """Журнал наблюдения rcbot (registro-civil-bot).
 
@@ -101,7 +113,7 @@ class DailyLogHandler(logging.Handler):
     def __init__(self, directory: Path, tz: ZoneInfo) -> None:
         super().__init__(level=logging.DEBUG)
         self._tz = tz
-        self._writer = _DailyWriter(directory, "rcbot", "log", tz)
+        self._writer = _DailyWriter(directory, *DAILY["logs"], tz)
         self.addFilter(RedactionFilter(REDACTOR))
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -120,13 +132,21 @@ class DailyLogHandler(logging.Handler):
 
 
 class _DropQueueHandler(QueueHandler):
-    """QueueHandler, который при переполнении очереди молча отбрасывает запись, а не блокирует."""
+    """QueueHandler, который при переполнении очереди отбрасывает запись, а не блокирует.
+
+    Каждая отброшенная запись передаётся в `on_drop` (счётчик журнала): потеря видна, а не тиха.
+    Писать о ней в лог отсюда нельзя — это снова попало бы в ту же переполненную очередь.
+    """
+
+    def __init__(self, log_queue: queue.Queue[logging.LogRecord], on_drop: Callable[[], None]):
+        super().__init__(log_queue)
+        self._on_drop = on_drop
 
     def enqueue(self, record: logging.LogRecord) -> None:
         try:
             self.queue.put_nowait(record)
         except queue.Full:
-            return
+            self._on_drop()
 
 
 def _scrub(value: object) -> object:
@@ -170,9 +190,11 @@ class FileJournal:
         """`background=True` — запись на диск в отдельном потоке: зависший диск (антивирус,
         синхронизация OneDrive) не должен тормозить рассылку тревог и опрос. Подготовка строк
         (в том числе вырезание секретов) остаётся в вызывающем потоке; если очередь переполнена,
-        новые записи отбрасываются и считаются в `dropped`."""
+        новые записи отбрасываются и считаются в `dropped` (вместе со строками текстового лога,
+        отброшенными при переполнении его очереди)."""
         self.root = root
         self.dropped = 0
+        self._dropped_lock = threading.Lock()
         self._queue: queue.Queue[Callable[[], None] | None] | None = None
         self._worker: threading.Thread | None = None
         self._listener: QueueListener | None = None
@@ -184,21 +206,21 @@ class FileJournal:
         self._clock = clock
         self._max = max_bytes
         self._target = trim_to_bytes
-        self._checks = _DailyWriter(root / "checks", "checks", "jsonl", tz)
-        self._events = _DailyWriter(root / "events", "events", "jsonl", tz)
+        self._checks = _DailyWriter(root / "checks", *DAILY["checks"], tz)
+        self._events = _DailyWriter(root / "events", *DAILY["events"], tz)
         self._openings_lock = threading.Lock()
         self.log_handler: DailyLogHandler | None = None
         self._queue_handler: QueueHandler | None = None
         root.mkdir(parents=True, exist_ok=True)
         readme = root / "README.txt"
         if not readme.exists():
-            text = README.format(max_gb=max_bytes / 2**30, trim_gb=trim_to_bytes / 2**30)
+            text = README.format(max_gb=max_bytes / GIB, trim_gb=trim_to_bytes / GIB)
             readme.write_text(text, encoding="utf-8-sig")
 
     def attach_log_handler(self, level: int = logging.DEBUG) -> DailyLogHandler:
         handler = DailyLogHandler(self.root / "logs", self._tz)
         handler.setLevel(level)
-        formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+        formatter = logging.Formatter(FORMAT)
         # Файл дня выбирается по поясу журнала: время в строках обязано быть в том же поясе,
         # а не в поясе машины (иначе строка 23:50 могла бы лежать в файле следующего дня)
         formatter.converter = lambda seconds: datetime.fromtimestamp(
@@ -212,7 +234,7 @@ class FileJournal:
             log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=50_000)
             self._listener = QueueListener(log_queue, handler, respect_handler_level=True)
             self._listener.start()
-            self._queue_handler = _DropQueueHandler(log_queue)
+            self._queue_handler = _DropQueueHandler(log_queue, self._count_dropped)
             logging.getLogger().addHandler(self._queue_handler)
         self.log_handler = handler
         return handler
@@ -312,6 +334,11 @@ class FileJournal:
         try:
             self._queue.put_nowait(job)
         except queue.Full:
+            self._count_dropped()
+
+    def _count_dropped(self) -> None:
+        # Строки лога отбрасываются в любом потоке, где вызван logging: `+=` не атомарен
+        with self._dropped_lock:
             self.dropped += 1
 
     def _drain(self) -> None:
@@ -328,16 +355,27 @@ class FileJournal:
                 self._queue.task_done()
 
     def flush(self) -> None:
-        """Дождаться, пока всё поставленное в очередь записано (тесты, остановка)."""
+        """Дождаться, пока всё поставленное в очередь записано (тесты; `close()` не вызывает
+        его, а сам дописывает очередь, ставя в конец знак остановки потока)."""
         if self._queue is not None:
             self._queue.join()
 
     # --- размер и квота ---
 
+    def _own_paths(self) -> list[Path]:
+        paths = [self.root / name for name in SERVICE_FILES]
+        for folder, pattern in _OWN_DAILY.items():
+            try:
+                names = os.listdir(self.root / folder)
+            except OSError:  # подпапки ещё нет или она недоступна
+                continue
+            paths.extend(self.root / folder / name for name in names if pattern.fullmatch(name))
+        return paths
+
     def _files(self) -> list[tuple[Path, int]]:
-        """Все файлы папки с размерами; один `stat` на файл (в Windows это самая дорогая часть)."""
+        """Файлы журнала с размерами; один `stat` на файл (в Windows это самая дорогая часть)."""
         found = []
-        for path in self.root.rglob("*"):
+        for path in self._own_paths():
             try:
                 info = path.stat()
             except OSError:
@@ -378,7 +416,7 @@ class FileJournal:
         if total > self._target:
             logger.warning(
                 "журнал: после очистки %.1f ГБ — больше цели: старых дней не осталось",
-                total / 2**30,
+                total / GIB,
             )
         return removed_files, removed_bytes
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 from pathlib import Path
@@ -213,5 +214,23 @@ def test_квота_работает_и_в_фоновом_режиме(tmp_path:
         files, freed = journal.enforce_quota()
         assert files >= 3 and freed >= 3000
         assert (tmp_path / "j" / "events" / "events-2026-11-12.jsonl").exists()
+    finally:
+        journal.close()
+
+
+def test_переполнение_очереди_текстового_лога_считается_в_dropped(tmp_path: Path) -> None:
+    """SEC-13: строки лога, отброшенные при переполнении очереди, не теряются молча."""
+    journal = make(tmp_path / "j")
+    journal.attach_log_handler()
+    try:
+        handler = journal._queue_handler
+        assert handler is not None
+        full: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=1)
+        full.put_nowait(logging.makeLogRecord({"msg": "занято"}))
+        handler.queue = full  # очередь «забита»: слушатель не успевает
+        before = journal.dropped
+        for _ in range(7):
+            handler.enqueue(logging.makeLogRecord({"msg": "строка"}))
+        assert journal.dropped == before + 7
     finally:
         journal.close()
