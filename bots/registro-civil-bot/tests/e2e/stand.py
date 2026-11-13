@@ -358,13 +358,15 @@ class Stand:
             journal_size=journal.size,
             liveness=liveness.diagnose,
         )
+        # Closers закрывает в обратном порядке, как run_app: подписчики → рассылка → источники →
+        # каналы
         closers = Closers()
-        closers.add(alerts.close)
-        closers.add(bus.drain)
-        for source in sources:
-            closers.add(source.close)
         for spy in spies.values():
             closers.add(spy.close)
+        for source in sources:
+            closers.add(source.close)
+        closers.add(alerts.close)
+        closers.add(bus.drain)
 
         stand = cls(
             paths=paths,

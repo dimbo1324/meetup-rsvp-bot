@@ -173,7 +173,8 @@ async def test_с_настроенным_api_он_основной_а_dom_зап
         await rig.until(lambda: len(rig.api.calls) >= 1, "проверка через API")
         assert rig.dom.calls == []
         assert rig.sent_texts() == [texts.STARTED.format(source="API", interval=60)]
-    assert is_subsequence(["api.close", "source.close"], rig.order)
+    # Источники закрываются в порядке, обратном созданию: запасной DomSource, затем API
+    assert is_subsequence(["source.close", "api.close"], rig.order)
 
 
 async def test_после_перезапуска_открытый_инцидент_продолжается_без_повторной_тревоги(
@@ -216,12 +217,12 @@ async def test_остановка_закрывает_ресурсы_в_доку�
     expected = [
         f"msg:{STOPPED}",  # «⏹ остановлен» уходит, пока каналы ещё открыты
         "telegram.cancelled",  # фоновые задачи остановлены до закрытия ресурсов
+        "bus.drain",  # подписчики событий: последние события доходят до открытой рассылки
         "alerts.close",  # рассылка
-        "bus.drain",  # подписчики событий
         "source.close",  # источник/браузер
-        "notifier.close:telegram",  # каналы
-        "notifier.close:ntfy",
         "watchdog.close",  # сторож
+        "notifier.close:ntfy",  # каналы — в порядке, обратном созданию
+        "notifier.close:telegram",
         "bot.session.close",  # сессия Telegram — последней из внешних
         "storage.close",  # база
         "journal:bot.stop",
@@ -302,6 +303,86 @@ async def test_зависшее_сообщение_об_остановке_не_
 
 
 # --- ошибки при запуске ---
+
+
+async def test_без_номера_этапа_run_app_даёт_код_настроек_и_ничего_не_открывает(
+    rig: Rig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Адрес-метка вместо номера этапа: опрос шёл бы в никуда и бесконечно отступал (COL-12)."""
+    rig.core.settings = rig.core.settings.model_copy(
+        update={"agenda_url": "https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1"}
+    )
+    with caplog.at_level(logging.ERROR):
+        assert await runner.run_app(rig.core) == runner.EXIT_SETTINGS
+    assert "RCBOT_AGENDA_URL" in caplog.text
+    assert rig.order == []  # ни базы, ни Telegram, ни источников
+    assert rig.bots == []
+
+
+def test_код_ошибки_настроек_runner_совпадает_с_cli() -> None:
+    from rcbot import cli
+
+    assert runner.EXIT_SETTINGS == cli.EXIT_SETTINGS
+
+
+async def test_сбой_сборки_после_создания_ресурсов_закрывает_уже_открытые(
+    monkeypatch: pytest.MonkeyPatch, rig: Rig
+) -> None:
+    """Закрытие регистрируется сразу после создания: сбой дальше не оставит браузер и каналы."""
+
+    def explode(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("сбой сборки")
+
+    monkeypatch.setattr(runner, "IncidentBook", explode)
+
+    with pytest.raises(RuntimeError, match="сбой сборки"):
+        await runner.run_app(rig.core)
+
+    assert is_subsequence(
+        [
+            "source.close",
+            "notifier.close:ntfy",
+            "notifier.close:telegram",
+            "bot.session.close",
+            "storage.close",
+        ],
+        rig.order,
+    )
+    assert rig.sent_texts() == []
+
+
+async def test_глубина_поиска_из_настроек_telegram_не_перетирается_env_при_запуске(
+    rig: Rig,
+) -> None:
+    """COL-15: months_ahead из меню (kv) — действующее значение; запуск пишет в цель именно его."""
+    from rcbot.application.runtime import RuntimeStore
+    from rcbot.bootstrap import open_storage
+
+    storage = await open_storage(rig.core)
+    try:
+        await storage.kv.set("months_ahead", "11")
+    finally:
+        await storage.close()
+    rig.order.clear()
+
+    async with running(rig):
+        await rig.started()
+        assert rig.storage is not None
+        [target] = await _targets(rig)
+        assert target == 11
+        runtime = await RuntimeStore(rig.storage.kv).load(
+            rig.core.settings.poll_interval_sec, rig.core.settings.months_ahead, rig.clock.now()
+        )
+        assert runtime.months_ahead == 11
+
+
+async def _targets(rig: Rig) -> list[int]:
+    from sqlalchemy import text
+
+    assert rig.storage is not None
+    async with rig.storage.engine.connect() as conn:
+        rows = await conn.execute(text("SELECT months_ahead FROM watch_targets"))
+        return [int(value) for value in rows.scalars().all()]
 
 
 async def test_без_секретов_telegram_run_app_требует_их_и_закрывает_базу(rig: Rig) -> None:
@@ -511,7 +592,9 @@ def test_канал_ntfy_создаётся_только_с_темой(monkeypat
     assert isinstance(ntfy, NtfyNotifier)
     assert ntfy._topic == "rcbot-synthetic-topic-0123456789abcdefgh"  # type: ignore[attr-defined]
     assert ntfy._server == "https://ntfy.example"  # type: ignore[attr-defined]
-    assert "ntfy.example" in ntfy._http._allowed  # type: ignore[attr-defined]
+    # У канала только свой хост: ошибка в адресе не пустит его к сайту или к Telegram (COL-14)
+    assert ntfy._http._allowed == frozenset({"ntfy.example"})  # type: ignore[attr-defined]
+    assert ntfy._http._timeout.total == runner.NTFY_TIMEOUT_SEC  # type: ignore[attr-defined]
 
 
 def test_звонок_создаётся_только_с_именем_и_ходит_только_на_callmebot(
@@ -528,6 +611,33 @@ def test_звонок_создаётся_только_с_именем_и_ход�
     assert call._user == "@owner"  # type: ignore[attr-defined]
     assert call._lang == "en-US-Standard-B"  # type: ignore[attr-defined]
     assert call._http._allowed == frozenset({"api.callmebot.com"})  # type: ignore[attr-defined]
+
+
+def test_два_звонка_callmebot_укладываются_в_лимит_отправки() -> None:
+    """Русский голос и запасной английский — два запроса подряд в одной отправке (D8)."""
+    from rcbot.application.alerting import SEND_TIMEOUT_SEC
+
+    assert 2 * runner.CALLMEBOT_TIMEOUT_SEC <= SEND_TIMEOUT_SEC
+
+
+async def test_сторож_ходит_только_на_свой_хост(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RCBOT_WATCHDOG_URL", "https://hc.example/ping-key-0001")
+    rig = build_rig(monkeypatch.setattr)
+    made: list[Any] = []
+    monkeypatch.setattr(runner, "HttpWatchdog", lambda http, url: made.append(http) or _Dog())
+    async with running(rig):
+        await rig.started()
+    [http] = made
+    assert http._allowed == frozenset({"hc.example"})
+    assert http._timeout.total == runner.WATCHDOG_TIMEOUT_SEC
+
+
+class _Dog:
+    async def ping(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
 
 
 def test_все_три_канала_при_всех_секретах(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,17 +6,19 @@ import asyncio
 import atexit
 import logging
 from dataclasses import dataclass, field
+from types import TracebackType
+from urllib.parse import urlparse
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from rcbot import __version__
-from rcbot.application.ports import Journal, NullJournal
+from rcbot.application.ports import AvailabilitySource, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import Settings, load_settings
+from rcbot.config.settings import BPMGOB_HOST, Settings, load_settings
 from rcbot.domain.models import WatchTarget
 from rcbot.infrastructure.clock import SystemClock
 from rcbot.infrastructure.db.engine import create_engine, create_session_factory
@@ -42,6 +44,7 @@ from rcbot.infrastructure.sentry import init_sentry
 logger = logging.getLogger(__name__)
 
 TARGET_NAME = "registro-civil"
+BYTES_PER_GB = 2**30
 
 
 @dataclass
@@ -58,6 +61,17 @@ class Core:
         if isinstance(self.journal, FileJournal):
             self.journal.close()
 
+    def __enter__(self) -> Core:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
 
 def build_core(
     paths: Paths | None = None, *, console: bool = True, level: str = "INFO", command: str = ""
@@ -67,7 +81,8 @@ def build_core(
     paths.apply_process_env()
     setup_logging(paths.log_file, level=level, console=console)
     settings = load_settings(paths.env_file)
-    REDACTOR.register_many(v for v in (settings.tramite_id, _etapa(settings.agenda_url)) if v)
+    private = (settings.tramite_id, _etapa(settings.agenda_url), _ping_key(settings.watchdog_url))
+    REDACTOR.register_many(v for v in private if v)
     secrets = SecretStore(on_read=REDACTOR.register)
     init_sentry(settings.sentry_enabled, settings.sentry_dsn, f"rcbot@{__version__}")
     core = Core(paths, settings, secrets)
@@ -87,8 +102,8 @@ def build_journal(core: Core) -> Journal:
             journal_dir(s.journal_dir),
             s.tz,
             core.clock,
-            max_bytes=int(s.journal_max_gb * 2**30),
-            trim_to_bytes=int(s.journal_trim_to_gb * 2**30),
+            max_bytes=int(s.journal_max_gb * BYTES_PER_GB),
+            trim_to_bytes=int(s.journal_trim_to_gb * BYTES_PER_GB),
             # Запись на диск в отдельном потоке: зависший диск не должен тормозить тревоги
             background=s.journal_background,
         )
@@ -108,6 +123,11 @@ def _etapa(agenda_url: str) -> str:
     return parts[0] if parts else ""
 
 
+def _ping_key(watchdog_url: str) -> str:
+    # Путь адреса сторожа — ключ пинга (UUID healthchecks.io): с ним любой подделает «жив»
+    return urlparse(watchdog_url).path.strip("/") if watchdog_url else ""
+
+
 def upgrade_database(paths: Paths) -> None:
     config = Config(str(paths.alembic_ini))
     config.attributes["database_url"] = paths.database_url()
@@ -123,7 +143,6 @@ async def upgrade_database_async(paths: Paths) -> None:
 @dataclass
 class Storage:
     engine: AsyncEngine
-    sessions: async_sessionmaker[AsyncSession]
     targets: SqlTargetRepository
     incidents: SqlIncidentRepository
     stats: SqlStatsRepository
@@ -141,7 +160,6 @@ async def open_storage(core: Core) -> Storage:
     sessions = create_session_factory(engine)
     return Storage(
         engine=engine,
-        sessions=sessions,
         targets=SqlTargetRepository(sessions),
         incidents=SqlIncidentRepository(sessions),
         stats=SqlStatsRepository(sessions),
@@ -173,7 +191,8 @@ def build_authenticator(core: Core) -> PlaywrightAuthenticator:
 
 def build_api_source(core: Core) -> ApiSource:
     s = core.settings
-    http = SafeHttp(s.allowed_hosts(), timeout_sec=s.request_timeout_sec)
+    # API календаря только на bpmgob (проверка настроек): остальные хосты списка ему не нужны
+    http = SafeHttp([BPMGOB_HOST], timeout_sec=s.request_timeout_sec)
     return ApiSource(http, s.api_url, s.agenda_url, core.paths.quarantine, core.clock)
 
 
@@ -182,6 +201,15 @@ def build_dom_source(core: Core) -> DomSource:
     return DomSource(
         s.agenda_url, s.location_text, browser_options(core), core.paths.shots, core.clock
     )
+
+
+async def build_sources(core: Core) -> tuple[AvailabilitySource, AvailabilitySource | None]:
+    """Основной источник и запасной: после разведки — API и DomSource, до неё — только DomSource."""
+    api, dom = build_api_source(core), build_dom_source(core)
+    if api.configured:
+        return api, dom
+    await api.close()
+    return dom, None
 
 
 def build_session(core: Core) -> SessionManager:

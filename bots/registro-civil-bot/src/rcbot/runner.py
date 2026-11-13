@@ -1,7 +1,7 @@
 """Сборка и запуск бота целиком: `rcbot run` и `rcbot simulate`.
 
-Порядок остановки (SPEC 3.4): опрос → сообщение «остановлен» → фоновые задачи → рассылка →
-источники и браузер → каналы → Telegram → БД.
+Порядок остановки (SPEC 3.4): опрос → сообщение «остановлен» → фоновые задачи → подписчики
+событий → рассылка → источники и браузер → сторож и каналы → Telegram → БД.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from aiogram import Bot, Dispatcher
 
@@ -25,14 +26,13 @@ from rcbot.application.journal_feed import JournalFeed
 from rcbot.application.liveness import LivenessMonitor
 from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
-from rcbot.application.ports import AvailabilitySource, NoopCoordinator, Notifier
+from rcbot.application.ports import NoopCoordinator, Notifier
 from rcbot.application.runtime import RuntimeStore
 from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import (
     Core,
-    build_api_source,
-    build_dom_source,
     build_session,
+    build_sources,
     ensure_target,
     open_storage,
 )
@@ -62,11 +62,25 @@ logger = logging.getLogger(__name__)
 
 STOP_MESSAGE_TIMEOUT_SEC = 10.0
 STOP_POLL_TIMEOUT_SEC = 5.0
+NTFY_TIMEOUT_SEC = 10.0
+# Звонок с запасным английским голосом — два запроса: оба должны уложиться в лимит отправки 12 с
+CALLMEBOT_TIMEOUT_SEC = 5.0
+WATCHDOG_TIMEOUT_SEC = 10.0
+# Код ошибки настроек — тот же, что rcbot.cli.EXIT_SETTINGS (слой runner не импортирует cli)
+EXIT_SETTINGS = 2
+AGENDA_NOT_CONFIGURED = (
+    "Ошибка настроек в .env: RCBOT_AGENDA_URL — вместо <НОМЕР_ЭТАПА> нужен номер этапа "
+    "(впишите его через `rcbot init` или в .env)."
+)
 
 
 @dataclass
 class Closers:
-    """Что закрыть при остановке, в порядке добавления."""
+    """Что закрыть при остановке: в порядке, обратном добавлению (как ExitStack).
+
+    Закрытие добавляется сразу после создания ресурса: сбой сборки посередине закроет всё, что
+    уже открыто, а зависимые ресурсы закроются раньше тех, от которых зависят.
+    """
 
     items: list[Callable[[], Awaitable[Any]]] = field(default_factory=list)
 
@@ -75,7 +89,7 @@ class Closers:
 
     async def close_all(self) -> None:
         interrupted: asyncio.CancelledError | None = None
-        for closer in self.items:
+        for closer in reversed(self.items):
             try:
                 await closer()
             except asyncio.CancelledError as error:
@@ -93,14 +107,19 @@ async def _polling_forever(bot: Bot, dispatcher: Dispatcher) -> None:
     raise RuntimeError("long polling Telegram завершился без команды остановки")
 
 
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
 def _notifiers(core: Core, bot: Bot, chat_id: int) -> dict[Channel, Notifier]:
+    # У каждого канала свой список хостов: ошибка в адресе одного не пустит его к хосту другого
     s = core.settings
     notifiers: dict[Channel, Notifier] = {Channel.TELEGRAM: TelegramNotifier(bot, chat_id)}
     if topic := core.secrets.get(SecretKey.NTFY_TOPIC):
-        http = SafeHttp(s.allowed_hosts(), timeout_sec=10)
+        http = SafeHttp([_host(s.ntfy_server)], timeout_sec=NTFY_TIMEOUT_SEC)
         notifiers[Channel.NTFY] = NtfyNotifier(http, s.ntfy_server, topic.get_secret_value())
     if user := core.secrets.get(SecretKey.CALLMEBOT_USER):
-        http = SafeHttp([CALLMEBOT_HOST], timeout_sec=15)
+        http = SafeHttp([CALLMEBOT_HOST], timeout_sec=CALLMEBOT_TIMEOUT_SEC)
         notifiers[Channel.CALL] = CallMeBotNotifier(http, user.get_secret_value(), s.call_lang)
     return notifiers
 
@@ -121,6 +140,10 @@ async def run_app(
     on_delivery: Callable[[DeliveryResult], None] | None = None,
 ) -> int:
     s = core.settings
+    if not s.agenda_configured:
+        # Без номера этапа опрос шёл бы на адрес-метку и бесконечно отступал: это ошибка настроек
+        logger.error(AGENDA_NOT_CONFIGURED)
+        return EXIT_SETTINGS
     clock = core.clock
     closers = Closers()
     supervisor = Supervisor(clock)
@@ -131,20 +154,26 @@ async def run_app(
     try:
         token = core.secrets.require(SecretKey.TELEGRAM_TOKEN).get_secret_value()
         chat_id = int(core.secrets.require(SecretKey.TELEGRAM_CHAT_ID).get_secret_value())
-        target = await ensure_target(core, storage)
         runtime_store = RuntimeStore(storage.kv)
         runtime = await runtime_store.load(s.poll_interval_sec, s.months_ahead, clock.now())
+        # Глубина поиска действует из настроек Telegram (kv): .env не перетирает её при запуске
+        target = await ensure_target(core, storage, runtime.months_ahead)
 
         bot = Bot(token)
+        closers.add(bot.session.close)
         notifiers = _notifiers(core, bot, chat_id)
+        for notifier in notifiers.values():
+            closers.add(notifier.close)
+        watchdog = None
+        if s.watchdog_url:
+            http = SafeHttp([_host(s.watchdog_url)], timeout_sec=WATCHDOG_TIMEOUT_SEC)
+            watchdog = HttpWatchdog(http, s.watchdog_url)
+            closers.add(watchdog.close)
         session = build_session(core)
-        api, dom = build_api_source(core), build_dom_source(core)
-        primary: AvailabilitySource = api if api.configured else dom
-        fallback: AvailabilitySource | None = dom if api.configured else None
-        if not api.configured:
-            await api.close()
+        primary, fallback = await build_sources(core)
         sources = [src for src in (primary, fallback) if src is not None]
         for source in sources:
+            closers.add(source.close)
             session.subscribe(source.use_cookies)
 
         book = IncidentBook(storage.incidents, clock, target.id)
@@ -166,6 +195,9 @@ async def run_app(
             NoopCoordinator(),
             journal=core.journal,
         )
+        closers.add(alerts.close)
+        # Добавлено после рассылки — закроется раньше неё: события дойдут до ещё открытой рассылки
+        closers.add(bus.drain)
         if on_delivery is not None:
             alerts.delivery_listeners.append(on_delivery)
         loop = PollLoop(
@@ -223,9 +255,6 @@ async def run_app(
             journal_size=core.journal.size,
             liveness=liveness.diagnose,
         )
-        watchdog = None
-        if s.watchdog_url:
-            watchdog = HttpWatchdog(SafeHttp(s.allowed_hosts(), timeout_sec=10), s.watchdog_url)
         health = HealthMonitor(
             storage.stats,
             storage.incidents,
@@ -238,16 +267,6 @@ async def run_app(
             watchdog,
         )
         dispatcher = build_dispatcher(controller, s.tz, chat_id)
-        # Порядок закрытия: рассылка → подписчики событий → браузер и HTTP → каналы → Telegram
-        closers.add(alerts.close)
-        closers.add(bus.drain)
-        for source in sources:
-            closers.add(source.close)
-        for notifier in notifiers.values():
-            closers.add(notifier.close)
-        if watchdog is not None:
-            closers.add(watchdog.close)
-        closers.add(bot.session.close)
 
         housekeeping.start()
         supervisor.start("telegram", lambda: _polling_forever(bot, dispatcher))

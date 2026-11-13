@@ -273,3 +273,66 @@ def test_сессия_собирается_с_лимитом_входов_из_�
     write_env(paths, relogin_max_per_hour="2")
     session = bootstrap.build_session(build_core(console=False))
     assert session._max_per_hour == 2
+
+
+# --- ключ сторожа, выбор источников, поля хранилища ---
+
+PING_KEY = "ping" + "-key-" + "7" * 8
+
+
+def test_ключ_пинга_сторожа_маскируется_в_логах(paths: Paths) -> None:
+    """Путь адреса сторожа — секрет пинга: в логи он попасть не должен (SEC-7)."""
+    write_env(paths, watchdog_url=f"https://hc.example/{PING_KEY}/")
+    build_core(console=False)
+    assert PING_KEY not in REDACTOR.redact(f"GET https://hc.example/{PING_KEY} timeout")
+
+
+@pytest.mark.parametrize(
+    ("url", "key"), [("", ""), ("https://hc.example", ""), ("https://hc.example/a/b/", "a/b")]
+)
+def test_ключ_пинга_это_путь_адреса(url: str, key: str) -> None:
+    assert bootstrap._ping_key(url) == key
+
+
+async def test_build_sources_без_api_только_dom_и_api_закрыт(
+    paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[str] = []
+
+    class Api:
+        configured = False
+
+        async def close(self) -> None:
+            closed.append("api")
+
+    dom = object()
+    monkeypatch.setattr(bootstrap, "build_api_source", lambda core: Api())
+    monkeypatch.setattr(bootstrap, "build_dom_source", lambda core: dom)
+    primary, fallback = await bootstrap.build_sources(build_core(console=False))
+    assert primary is dom and fallback is None
+    assert closed == ["api"]
+
+
+async def test_build_sources_с_api_он_основной_dom_запасной(
+    paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Api:
+        configured = True
+
+    api, dom = Api(), object()
+    monkeypatch.setattr(bootstrap, "build_api_source", lambda core: api)
+    monkeypatch.setattr(bootstrap, "build_dom_source", lambda core: dom)
+    primary, fallback = await bootstrap.build_sources(build_core(console=False))
+    assert primary is api and fallback is dom
+
+
+def test_api_источник_ходит_только_на_bpmgob(paths: Paths) -> None:
+    api = bootstrap.build_api_source(build_core(console=False))
+    assert api._http._allowed == frozenset({"bpmgob.mec.gub.uy"})  # type: ignore[attr-defined]
+
+
+def test_core_как_менеджер_контекста_закрывает_журнал(paths: Paths) -> None:
+    closed: list[bool] = []
+    with build_core(console=False) as core:
+        core.close = lambda: closed.append(True)  # type: ignore[method-assign]
+    assert closed == [True]
