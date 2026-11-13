@@ -12,9 +12,14 @@ from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from rcbot.config.settings import (
+    AGENDA_URL_TEMPLATE,
+    BPMGOB_HOST,
+    GUBUY_HOSTS,
+    IDURUGUAY_HOST,
     MAX_POLL_INTERVAL_SEC,
     MIN_DOM_POLL_INTERVAL_SEC,
     MIN_POLL_INTERVAL_SEC,
+    STAGE_PLACEHOLDER,
     Settings,
     load_settings,
 )
@@ -112,8 +117,8 @@ def test_необязательные_адреса_могут_быть_пуст�
     "field", ["agenda_url", "login_url", "ntfy_server", "sae_url", "api_url", "watchdog_url"]
 )
 def test_схема_https_в_любом_регистре_допустима(field: str) -> None:
-    # API календаря допустим только на bpmgob (SPEC 2.6): для него проверяется регистр схемы
-    host = "bpmgob.mec.gub.uy" if field == "api_url" else "host.example"
+    # API календаря и адрес этапа допустимы только на bpmgob (SPEC 2.6)
+    host = "bpmgob.mec.gub.uy" if field in ("api_url", "agenda_url") else "host.example"
     assert getattr(Settings(**{field: f"HTTPS://{host}/a"}), field)
 
 
@@ -312,13 +317,43 @@ def test_все_необязательные_источники_вместе() -
     assert {"w.example.org", "sae.mec.gub.uy"} <= hosts
 
 
-def test_хосты_не_зависят_от_адреса_этапа_и_входа() -> None:
-    # Хост агенды и входа — из фиксированного списка gub.uy, а не из `.env`: подмена адреса
+def test_хосты_не_зависят_от_адреса_входа() -> None:
+    # Хост входа — из фиксированного списка gub.uy, а не из `.env`: подмена адреса
     # в настройках не расширяет список разрешённых хостов.
-    hosts = Settings(
-        agenda_url="https://evil.example/etapas/1", login_url="https://evil.example/login"
-    ).allowed_hosts()
+    hosts = Settings(login_url="https://evil.example/login").allowed_hosts()
     assert "evil.example" not in hosts
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/etapas/ejecutar/TEST-ETAPA/1",
+        "https://bpmgob.mec.gub.uy.evil.example/etapas/ejecutar/TEST-ETAPA/1",
+        "https://mi.iduruguay.gub.uy/etapas/ejecutar/TEST-ETAPA/1",
+    ],
+)
+def test_адрес_этапа_на_чужом_хосте_отклоняется(url: str) -> None:
+    with pytest.raises(ValidationError, match=r"адрес этапа допустим только на bpmgob"):
+        Settings(agenda_url=url)
+
+
+@pytest.mark.parametrize("value", ["http://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA/1", ""])
+def test_адрес_этапа_только_https(value: str) -> None:
+    with pytest.raises(ValidationError, match="https"):
+        Settings(agenda_url=value)
+
+
+def test_адрес_этапа_с_меткой_допустим_и_собран_из_шаблона() -> None:
+    expected = AGENDA_URL_TEMPLATE.format(stage=STAGE_PLACEHOLDER)
+    assert Settings().agenda_url == expected
+    assert expected == "https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1"
+    assert Settings(agenda_url=AGENDA_URL_TEMPLATE.format(stage="TEST-ETAPA")).agenda_configured
+
+
+def test_хосты_gub_uy_собраны_из_констант() -> None:
+    assert GUBUY_HOSTS == (BPMGOB_HOST, IDURUGUAY_HOST)
+    assert IDURUGUAY_HOST == "mi.iduruguay.gub.uy"
+    assert AGENDA_URL_TEMPLATE.startswith(f"https://{BPMGOB_HOST}/")
 
 
 # --- загрузка из .env и окружения ---
