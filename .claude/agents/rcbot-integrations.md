@@ -22,8 +22,8 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 - Каналы уведомлений параллельно через `TaskGroup`; сбой одного не задерживает другие; в ntfy
   и CallMeBot — только даты, время и общая фраза.
 - Telegram отвечает только `chat_id` владельца (middleware).
-- Тесты — только фикстуры, aioresponses и фальшивый сервер aiohttp; на живой сайт ни тесты,
-  ни вы не ходите. Разведка (`rcbot discover`) — на ноутбуке владельца по его просьбе.
+- Тесты — только фикстуры и локальный HTTPS-сервер aiohttp с сертификатом `trustme`
+  (`tests/fakes.py::LocalTlsServer`, решение R7); на живой сайт ни тесты, ни вы не ходите. Разведка (`rcbot discover`) — на ноутбуке владельца по его просьбе.
 - Windows: `ProactorEventLoop` без смены политики; uvloop только на Linux.
 
 Перед завершением: `uv run python dev.py quality-gate --bot registro-civil-bot`.

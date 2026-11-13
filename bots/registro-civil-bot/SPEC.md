@@ -306,7 +306,7 @@ https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
 
 ### 2.5. Telegram-интерфейс
 
-**Команды:** `/status`, `/pause [минуты]`, `/resume`, `/test` (проверка всех трёх каналов), `/last` (последние 5 инцидентов), `/interval <сек>` (не ниже 10), `/relogin`, `/cleanup`, `/menu`.
+**Команды:** `/help` (и `/start`: список команд), `/status`, `/pause [минуты]`, `/resume`, `/test` (проверка всех трёх каналов), `/last` (последние 5 инцидентов), `/interval <сек>` (не ниже 10), `/relogin`, `/cleanup`, `/menu`.
 
 **Админ-меню (aiogram-dialog):**
 
@@ -329,7 +329,7 @@ https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
 | Секрет попал в лог или трассировку | Типы `SecretStr`. Фильтр логов `RedactionFilter` вырезает значения секретов, номер документа, cookies, заголовки `Cookie`/`Set-Cookie`/`Authorization`. Юнит-тест проверяет, что секреты в лог не попадают. |
 | Папка на рабочем столе синхронизируется в облако | `rcbot doctor` проверяет, лежит ли `Desktop` внутри OneDrive. Если да — предупреждение и предложение исключить папку из синхронизации. Секретов и cookies на диске всё равно нет. |
 | Утечка через Sentry | Sentry **выключен по умолчанию**. Если включён: `send_default_pii=False`, `include_local_variables=False`, `max_request_body_size="never"`, хук `before_send` прогоняет событие через тот же редактор. |
-| Запрос уходит не туда | HTTP-обёртка разрешает только хосты из списка: `bpmgob.mec.gub.uy`, `mi.iduruguay.gub.uy`, `api.telegram.org`, `ntfy.sh`, `api.callmebot.com`, адрес «сторожа» (если включён). Остальное — исключение. Проверка TLS всегда включена. |
+| Запрос уходит не туда | HTTP-обёртка разрешает только хосты из списка: `bpmgob.mec.gub.uy`, `mi.iduruguay.gub.uy`, `api.telegram.org`, `ntfy.sh`, `api.callmebot.com`, адрес «сторожа» (если включён), `sae.mec.gub.uy` (только при `RCBOT_SAE_SOURCE_ENABLED=true`). Остальное — исключение. Проверка TLS всегда включена. |
 | Чужой человек управляет ботом | Middleware пропускает только `chat_id` владельца. |
 | Личные данные в сторонних сервисах | В ntfy и CallMeBot уходят только даты и общая фраза. |
 | Снимки экрана с личными данными | В режиме API снимков нет. В режиме DOM снимается **только элемент календаря** (`locator.screenshot`), хранится локально, срок 3 дня. |
@@ -512,7 +512,7 @@ Desktop\RegistroBot\
 
 ### 4.1. Что нужно заранее
 
-- Windows 10/11, Python 3.14, `uv`.
+- Windows 11, Python 3.14, `uv`.
 - Токен Telegram-бота от @BotFather; владелец написал боту `/start`.
 - Приложение ntfy на телефоне.
 - Разрешение на звонки у @CallMeBot_txtbot.
@@ -538,36 +538,26 @@ uv run rcbot doctor      # проверка: версии, Playwright, дост�
 uv run rcbot simulate    # тестовый «инцидент»: должны прийти Telegram, push ntfy и звонок
 ```
 
-Секреты, которые запрашивает `rcbot init`: номер документа, пароль gub.uy, токен Telegram, имя темы ntfy, @username для CallMeBot.
+Что делает `rcbot init`: создаёт `.env` из `.env.example`, если его нет; спрашивает номер этапа (число из адресной строки шага «Agenda» или весь адрес) и номер заявки и пишет их в локальный `.env`; скрытым вводом спрашивает секреты — номер документа, пароль gub.uy, токен Telegram, @username для CallMeBot. Имя темы ntfy не спрашивается: мастер генерирует его сам и показывает владельцу.
 
 ### 4.4. `.env.example` (только несекретное)
 
+Полный список с пояснениями — файл `.env.example` в каталоге бота (он и есть источник истины;
+поля и проверки — `src/rcbot/config/settings.py`). Группы настроек:
+
+| Группа | Переменные |
+|---|---|
+| Заявка | `RCBOT_AGENDA_URL` (адрес шага «Agenda» с `<НОМЕР_ЭТАПА>`), `RCBOT_TRAMITE_ID` (`<НОМЕР_ЗАЯВКИ>`), `RCBOT_LOCATION_TEXT`, `RCBOT_DOC_COUNTRY`, `RCBOT_DOC_TYPE`, `RCBOT_MONTHS_AHEAD` |
+| Источники | `RCBOT_API_URL` (пусто — `ApiSource` выключен; только хост bpmgob), `RCBOT_SAE_SOURCE_ENABLED`; адреса `RCBOT_LOGIN_URL`, `RCBOT_SAE_URL` заданы в коде |
+| Опрос | `RCBOT_POLL_INTERVAL_SEC` (жёсткий минимум в коде — 10), `RCBOT_POLL_JITTER`, `RCBOT_REQUEST_TIMEOUT_SEC`, `RCBOT_RELOGIN_MAX_PER_HOUR` |
+| Уведомления | `RCBOT_TG_REPEAT_SEC`, `RCBOT_TG_REPEAT_MAX`, `RCBOT_NTFY_SERVER`, `RCBOT_NTFY_REPEAT_SEC`, `RCBOT_NTFY_REPEAT_MAX`, `RCBOT_CALL_REPEAT_SEC`, `RCBOT_CALL_REPEAT_MAX`, `RCBOT_CALL_LANG` |
+| Прочее | `RCBOT_TIMEZONE`, `RCBOT_DAILY_REPORT_HOUR`, `RCBOT_SENTRY_ENABLED`, `RCBOT_SENTRY_DSN`, `RCBOT_WATCHDOG_URL` (необязательно, см. 6.1), `RCBOT_HEADLESS`, `RCBOT_BROWSER` (решение R8) |
+| Журнал наблюдения (R6) | `RCBOT_JOURNAL_ENABLED`, `RCBOT_JOURNAL_DIR`, `RCBOT_JOURNAL_BACKGROUND`, `RCBOT_JOURNAL_MAX_GB`, `RCBOT_JOURNAL_TRIM_TO_GB` |
+
+Пример строки шага «Agenda» (номер — только в локальном `.env`):
+
 ```dotenv
 RCBOT_AGENDA_URL=https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
-RCBOT_LOCATION_TEXT=Oficina Tramite Extranjeros
-RCBOT_DOC_COUNTRY=Rusia
-RCBOT_DOC_TYPE=Pasaporte
-RCBOT_MONTHS_AHEAD=6
-
-RCBOT_POLL_INTERVAL_SEC=20        # жёсткий минимум в коде: 10
-RCBOT_POLL_JITTER=0.10
-RCBOT_REQUEST_TIMEOUT_SEC=8
-RCBOT_RELOGIN_MAX_PER_HOUR=6
-
-RCBOT_TG_REPEAT_SEC=60
-RCBOT_TG_REPEAT_MAX=30
-RCBOT_NTFY_SERVER=https://ntfy.sh
-RCBOT_NTFY_REPEAT_SEC=120
-RCBOT_CALL_REPEAT_SEC=180
-RCBOT_CALL_REPEAT_MAX=5
-RCBOT_CALL_LANG=ru-RU-Standard-A
-
-RCBOT_TIMEZONE=America/Montevideo
-RCBOT_DAILY_REPORT_HOUR=9
-RCBOT_SENTRY_ENABLED=false
-RCBOT_WATCHDOG_URL=               # необязательно, см. 6.1
-RCBOT_SAE_SOURCE_ENABLED=false
-RCBOT_HEADLESS=true
 ```
 
 ### 4.5. Разведка и первый запуск

@@ -1,12 +1,14 @@
 name = "rcbot-core"
-description = "registro-civil-bot — используйте для ядра rcbot: доменные модели, детектор и инциденты, PollLoop и состояния, EventBus, AlertOrchestrator (повторы и подтверждение), конфиг, БД, миграции, очистка."
+description = "registro-civil-bot — используйте для ядра rcbot: доменные модели, детектор и инциденты, PollLoop и состояния, EventBus, AlertOrchestrator (повторы и подтверждение), конфиг, БД, миграции, очистка, журнал наблюдения и монитор живости, Sentry."
 model_reasoning_effort = "high"
 developer_instructions = '''
 Бот: `bots/registro-civil-bot/` — все пути ниже от этого каталога. Прочтите `AGENTS.md`
 корня и `AGENTS.md` бота; другие боты монорепозитория вне вашей зоны.
 
-Вы отвечаете за `src/rcbot/domain`, `application`, `config`, `infrastructure/db`,
-`infrastructure/logging` и миграции. Перед работой прочтите `SPEC.md` (2.2–2.3, 2.7, 3, 7) и
+Вы отвечаете за `src/rcbot/domain`, `application` (включая `journal_feed.py` и
+`liveness.py`), `config`, `infrastructure/db`, `infrastructure/logging`, журнал наблюдения
+`infrastructure/journal/` (R6), `infrastructure/files.py` (очистка), `infrastructure/sentry.py`,
+`infrastructure/clock.py` и миграции. Перед работой прочтите `SPEC.md` (2.2–2.3, 2.7, 3, 7) и
 `docs/architecture/invariants.md`.
 
 Жёсткие требования:
