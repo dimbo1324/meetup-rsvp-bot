@@ -72,13 +72,20 @@ def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-class _TooDeep(Exception):
-    """Вложенность JSON глубже MAX_PARSE_DEPTH."""
+def _deeper_than(value: Any, limit: int) -> bool:
+    """Вложенность значения глубже `limit`; обход без рекурсии, чтобы не упереться в её предел."""
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict | list):
+            if depth >= limit:
+                return True
+            children = node.values() if isinstance(node, dict) else node
+            stack.extend((child, depth + 1) for child in children)
+    return False
 
 
-def _mask_json(value: Any, depth: int = 0, *, strict: bool = False) -> Any:
-    if strict and depth > MAX_PARSE_DEPTH:
-        raise _TooDeep
+def _mask_json(value: Any, depth: int = 0) -> Any:
     if depth > MAX_JSON_DEPTH:
         return MASK
     if isinstance(value, dict):
@@ -87,12 +94,12 @@ def _mask_json(value: Any, depth: int = 0, *, strict: bool = False) -> Any:
             REDACTOR.redact(str(k)): (
                 MASK
                 if PERSONAL_KEYS.search(str(k)) or SECRET_KEYS.search(str(k))
-                else _mask_json(v, depth + 1, strict=strict)
+                else _mask_json(v, depth + 1)
             )
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_mask_json(v, depth + 1, strict=strict) for v in value]
+        return [_mask_json(v, depth + 1) for v in value]
     if isinstance(value, str):
         return REDACTOR.redact(value)
     return value
@@ -111,11 +118,15 @@ def _masked_json(text: str) -> Any:
     if len(text) > MAX_BODY_CHARS:
         return _UNSAFE_JSON
     try:
-        return _mask_json(json.loads(text), strict=True)
-    except RecursionError, _TooDeep:
+        parsed = json.loads(text)
+    except RecursionError:
         return _UNSAFE_JSON
     except ValueError:
         return _NOT_JSON
+    # Разбор мог осилить вложенность, которую не осилит маскирование: такой текст не пишется
+    if _deeper_than(parsed, MAX_PARSE_DEPTH):
+        return _UNSAFE_JSON
+    return _mask_json(parsed)
 
 
 def clean_body(content_type: str, body: str, *, url: str = "", status: int | None = None) -> Any:

@@ -488,3 +488,16 @@ async def test_что_записывается_а_что_нет(
     )
     await recorder._collect(response)  # type: ignore[arg-type]
     assert bool(recorder._records) is recorded
+
+
+def test_разобранный_глубокий_json_не_пишется_даже_если_разбор_его_осилил(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # На части машин json.loads не падает на глубокой вложенности (зависит от стека): отказ
+    # не должен зависеть от этого
+    deep: list = []
+    for _ in range(discovery.MAX_PARSE_DEPTH + 10):
+        deep = [deep]
+    monkeypatch.setattr(discovery.json, "loads", lambda _text: deep)
+    cleaned = clean_body(JSON, "[[]]")
+    assert cleaned["omitted"] is True
