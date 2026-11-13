@@ -46,13 +46,14 @@ def test_список_разрешённых_хостов_по_умолчани�
     assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS)
 
 
-def test_сторож_и_sae_добавляют_ровно_свой_хост(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_сторож_добавляет_ровно_свой_хост_а_sae_до_реализации_ничего(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("RCBOT_WATCHDOG_URL", "https://hc-ping.example/abc-uuid")
     assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS | {"hc-ping.example"})
+    # Решение R11: чтение SAE не реализовано, флаг сеть не расширяет
     monkeypatch.setenv("RCBOT_SAE_SOURCE_ENABLED", "true")
-    assert Settings().allowed_hosts() == frozenset(
-        SPEC_HOSTS | {"hc-ping.example", "sae.mec.gub.uy"}
-    )
+    assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS | {"hc-ping.example"})
 
 
 def test_http_в_настройках_отклоняется() -> None:
