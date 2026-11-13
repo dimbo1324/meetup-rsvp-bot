@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import logging
 
-from rcbot.application.messages import CALL_MAX_CHARS, CALL_TEXT_EN
+from rcbot.application.messages import CALL_MAX_CHARS
 from rcbot.config.settings import CALLMEBOT_HOST
-from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult
+from rcbot.domain.models import Alert, Channel, DeliveryResult
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.notify._result import error_of, measured
 
@@ -54,11 +54,11 @@ class CallMeBotNotifier:
     async def _call_with_fallback(self, alert: Alert) -> str:
         text = alert.call_text or alert.push_text or "Внимание, есть новости от бота."
         error = await self._attempt(text, self._lang)
-        if error and self._lang != FALLBACK_LANG and alert.kind is not AlertKind.TEST:
+        if error and self._lang != FALLBACK_LANG and alert.call_fallback_text:
             logger.warning(
                 "CallMeBot: звонок (%s) не прошёл: %s; пробую английский", self._lang, error
             )
-            error = await self._attempt(CALL_TEXT_EN, FALLBACK_LANG)
+            error = await self._attempt(alert.call_fallback_text, FALLBACK_LANG)
         return error
 
     async def send(self, alert: Alert, attempt: int) -> DeliveryResult:

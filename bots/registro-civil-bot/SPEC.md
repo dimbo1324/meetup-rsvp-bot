@@ -383,7 +383,7 @@ https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
 | `PollStatsHour` | `hour`, `checks`, `errors`, `p50_ms`, `p95_ms`, `relogins` | Статистика за час. |
 | `AppEvent` | `ts`, `level`, `code`, `message` | Журнал значимых событий. |
 
-**Доменные события:** `SlotsAppeared`, `SlotsChanged`, `SlotsGone`, `SessionExpired`, `ManualActionRequired`, `SourceSwitched`, `PollerStateChanged`.
+**Доменные события:** `SlotsAppeared`, `SlotsChanged`, `SlotsGone`, `ManualActionRequired`, `SourceSwitched`, `PollerStateChanged`.
 
 **Исключения:** `SessionExpired`, `ManualStepRequired`, `RateLimited`, `UnexpectedResponse`, `SiteUnavailable`, `ReloginBudgetExceeded`.
 

@@ -44,7 +44,7 @@ async def cmd_pause(
             await message.answer(PAUSE_BAD)
             return
     until = await controller.pause(minutes)
-    if minutes:
+    if minutes is not None:
         await message.answer(texts.PAUSED.format(until=texts.moment(until, tz)))
     else:
         await message.answer(texts.PAUSED_FOREVER)

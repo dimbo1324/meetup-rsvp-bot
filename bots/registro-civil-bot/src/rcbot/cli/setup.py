@@ -21,7 +21,7 @@ from aiogram.exceptions import TelegramAPIError
 
 from rcbot.bootstrap import Core, build_core
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey
-from rcbot.config.settings import Settings
+from rcbot.config.settings import AGENDA_URL_TEMPLATE, Settings
 from rcbot.infrastructure.gubuy.browser import CHROME, EDGE
 from rcbot.infrastructure.gubuy.browser import NAMES as BROWSER_NAMES
 from rcbot.infrastructure.gubuy.browser import survey as browser_survey
@@ -42,7 +42,6 @@ def _ask(key: SecretKey, *, hidden: bool, existing: bool) -> str:
     return (getpass.getpass(prompt) if hidden else input(prompt)).strip()
 
 
-AGENDA_URL_TEMPLATE = "https://bpmgob.mec.gub.uy/etapas/ejecutar/{stage}/1"
 # Короче четырёх знаков фильтр логов значение не маскирует: такой номер утёк бы в логи (R1)
 NUMBER_MIN_DIGITS = 4
 NUMBER_MAX_DIGITS = 15

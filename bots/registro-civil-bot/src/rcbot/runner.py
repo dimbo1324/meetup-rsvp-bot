@@ -53,8 +53,8 @@ from rcbot.domain.events import (
 from rcbot.domain.models import Channel, DeliveryResult
 from rcbot.infrastructure.files import FileJanitor
 from rcbot.infrastructure.http.client import SafeHttp
-from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
-from rcbot.infrastructure.notify.ntfy import NtfyNotifier
+from rcbot.infrastructure.notify.callmebot import CALLMEBOT_TIMEOUT_SEC, CallMeBotNotifier
+from rcbot.infrastructure.notify.ntfy import NTFY_TIMEOUT_SEC, NtfyNotifier
 from rcbot.infrastructure.notify.telegram import TelegramNotifier
 from rcbot.infrastructure.notify.watchdog import HttpWatchdog
 
@@ -62,9 +62,6 @@ logger = logging.getLogger(__name__)
 
 STOP_MESSAGE_TIMEOUT_SEC = 10.0
 STOP_POLL_TIMEOUT_SEC = 5.0
-NTFY_TIMEOUT_SEC = 10.0
-# Звонок с запасным английским голосом — два запроса: оба должны уложиться в лимит отправки 12 с
-CALLMEBOT_TIMEOUT_SEC = 5.0
 WATCHDOG_TIMEOUT_SEC = 10.0
 # Код ошибки настроек — тот же, что rcbot.cli.EXIT_SETTINGS (слой runner не импортирует cli)
 EXIT_SETTINGS = 2
