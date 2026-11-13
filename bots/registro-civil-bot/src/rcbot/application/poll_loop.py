@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import Any
 
+from rcbot.application.background import BackgroundTasks
 from rcbot.application.bus import EventBus
 from rcbot.application.ports import (
     AvailabilitySource,
@@ -121,7 +122,7 @@ class PollLoop:
         self.status = PollStatus(started_at=clock.now(), source=primary.kind)
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
-        self._background: set[asyncio.Task[None]] = set()
+        self._background = BackgroundTasks("цикл опроса")
         self._next_due = 0.0
         # Не начинать проверку раньше этого момента: минимум между запросами (SPEC 0.3, правило 3)
         # держится при любых пробуждениях (/interval, «Готово», /resume, вход по команде)
@@ -552,18 +553,10 @@ class PollLoop:
                 await self._stats.save_hour(self._hour)
             except Exception as error:  # остановку не задерживаем из-за сбоя записи статистики
                 logger.warning("статистика часа не сохранена: %s", type(error).__name__)
-        if self._background:
-            await asyncio.gather(*self._background, return_exceptions=True)
+        await self._background.drain()
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.create_task(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background_done)
-
-    def _background_done(self, task: asyncio.Task[None]) -> None:
-        self._background.discard(task)
-        if not task.cancelled() and (error := task.exception()) is not None:
-            logger.warning("фоновая задача цикла упала: %s", type(error).__name__)
+        self._background.spawn(coro)
 
     def current_hour(self) -> PollStatsHour | None:
         return self._hour

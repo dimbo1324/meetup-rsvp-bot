@@ -177,7 +177,7 @@ async def test_задачи_подписчиков_не_копятся_посл�
     for _ in range(50):
         bus.publish(appeared())
     await settle()
-    assert bus._tasks == set()
+    assert len(bus._tasks) == 0
 
 
 # --- drain ---
@@ -224,7 +224,7 @@ async def test_drain_по_таймауту_отменяет_и_дожидает�
     await settle()
     await bus.drain(0.02)
     assert cancelled  # отмена доведена до конца, задача не висит «наполовину»
-    assert bus._tasks == set()
+    assert len(bus._tasks) == 0
 
 
 async def test_отмена_подписчика_не_логируется_как_ошибка(

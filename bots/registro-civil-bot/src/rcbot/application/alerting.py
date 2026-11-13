@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
 
+from rcbot.application.background import BackgroundTasks
 from rcbot.application.incidents import IncidentBook
 from rcbot.application.messages import MessageComposer
 from rcbot.application.ports import Clock, Coordinator, Journal, Notifier, NullJournal
@@ -63,7 +63,7 @@ class AlertOrchestrator:
         self._clock = clock
         self._coordinator = coordinator
         self._repeats: list[asyncio.Task[None]] = []
-        self._background: set[asyncio.Task[None]] = set()
+        self._background = BackgroundTasks("рассылка")
         self._stopped = asyncio.Event()
         self._journal: Journal = journal or NullJournal()
         self.delivery_listeners: list[Callable[[DeliveryResult], None]] = []
@@ -159,7 +159,7 @@ class AlertOrchestrator:
                 continue
             result = await self._send_one(self._notifiers[channel], alert, attempt)
             if record:
-                self._spawn(self._book.record(result))
+                self._background.spawn(self._book.record(result))
 
     async def _wave(
         self, alert: Alert, attempt: int, *, record: bool = True, respect_disabled: bool = True
@@ -179,7 +179,7 @@ class AlertOrchestrator:
         results = [task.result() for task in tasks]
         if record and alert.kind.value in ("appeared", "changed"):
             for result in results:
-                self._spawn(self._book.record(result))
+                self._background.spawn(self._book.record(result))
         return results
 
     async def _send_one(self, notifier: Notifier, alert: Alert, attempt: int) -> DeliveryResult:
@@ -215,11 +215,6 @@ class AlertOrchestrator:
             task.cancel()
         self._repeats.clear()
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.create_task(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
     # --- прогрев ---
 
     async def keep_warm(self) -> None:
@@ -236,5 +231,4 @@ class AlertOrchestrator:
     async def close(self) -> None:
         self._stopped.set()
         self._cancel_repeats()
-        if self._background:
-            await asyncio.gather(*self._background, return_exceptions=True)
+        await self._background.drain()
