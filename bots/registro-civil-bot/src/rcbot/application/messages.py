@@ -11,9 +11,29 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from rcbot.domain.models import Alert, AlertAction, AlertKind, AvailabilitySnapshot, Channel, Slot
+from rcbot.domain.detector import EMPTY_CHECKS_TO_CLOSE
+from rcbot.domain.models import (
+    Alert,
+    AlertAction,
+    AlertKind,
+    AvailabilitySnapshot,
+    Channel,
+    Slot,
+    SourceKind,
+)
 
 WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+_COUNT_WORDS = {1: "одна", 2: "две", 3: "три", 4: "четыре", 5: "пять"}
+
+
+def _empty_checks_phrase(count: int) -> str:
+    word = _COUNT_WORDS.get(count, str(count))
+    noun = "проверка" if count == 1 else "проверки" if 2 <= count <= 4 else "проверок"
+    return f"{word} {noun} подряд без мест"
+
+
+# Почему инцидент закрыт: сколько пустых проверок подряд требует детектор
+GONE_REASON = _empty_checks_phrase(EMPTY_CHECKS_TO_CLOSE)
 CALL_TEXT_RU = "Внимание. В Регистро Сивиль появились свободные места. Срочно записывайся."
 CALL_TEXT_EN = "Attention. Free appointments appeared at Registro Civil. Book now."
 CALL_MAX_CHARS = 256
@@ -90,8 +110,44 @@ class MessageComposer:
         return Alert(AlertKind.UNCONFIRMED, "\n".join(lines), channels=TELEGRAM_ONLY)
 
     def gone(self, at: datetime) -> Alert:
-        text = f"⚪ Места пропали ({self.local(at):%H:%M:%S}): три проверки подряд без мест."
+        text = f"⚪ Места пропали ({self.local(at):%H:%M:%S}): {GONE_REASON}."
         return Alert(AlertKind.SERVICE, text, channels=TELEGRAM_ONLY)
+
+    def source_switched(self, old: SourceKind, new: SourceKind, reason: str) -> Alert:
+        return self.service(f"🔀 Источник данных: {old} → {new}. Причина: {reason}.")
+
+    def slowed_down(self, reason: str) -> Alert:
+        return self.service(f"⏸ Бот замедлился: {reason}. Опрос продолжится сам.")
+
+    def poll_resumed(self) -> Alert:
+        return self.service("▶️ Опрос снова работает.")
+
+    @staticmethod
+    def poll_hung(problem: str) -> str:
+        return f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его и браузер."
+
+    @staticmethod
+    def daily_report(
+        *,
+        checks: int,
+        errors: int,
+        relogins: int,
+        median_ms: float,
+        p95_ms: float,
+        incidents: int,
+        size_bytes: int | None,
+    ) -> str:
+        lines = [
+            "📋 Отчёт rcbot за сутки",
+            f"Проверок: {checks}, ошибок: {errors}, входов на сайт: {relogins}",
+            f"Время ответа: медиана {median_ms:.0f} мс, 95-й перцентиль {p95_ms:.0f} мс",
+            f"Инцидентов: {incidents}",
+        ]
+        if size_bytes is not None:
+            lines.append(f"Размер папки: {size_bytes / 1024 / 1024:.0f} МБ")
+        if checks == 0:
+            lines.append("⚠️ За сутки не было ни одной успешной проверки.")
+        return "\n".join(lines)
 
     def manual_step(self, reason: str) -> Alert:
         text = (

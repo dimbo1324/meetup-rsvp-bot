@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from rcbot.application.bus import EventBus
+from rcbot.application.messages import GONE_REASON
 from rcbot.application.ports import Clock, Journal, OpeningRecord
 from rcbot.domain.events import (
     DomainEvent,
@@ -45,7 +46,7 @@ class JournalFeed:
                     None if self._opened_at is None else self._clock.monotonic() - self._opened_at
                 )
                 self._opened_at = None
-                self._journal.event("slots.gone", "места пропали: три проверки подряд без мест")
+                self._journal.event("slots.gone", f"места пропали: {GONE_REASON}")
                 self._journal.opening(
                     OpeningRecord(event.at, "пропали", frozenset(), snapshot.source, lasted)
                 )

@@ -297,6 +297,42 @@ def test_тестовый_звонок_без_запасного_текста_о
         assert alert.call_fallback_text == ""
 
 
+def test_служебные_тексты_собирает_composer_и_число_проверок_берётся_из_детектора() -> None:
+    from rcbot.application.messages import GONE_REASON, MessageComposer
+    from rcbot.domain.detector import EMPTY_CHECKS_TO_CLOSE
+    from rcbot.domain.models import SourceKind
+
+    assert EMPTY_CHECKS_TO_CLOSE == 3 and GONE_REASON == "три проверки подряд без мест"
+    c = composer()
+    assert c.source_switched(SourceKind.API, SourceKind.DOM, "тест").text == (
+        "🔀 Источник данных: api → dom. Причина: тест."
+    )
+    assert c.slowed_down("429").text == "⏸ Бот замедлился: 429. Опрос продолжится сам."
+    assert c.poll_resumed().text == "▶️ Опрос снова работает."
+    assert c.poll_hung("200 с") == "⚠️ Цикл опроса завис (200 с). Перезапускаю его и браузер."
+    for alert in (c.source_switched(SourceKind.API, SourceKind.DOM, "x"), c.poll_resumed()):
+        assert alert.channels == TELEGRAM_ONLY and alert.call_text == ""
+    report = MessageComposer.daily_report(
+        checks=1, errors=0, relogins=0, median_ms=1, p95_ms=2, incidents=0, size_bytes=2 << 20
+    )
+    assert "Размер папки: 2 МБ" in report
+
+
+@pytest.mark.parametrize(
+    ("count", "phrase"),
+    [
+        (1, "одна проверка подряд без мест"),
+        (2, "две проверки подряд без мест"),
+        (5, "пять проверок подряд без мест"),
+        (7, "7 проверок подряд без мест"),
+    ],
+)
+def test_фраза_о_числе_пустых_проверок_склоняется(count: int, phrase: str) -> None:
+    from rcbot.application.messages import _empty_checks_phrase
+
+    assert _empty_checks_phrase(count) == phrase
+
+
 def test_composer_неизменяем_и_local_переводит_aware_момент() -> None:
     c = composer()
     assert c.local(T0).utcoffset() == timedelta(hours=-3)

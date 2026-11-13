@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from rcbot.application.messages import MessageComposer
 from rcbot.application.ports import Clock, IncidentRepository, StatsRepository, WatchdogPinger
 from rcbot.domain.models import Incident, PollStatsHour
 
@@ -36,18 +37,15 @@ def report_text(hours: list[PollStatsHour], incidents_24h: int, size_bytes: int 
     # худший 95-й), а не пересчитываем по всем проверкам суток
     p50 = [h.percentile(MEDIAN_Q) for h in hours if h.checks]
     p95 = [h.percentile(TAIL_Q) for h in hours if h.checks]
-    lines = [
-        "📋 Отчёт rcbot за сутки",
-        f"Проверок: {checks}, ошибок: {errors}, входов на сайт: {relogins}",
-        f"Время ответа: медиана {statistics.median(p50) if p50 else 0:.0f} мс, "
-        f"95-й перцентиль {max(p95) if p95 else 0:.0f} мс",
-        f"Инцидентов: {incidents_24h}",
-    ]
-    if size_bytes is not None:
-        lines.append(f"Размер папки: {size_bytes / 1024 / 1024:.0f} МБ")
-    if checks == 0:
-        lines.append("⚠️ За сутки не было ни одной успешной проверки.")
-    return "\n".join(lines)
+    return MessageComposer.daily_report(
+        checks=checks,
+        errors=errors,
+        relogins=relogins,
+        median_ms=statistics.median(p50) if p50 else 0.0,
+        p95_ms=max(p95) if p95 else 0.0,
+        incidents=incidents_24h,
+        size_bytes=size_bytes,
+    )
 
 
 class HealthMonitor:

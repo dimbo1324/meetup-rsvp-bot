@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from rcbot import __version__
+from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC, PollLoop
 from rcbot.application.ports import Clock, Journal
 
@@ -92,7 +93,7 @@ class LivenessMonitor:
         logger.error("цикл опроса завис: %s; перезапуск", problem)
         self._journal.event("liveness.hung", f"цикл опроса завис: {problem}; перезапуск", "ERROR")
         try:
-            await self._notify(f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его и браузер.")
+            await self._notify(MessageComposer.poll_hung(problem))
         except Exception as error:  # сообщение не должно мешать восстановлению
             logger.warning("сообщение о зависании не отправлено: %s", type(error).__name__)
         try:
