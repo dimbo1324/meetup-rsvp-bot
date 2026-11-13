@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -120,6 +121,14 @@ class Settings(BaseSettings):
         """API календаря живёт на bpmgob: чужой хост получил бы cookies сессии и права запроса."""
         return _require_bpmgob(value, "адрес API календаря") if value else value
 
+    @field_validator("tramite_id")
+    @classmethod
+    def _tramite_maskable(cls, value: str) -> str:
+        """Пусто, метка или значение, которое фильтр логов способен замаскировать (R1)."""
+        if value and "<" not in value and not _TRAMITE_SHAPE.fullmatch(value):
+            raise ValueError("номер заявки: от 4 до 40 букв, цифр, «_» или «-»")
+        return value
+
     @field_validator("agenda_url")
     @classmethod
     def _agenda_on_bpmgob(cls, value: str) -> str:
@@ -139,9 +148,10 @@ class Settings(BaseSettings):
         hosts = {*GUBUY_HOSTS, TELEGRAM_HOST, CALLMEBOT_HOST, _host(self.ntfy_server)}
         if self.watchdog_url:
             hosts.add(_host(self.watchdog_url))
-        if self.sae_source_enabled:
-            hosts.add(SAE_HOST)
         return frozenset(hosts)
+
+
+_TRAMITE_SHAPE = re.compile(r"[\w-]{4,40}")
 
 
 def _require_https(value: str) -> str:

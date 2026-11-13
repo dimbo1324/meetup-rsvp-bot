@@ -175,7 +175,6 @@ def same_path(a: str, b: Path) -> bool:
 
 def test_набор_скриптов_известен() -> None:
     assert ALL_SCRIPTS == [
-        "install.ps1",
         "quickstart.ps1",
         "register_task.ps1",
         "unregister_task.ps1",
@@ -286,32 +285,3 @@ def test_unregister_task_без_задания_ничего_не_удаляет_
     assert calls(result, "Stop-ScheduledTask") == []
     assert calls(result, "Unregister-ScheduledTask") == []
     assert "Задания rcbot нет." in said(result)
-
-
-# --- install.ps1 ---
-
-
-def test_install_готовит_окружение_спрашивает_секреты_и_проверяет(tmp_path: Path) -> None:
-    result = execute(SCRIPTS / "install.ps1", tmp_path, RC_UV_CODES="0")
-
-    assert result["error"] is None
-    uv = result["calls"]
-    uv = [c for c in ([uv] if isinstance(uv, dict) else uv) if c["name"] == "uv"]
-    assert [c["params"]["args"] for c in uv] == [
-        "run python dev.py setup --bot registro-civil-bot",
-        "run --no-sync rcbot init",
-        "run --no-sync rcbot doctor",
-    ]
-    # Всё выполняется из корня репозитория, после работы каталог возвращается
-    assert all(same_path(c["cwd"], BOT_DIR.parents[1]) for c in uv)
-    assert result["location_restored"] is True
-
-
-def test_install_при_сбое_установки_не_идёт_к_мастеру_секретов(tmp_path: Path) -> None:
-    result = execute(SCRIPTS / "install.ps1", tmp_path, RC_UV_CODES="1")
-
-    assert "dev.py setup завершился с ошибкой" in result["error"]
-    uv = result["calls"]
-    uv = [c for c in ([uv] if isinstance(uv, dict) else uv) if c["name"] == "uv"]
-    assert len(uv) == 1
-    assert result["location_restored"] is True  # Pop-Location отработал в finally

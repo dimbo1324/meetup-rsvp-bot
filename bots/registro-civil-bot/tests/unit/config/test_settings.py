@@ -295,10 +295,22 @@ def test_api_на_чужом_хосте_отклоняется(url: str) -> None
         Settings(api_url=url)
 
 
-def test_sae_попадает_в_список_только_когда_включён() -> None:
+def test_sae_не_расширяет_список_пока_источник_не_реализован() -> None:
+    # Решение владельца (Q-A1): чтение SAE не написано, поэтому флаг не открывает сеть до него
     assert "sae.mec.gub.uy" not in Settings().allowed_hosts()
-    enabled = Settings(sae_source_enabled=True).allowed_hosts()
-    assert "sae.mec.gub.uy" in enabled and len(enabled) == 6
+    assert Settings(sae_source_enabled=True).allowed_hosts() == Settings().allowed_hosts()
+
+
+@pytest.mark.parametrize("value", ["", "<НОМЕР_ЗАЯВКИ>", "TEST-TRAMITE", "ABCD", "1" * 40])
+def test_номер_заявки_допустимых_видов(value: str) -> None:
+    assert Settings(tramite_id=value).tramite_id == value
+
+
+@pytest.mark.parametrize("value", ["123", "a b c d", "x" * 41, "номер!", "12/34"])
+def test_номер_заявки_короче_четырёх_знаков_или_с_лишним_отклоняется(value: str) -> None:
+    # Короче четырёх знаков фильтр логов значение не маскирует (R1): такой номер утёк бы в логи
+    with pytest.raises(ValueError):
+        Settings(tramite_id=value)
 
 
 def test_свой_сервер_ntfy_заменяет_ntfy_sh_в_списке() -> None:
@@ -313,8 +325,8 @@ def test_все_необязательные_источники_вместе() -
         api_url="https://bpmgob.mec.gub.uy/x",
         sae_source_enabled=True,
     ).allowed_hosts()
-    assert len(hosts) == 7
-    assert {"w.example.org", "sae.mec.gub.uy"} <= hosts
+    assert len(hosts) == 6
+    assert "w.example.org" in hosts and "sae.mec.gub.uy" not in hosts
 
 
 def test_хосты_не_зависят_от_адреса_входа() -> None:

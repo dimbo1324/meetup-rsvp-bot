@@ -36,7 +36,7 @@ Telegram, ntfy и CallMeBot бот ещё не запускался — это �
 
 Скрипты (`scripts/`): быстрый старт — `quickstart.cmd` (двойной щелчок) и `quickstart.ps1`
 (зависимости, браузер, мастер `init`, `doctor`, автозапуск); `rcbot.cmd` — короткий вызов `rcbot`
-из любой папки; Планировщик — `register_task.ps1`, `unregister_task.ps1`, `install.ps1`.
+из любой папки; Планировщик — `register_task.ps1`, `unregister_task.ps1`.
 
 ## Что важно знать о поведении сейчас
 

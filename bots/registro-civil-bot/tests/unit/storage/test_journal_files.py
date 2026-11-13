@@ -455,12 +455,27 @@ def test_openings_параллельные_записи_не_смешивают_
 
 def test_status_пишет_корректный_json_и_не_оставляет_временного_файла(root: Path) -> None:
     make(root).status({"alive_at": "2026-11-12T15:00:00+00:00", "state": "running", "n": 3})
+    # Момент переведён в пояс журнала, как в checks и events; к снимку добавлен счётчик потерь
     assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {
-        "alive_at": "2026-11-12T15:00:00+00:00",
+        "alive_at": "2026-11-12T12:00:00-03:00",
         "state": "running",
         "n": 3,
+        "journal_dropped": 0,
     }
     assert not (root / "status.json.tmp").exists()
+
+
+def test_status_показывает_число_потерянных_записей(root: Path) -> None:
+    journal = make(root)
+    journal.dropped = 7
+    journal.status({"state": "running"})
+    assert json.loads((root / "status.json").read_text(encoding="utf-8"))["journal_dropped"] == 7
+
+
+def test_status_не_трогает_строки_без_пояса_и_не_моменты(root: Path) -> None:
+    make(root).status({"naive": "2026-11-12T15:00:00", "text": "не момент", "n": 1})
+    data = json.loads((root / "status.json").read_text(encoding="utf-8"))
+    assert data["naive"] == "2026-11-12T15:00:00" and data["text"] == "не момент"
 
 
 def test_status_кириллица_читаема_и_json_с_отступами(root: Path) -> None:
@@ -473,7 +488,10 @@ def test_status_каждая_запись_заменяет_файл_целико
     journal = make(root)
     journal.status({"a": "x" * 5000})
     journal.status({"b": 1})
-    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {"b": 1}
+    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {
+        "b": 1,
+        "journal_dropped": 0,
+    }
 
 
 def test_status_использует_атомарную_замену(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -517,7 +535,10 @@ def test_status_ошибка_замены_не_роняет_бота_и_стар
 
     monkeypatch.setattr(journal_files.os, "replace", busy)
     journal.status({"version": 2})  # не должно бросать
-    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {"version": 1}
+    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {
+        "version": 1,
+        "journal_dropped": 0,
+    }
     assert not (root / "status.json.tmp").exists()  # временный файл убран
 
 
@@ -530,7 +551,10 @@ def test_status_настоящий_занятый_файл_в_windows_не_ро�
     with (root / "status.json").open("rb"):  # как редактор: открыт без права удаления
         journal.status({"version": 2})
     journal.status({"version": 3})  # файл освободили — следующая запись проходит
-    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {"version": 3}
+    assert json.loads((root / "status.json").read_text(encoding="utf-8")) == {
+        "version": 3,
+        "journal_dropped": 0,
+    }
 
 
 def test_status_при_отсутствии_папки_не_бросает(root: Path) -> None:

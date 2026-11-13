@@ -329,7 +329,7 @@ https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
 | Секрет попал в лог или трассировку | Типы `SecretStr`. Фильтр логов `RedactionFilter` вырезает значения секретов, номер документа, cookies, заголовки `Cookie`/`Set-Cookie`/`Authorization`. Юнит-тест проверяет, что секреты в лог не попадают. |
 | Папка на рабочем столе синхронизируется в облако | `rcbot doctor` проверяет, лежит ли `Desktop` внутри OneDrive. Если да — предупреждение и предложение исключить папку из синхронизации. Секретов и cookies на диске всё равно нет. |
 | Утечка через Sentry | Sentry **выключен по умолчанию**. Если включён: `send_default_pii=False`, `include_local_variables=False`, `max_request_body_size="never"`, хук `before_send` прогоняет событие через тот же редактор. |
-| Запрос уходит не туда | HTTP-обёртка разрешает только хосты из списка: `bpmgob.mec.gub.uy`, `mi.iduruguay.gub.uy`, `api.telegram.org`, `ntfy.sh`, `api.callmebot.com`, адрес «сторожа» (если включён), `sae.mec.gub.uy` (только при `RCBOT_SAE_SOURCE_ENABLED=true`). Остальное — исключение. Проверка TLS всегда включена. |
+| Запрос уходит не туда | HTTP-обёртка разрешает только хосты из списка: `bpmgob.mec.gub.uy`, `mi.iduruguay.gub.uy`, `api.telegram.org`, `ntfy.sh`, `api.callmebot.com`, адрес «сторожа» (если включён), `sae.mec.gub.uy` (после реализации чтения SAE, D6; сейчас не добавляется). Остальное — исключение. Проверка TLS всегда включена. |
 | Чужой человек управляет ботом | Middleware пропускает только `chat_id` владельца. |
 | Личные данные в сторонних сервисах | В ntfy и CallMeBot уходят только даты и общая фраза. |
 | Снимки экрана с личными данными | В режиме API снимков нет. В режиме DOM снимается **только элемент календаря** (`locator.screenshot`), хранится локально, срок 3 дня. |
@@ -482,7 +482,6 @@ Desktop\RegistroBot\
 │   └── fixtures\               # очищенные ответы API из фазы 0
 │
 ├── scripts\
-│   ├── install.ps1
 │   ├── register_task.ps1       # автозапуск через Планировщик
 │   └── unregister_task.ps1
 │

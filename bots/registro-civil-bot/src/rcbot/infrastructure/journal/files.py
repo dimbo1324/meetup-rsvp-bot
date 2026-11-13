@@ -300,8 +300,22 @@ class FileJournal:
             except OSError as error:
                 logger.warning("журнал: openings.csv не записан: %s", type(error).__name__)
 
+    def _localized(self, value: object) -> object:
+        """Момент с поясом (ISO-строка) — в пояс журнала, как в `checks` и `events`."""
+        if isinstance(value, str):
+            try:
+                moment = datetime.fromisoformat(value)
+            except ValueError:
+                return value
+            if moment.tzinfo is not None:
+                return self._local(moment)
+        return value
+
     def status(self, snapshot: dict[str, object]) -> None:
-        text = json.dumps(_scrub(snapshot), ensure_ascii=False, indent=2)
+        shown = {key: self._localized(value) for key, value in snapshot.items()}
+        # Потерянные записи (очередь переполнена) видны владельцу: молчаливая потеря скрыла бы сбой
+        shown["journal_dropped"] = self.dropped
+        text = json.dumps(_scrub(shown), ensure_ascii=False, indent=2)
         self._submit(lambda: self._write_status(text))
 
     def _write_status(self, text: str) -> None:
