@@ -14,7 +14,8 @@ from rcbot.domain.models import (
     PollStatsHour,
     Slot,
 )
-from rcbot.infrastructure.db.tables import IncidentSlotRow
+from rcbot.infrastructure.db.repositories import SqlStatsRepository
+from rcbot.infrastructure.db.tables import DELIVERY_ERROR_MAX, IncidentSlotRow
 from tests.fakes import T0, slots, slots_at
 from tests.integration.storage.conftest import Db
 
@@ -186,7 +187,30 @@ async def test_текст_ошибки_доставки_усекается_до_
     )
     (stored,) = await db.incidents.deliveries_for(incident.id)
     assert stored.error == long_error[:300]
-    assert len(stored.error) == 300
+    assert len(stored.error) == 300 == DELIVERY_ERROR_MAX
+
+
+async def test_текст_ошибки_доставки_проходит_через_вырезание_секретов(db: Db) -> None:
+    """SEC-12: ошибка могла собрать чужой ответ с cookie или паролем — в БД их нет."""
+    incident = await db.incidents.open(db.target.id, T0, slots(1))
+    error = "ответ сервиса: password=Hx9bR4qLm2Probe; Cookie: sid=kZ4pQ8wXprobe"
+    await db.incidents.record_delivery(
+        DeliveryResult(Channel.NTFY, False, 1.0, 1, error, incident.id), T0
+    )
+    (stored,) = await db.incidents.deliveries_for(incident.id)
+    assert "Hx9bR4qLm2Probe" not in stored.error and "kZ4pQ8wXprobe" not in stored.error
+    assert stored.error.startswith("ответ сервиса: password=***")
+
+
+async def test_вырезание_секретов_идёт_до_обрезки_по_длине(db: Db) -> None:
+    """Секрет на границе обрезки не должен остаться наполовину: сначала маска, потом длина."""
+    incident = await db.incidents.open(db.target.id, T0, slots(1))
+    error = "x" * (DELIVERY_ERROR_MAX - 12) + " password=Hx9bR4qLm2Probe"
+    await db.incidents.record_delivery(
+        DeliveryResult(Channel.CALL, False, 1.0, 1, error, incident.id), T0
+    )
+    (stored,) = await db.incidents.deliveries_for(incident.id)
+    assert "Hx9bR4" not in stored.error and len(stored.error) <= DELIVERY_ERROR_MAX
 
 
 async def test_доставка_без_инцидента_служебное_сообщение_записывается(db: Db) -> None:
@@ -209,6 +233,44 @@ async def test_save_hour_пишет_строку_и_перезаписывает
     (stored,) = await db.stats.since(hour)
     assert (stored.hour, stored.checks, stored.errors, stored.relogins) == (hour, 25, 2, 1)
     assert stored.percentile(0.5) == 5.0
+
+
+async def test_после_перезапуска_в_тот_же_час_счётчики_складываются_а_не_затираются(
+    db: Db,
+) -> None:
+    """COL-16: новый процесс (новый репозиторий) дописывает свой итог к строке прошлого."""
+    hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
+    await db.stats.save_hour(PollStatsHour(hour, 40, 3, 1, [10.0] * 40))
+    restarted = SqlStatsRepository(db.sessions)
+    await restarted.save_hour(PollStatsHour(hour, 5, 1, 0, [10.0] * 5))
+    (stored,) = await db.stats.since(hour)
+    assert (stored.checks, stored.errors, stored.relogins) == (45, 4, 1)
+
+
+async def test_повторные_сохранения_часа_после_перезапуска_не_задваивают_базу(db: Db) -> None:
+    hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
+    await db.stats.save_hour(PollStatsHour(hour, 40, 3, 1, [10.0]))
+    restarted = SqlStatsRepository(db.sessions)
+    for checks in (5, 9, 12):  # накопленный итог процесса растёт
+        await restarted.save_hour(PollStatsHour(hour, checks, 1, 0, [10.0]))
+    (stored,) = await db.stats.since(hour)
+    assert (stored.checks, stored.errors, stored.relogins) == (52, 4, 1)
+    # Следующий час того же процесса — без базы прошлого часа
+    await restarted.save_hour(PollStatsHour(hour + timedelta(hours=1), 7, 0, 0, [1.0]))
+    stored_next = (await db.stats.since(hour + timedelta(hours=1)))[0]
+    assert stored_next.checks == 7
+
+
+async def test_перцентили_после_перезапуска_учитывают_прошлый_процесс(db: Db) -> None:
+    hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
+    await db.stats.save_hour(PollStatsHour(hour, 3, 0, 0, [100.0, 100.0, 900.0]))
+    restarted = SqlStatsRepository(db.sessions)
+    await restarted.save_hour(PollStatsHour(hour, 2, 0, 0, []))  # без замеров — база как есть
+    (stored,) = await db.stats.since(hour)
+    assert (stored.percentile(0.0), stored.percentile(1.0)) == (100.0, 900.0)
+    await restarted.save_hour(PollStatsHour(hour, 3, 0, 0, [500.0]))
+    (stored,) = await db.stats.since(hour)
+    assert stored.percentile(0.95) == 900.0 and stored.percentile(0.5) == 500.0
 
 
 async def test_перцентили_считаются_при_записи_и_переживают_чтение(db: Db) -> None:

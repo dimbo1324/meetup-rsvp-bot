@@ -226,7 +226,7 @@ async def test_обрыв_соединения_это_ошибка_без_иск
 async def test_сетевая_ошибка_в_обеих_попытках(error: BaseException) -> None:
     http = RaisingHttp(error)
     channel = CallMeBotNotifier(http, USER, RU)  # type: ignore[arg-type]
-    result = await channel.send(all_alerts()["test"], 1)
+    result = await channel.send(all_alerts()["slots_alert"], 1)
     assert not result.ok and result.error == type(error).__name__
     assert len(http.calls) == 2  # русский голос, затем английский (D8)
 
@@ -249,7 +249,7 @@ async def test_при_ошибке_один_повтор_английским_г
 async def test_повтор_и_при_http_ошибке(server: LocalTlsServer) -> None:
     server.route("GET", PATH, scripted((500, "x"), (200, "ok")))
     channel = make(server)
-    result = await channel.send(all_alerts()["test"], 1)
+    result = await channel.send(all_alerts()["slots_alert"], 1)
     await channel.close()
     assert result.ok and len(server.requests) == 2
 
@@ -259,10 +259,40 @@ async def test_если_и_английский_не_прошёл_ошибка_�
 ) -> None:
     server.route("GET", PATH, scripted((200, "invalid voice"), (503, "x")))
     channel = make(server)
-    result = await channel.send(all_alerts()["test"], 1)
+    result = await channel.send(all_alerts()["slots_alert"], 1)
     await channel.close()
     assert not result.ok and result.error == "HTTP 503"
     assert len(server.requests) == 2  # ровно один повтор, не больше
+
+
+async def test_тестовая_тревога_без_запасного_английского_звонка(server: LocalTlsServer) -> None:
+    """COL-2: английский текст говорит «места появились» — для теста каналов это ложь."""
+    server.route("GET", PATH, scripted((500, "x"), (200, "ok")))
+    channel = make(server)
+    result = await channel.send(all_alerts()["test"], 1)
+    await channel.close()
+    assert not result.ok and result.error == "HTTP 500"
+    assert len(server.requests) == 1
+    assert all(r.query["text"] != CALL_TEXT_EN for r in server.requests)
+
+
+@pytest.mark.parametrize("name", ["slots_alert", "slots_changed"])
+async def test_тревоги_о_местах_получают_запасной_звонок(server: LocalTlsServer, name: str) -> None:
+    server.route("GET", PATH, scripted((500, "x"), (200, "ok")))
+    channel = make(server)
+    result = await channel.send(all_alerts()[name], 1)
+    await channel.close()
+    assert result.ok and len(server.requests) == 2
+
+
+def test_адреса_и_таймаут_callmebot_из_констант() -> None:
+    """MAG-2, MAG-1/COL-1: хост — из настроек; две попытки укладываются в лимит оркестратора."""
+    from rcbot.application.alerting import SEND_TIMEOUT_SEC
+    from rcbot.config.settings import CALLMEBOT_HOST
+
+    assert f"https://{CALLMEBOT_HOST}/start.php" == callmebot.API_URL
+    assert f"https://{CALLMEBOT_HOST}/" == callmebot.WARMUP_URL
+    assert 2 * callmebot.CALLMEBOT_TIMEOUT_SEC < SEND_TIMEOUT_SEC
 
 
 async def test_английский_язык_без_повтора(server: LocalTlsServer) -> None:
@@ -288,7 +318,7 @@ async def test_задержка_включает_обе_попытки(server: L
 
     server.route("GET", PATH, slow)
     channel = make(server)
-    result = await channel.send(all_alerts()["test"], 1)
+    result = await channel.send(all_alerts()["slots_alert"], 1)
     await channel.close()
     assert not result.ok and result.latency_ms >= 75
 

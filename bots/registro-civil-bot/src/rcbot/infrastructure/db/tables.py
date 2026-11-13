@@ -9,6 +9,9 @@ from sqlalchemy import ForeignKey, Index, Integer, String, Text, TypeDecorator
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+# Длина столбца deliveries.error; репозиторий обрезает текст ошибки по ней же
+DELIVERY_ERROR_MAX = 300
+
 
 class UtcIso(TypeDecorator[datetime]):
     """Aware-datetime ⇄ ISO-строка в UTC: строки сравниваются так же, как моменты."""
@@ -81,7 +84,7 @@ class DeliveryRow(Base):
     ok: Mapped[bool] = mapped_column()
     latency_ms: Mapped[float] = mapped_column()
     attempt: Mapped[int] = mapped_column(Integer)
-    error: Mapped[str] = mapped_column(String(300), default="")
+    error: Mapped[str] = mapped_column(String(DELIVERY_ERROR_MAX), default="")
 
 
 class PollStatsHourRow(Base):

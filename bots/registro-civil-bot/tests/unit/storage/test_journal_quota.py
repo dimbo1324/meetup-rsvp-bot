@@ -203,14 +203,41 @@ def test_файлы_с_нестандартными_именами_не_удал
     assert all(p.exists() for p in odd)
 
 
-def test_вложенный_каталог_размер_считается_рекурсивно_и_датированный_файл_удаляется(
+def test_вложенные_каталоги_не_обходятся_файлы_в_них_не_считаются_и_не_удаляются(
     root: Path,
 ) -> None:
+    """SEC-2: квота смотрит только на сами подпапки журнала, без рекурсии."""
     journal = make(root)
     nested = put(root, "checks/archive/2026/checks-2026-10-01.jsonl", 5000)
-    assert journal.size() >= 5000
-    assert journal.enforce_quota() == (1, 5000)
-    assert not nested.exists()
+    assert journal.size() == readme_size(root)
+    assert journal.enforce_quota() == (0, 0)
+    assert nested.exists()
+
+
+def test_журнал_на_рабочем_столе_чужие_файлы_с_похожими_именами_не_трогаются(
+    tmp_path: Path,
+) -> None:
+    """SEC-2: папку журнала указали как Рабочий стол — там лежат чужие файлы.
+
+    Ни в корне, ни в чужих подпапках, ни с чужим префиксом в своих подпапках они не считаются
+    в размер и не удаляются, даже когда собственные файлы журнала превышают квоту.
+    """
+    desktop = tmp_path / "Desktop"
+    journal = make(desktop)
+    foreign = [
+        put(desktop, "checks-2026-11-01.jsonl", 4000),  # имя как у журнала, но вне подпапки
+        put(desktop, "rcbot-2026-11-01.log", 4000),
+        put(desktop, "photos/events-2026-11-01.jsonl", 4000),  # чужая подпапка
+        put(desktop, "checks/events-2026-11-01.jsonl", 4000),  # чужой префикс в своей папке
+        put(desktop, "logs/backup-2026-11-01.log", 4000),
+        put(desktop, "Отчёт-2026-11-01.log", 4000),
+    ]
+    assert journal.size() == readme_size(desktop)
+    own = put(desktop, dated("checks", "2026-11-02"), 6000)
+    assert journal.size() == readme_size(desktop) + 6000
+    assert journal.enforce_quota() == (1, 6000)
+    assert not own.exists()
+    assert all(p.exists() and p.stat().st_size == 4000 for p in foreign)
 
 
 def test_файл_открытый_писателем_сегодня_защищён_даже_если_сутки_сменились_без_записи(
