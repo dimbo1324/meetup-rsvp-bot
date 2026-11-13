@@ -80,12 +80,15 @@ def test_смена_только_времени_в_тот_же_день_это_�
     assert event.added == slots_at((23, 11, 0))
 
 
-def test_день_без_времени_и_тот_же_день_со_временем_это_разные_слоты() -> None:
+def test_день_без_времени_и_тот_же_день_со_временем_сравниваются_по_дню() -> None:
+    # Раньше это было «изменением»: слот дня без времени и слот со временем считались разными,
+    # и смена источника API/DOM давала ложное «появились новые места» (COL-10)
     detector = Detector()
     detector.compare(_at(0, slots(23)))
-    event = detector.compare(_at(1, slots(23) | slots_at((23, 10, 30))))
+    assert detector.compare(_at(1, slots(23) | slots_at((23, 10, 30)))) is None
+    event = detector.compare(_at(2, slots(23, 24) | slots_at((23, 10, 30))))
     assert isinstance(event, SlotsChanged)
-    assert event.added == slots_at((23, 10, 30))
+    assert event.added == slots(24)
 
 
 def test_пропажа_части_слотов_тихая_но_множество_обновляется() -> None:
@@ -246,3 +249,39 @@ def test_restore_пустым_закрывает_ранее_открытый_и�
     detector.restore(frozenset())
     assert not detector.incident_open
     assert detector.slots == frozenset()
+
+
+# --- смена источника: у одной из сторон время слота неизвестно (COL-10) ---
+
+
+def test_api_день_затем_dom_день_с_временем_не_даёт_ложного_изменения() -> None:
+    detector = Detector()
+    events = _feed(detector, slots(23), slots_at((23, 10, 30), (23, 11, 0)))
+    assert isinstance(events[0], SlotsAppeared) and events[1] is None
+    assert detector.slots == slots_at((23, 10, 30), (23, 11, 0))
+
+
+def test_dom_день_с_временем_затем_api_только_день_не_даёт_ложного_изменения() -> None:
+    detector = Detector()
+    events = _feed(detector, slots_at((23, 10, 30)), slots(23))
+    assert isinstance(events[0], SlotsAppeared) and events[1] is None
+
+
+def test_restore_без_времени_затем_dom_с_временем_того_же_дня_молчит() -> None:
+    detector = Detector()
+    detector.restore(slots(23))
+    assert detector.compare(_at(1, slots_at((23, 10, 30)))) is None
+
+
+def test_смена_источника_но_новый_день_всё_равно_изменение_только_с_новым_днём() -> None:
+    detector = Detector()
+    events = _feed(detector, slots(23), slots_at((23, 10, 30), (24, 9, 0)))
+    assert isinstance(events[1], SlotsChanged)
+    assert events[1].added == slots_at((24, 9, 0))
+
+
+def test_при_одинаковой_детализации_время_по_прежнему_различает_слоты() -> None:
+    detector = Detector()
+    events = _feed(detector, slots_at((23, 10, 30)), slots_at((23, 10, 30), (23, 11, 0)))
+    assert isinstance(events[1], SlotsChanged)
+    assert events[1].added == slots_at((23, 11, 0))

@@ -29,6 +29,18 @@ subsets = st.frozensets(st.sampled_from(UNIVERSE), max_size=len(UNIVERSE))
 non_empty = subsets.filter(bool)
 
 
+def expected_new(found: frozenset[Slot], previous: frozenset[Slot]) -> frozenset[Slot]:
+    """Новое — это слот, для которого нет известного слота того же дня с тем же временем;
+    если у одного из двух время неизвестно, сравнение идёт по дню (смена источника API/DOM)."""
+    result = set()
+    for slot in found:
+        same_day = [p for p in previous if p.day == slot.day]
+        known = any(p.at == slot.at or p.at is None or slot.at is None for p in same_day)
+        if not known:
+            result.add(slot)
+    return frozenset(result)
+
+
 class DetectorMachine(RuleBasedStateMachine):
     def __init__(self) -> None:
         super().__init__()
@@ -57,9 +69,9 @@ class DetectorMachine(RuleBasedStateMachine):
             assert isinstance(event, SlotsAppeared), "первое непустое множество — это появление"
             assert event.snapshot.slots == found
             self.appeared += 1
-        elif found - previous:
+        elif expected_new(found, previous):
             assert isinstance(event, SlotsChanged), "новые слоты в инциденте — это изменение"
-            assert event.added == found - previous
+            assert event.added == expected_new(found, previous)
         else:
             assert event is None, "нет новых слотов — тревоги нет (пропажа части тихая)"
         self.was_open, self.known = True, found

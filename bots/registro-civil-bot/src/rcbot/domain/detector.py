@@ -17,6 +17,23 @@ from rcbot.domain.models import AvailabilitySnapshot, Slot
 EMPTY_CHECKS_TO_CLOSE = 3
 
 
+def _unmatched(current: frozenset[Slot], known: frozenset[Slot]) -> frozenset[Slot]:
+    """Слоты из `current`, которых нет в `known`.
+
+    Если у одной из сторон время слота неизвестно (API видит день, DOM — день и время, либо
+    слот восстановлен из БД без времени), сравниваем по дню: смена источника не должна давать
+    ложное «появились новые места». При одинаковой детализации — обычное равенство слотов.
+    """
+    return frozenset(
+        slot
+        for slot in current
+        if not any(
+            old.day == slot.day and (old.at is None or slot.at is None or old.at == slot.at)
+            for old in known
+        )
+    )
+
+
 @dataclass
 class Detector:
     empty_checks_to_close: int = EMPTY_CHECKS_TO_CLOSE
@@ -42,7 +59,7 @@ class Detector:
                 self.incident_open = True
                 self.slots = snapshot.slots
                 return SlotsAppeared(snapshot.observed_at, snapshot)
-            added = snapshot.slots - self.slots
+            added = _unmatched(snapshot.slots, self.slots)
             self.slots = snapshot.slots
             if added:
                 return SlotsChanged(snapshot.observed_at, snapshot, frozenset(added))
