@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from zoneinfo import ZoneInfo
 
 from aiogram import Router
@@ -10,12 +9,11 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 from aiogram_dialog import DialogManager, StartMode
 
-from rcbot.application.control import MAX_PAUSE_MINUTES, Controller, IntervalTooSmall
+from rcbot.application.control import MAX_PAUSE_MINUTES, Controller
 from rcbot.bot import texts
 from rcbot.bot.dialogs.states import MenuSG
 
-# Дольше года пауза «на минуты» не бывает; для паузы без срока есть /pause без числа
-PAUSE_BAD = "Нужно число минут от 1 до 525600: /pause 30 (или просто /pause)"
+PAUSE_BAD = texts.PAUSE_BAD
 
 
 def _pause_minutes(args: str) -> int | None:
@@ -47,7 +45,7 @@ async def cmd_pause(
             return
     until = await controller.pause(minutes)
     if minutes:
-        await message.answer(texts.PAUSED.format(until=f"{until.astimezone(tz):%d.%m %H:%M}"))
+        await message.answer(texts.PAUSED.format(until=texts.moment(until, tz)))
     else:
         await message.answer(texts.PAUSED_FOREVER)
 
@@ -60,12 +58,9 @@ async def cmd_resume(message: Message, controller: Controller) -> None:
 async def cmd_interval(message: Message, command: CommandObject, controller: Controller) -> None:
     raw = (command.args or "").strip().replace(",", ".")
     try:
-        seconds = float(raw)
-        # float() принимает «nan» и «inf»: nan проходит любые сравнения и ломает расписание
-        if not math.isfinite(seconds):
-            raise ValueError(raw)
-        value = await controller.set_interval(seconds)
-    except ValueError, IntervalTooSmall:
+        # «nan» и «inf» float() принимает, их отклоняет контроллер (IntervalTooSmall — ValueError)
+        value = await controller.set_interval(float(raw))
+    except ValueError:
         await message.answer(texts.INTERVAL_BAD)
         return
     await message.answer(texts.INTERVAL_SET.format(value=value))
@@ -81,9 +76,8 @@ async def cmd_last(message: Message, controller: Controller, tz: ZoneInfo) -> No
 
 
 async def cmd_relogin(message: Message, controller: Controller) -> None:
-    await message.answer("Вхожу заново…")
-    error = await controller.relogin()
-    await message.answer(texts.RELOGIN_FAILED.format(error=error) if error else texts.RELOGIN_OK)
+    await message.answer(texts.RELOGIN_STARTED)
+    await message.answer(texts.relogin_text(await controller.relogin()))
 
 
 async def cmd_cleanup(message: Message, controller: Controller) -> None:
