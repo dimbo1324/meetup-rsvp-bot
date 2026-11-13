@@ -20,16 +20,10 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from rcbot.application.ports import Clock, SessionCookie
-from rcbot.domain.errors import (
-    ManualStepRequired,
-    RateLimited,
-    SessionExpired,
-    SiteUnavailable,
-    UnexpectedResponse,
-)
+from rcbot.domain.errors import SiteUnavailable, UnexpectedResponse
 from rcbot.domain.models import AvailabilitySnapshot, Slot, SourceKind, WatchTarget
 from rcbot.infrastructure.gubuy.browser import BrowserOptions, launch, to_playwright
-from rcbot.infrastructure.gubuy.pages import PageKind, classify
+from rcbot.infrastructure.gubuy.pages import PAGE_ERRORS, PageKind, classify
 from rcbot.infrastructure.gubuy.parsers import (
     READ_MONTH_JS,
     month_view,
@@ -43,6 +37,13 @@ CALENDAR = ".ui-datepicker-calendar"
 NEXT_MONTH = ".ui-datepicker-next"
 STEP_TIMEOUT_MS = 20_000
 MAX_SHOTS = 20
+
+# Чем источник объясняет известную страницу вместо шага «Agenda»
+_PAGE_TEXTS = {
+    PageKind.LOGIN: "сайт открыл страницу входа",
+    PageKind.STEP1: "сайт требует пройти шаг 1 с контрольным вопросом",
+    PageKind.BLOCKED: "страница блокировки защитного шлюза",
+}
 
 
 class DomSource:
@@ -118,12 +119,8 @@ class DomSource:
     @staticmethod
     def _raise_for_page(url: str, text: str, status: int | None) -> None:
         kind = classify(url, text, status)
-        if kind is PageKind.LOGIN:
-            raise SessionExpired("сайт открыл страницу входа")
-        if kind is PageKind.STEP1:
-            raise ManualStepRequired("сайт требует пройти шаг 1 с контрольным вопросом")
-        if kind is PageKind.BLOCKED:
-            raise RateLimited("страница блокировки защитного шлюза")
+        if (error := PAGE_ERRORS.get(kind)) is not None:
+            raise error(_PAGE_TEXTS[kind])
         if status is not None and status >= 500:
             raise SiteUnavailable(f"сайт ответил {status}")
         if kind is PageKind.UNKNOWN:

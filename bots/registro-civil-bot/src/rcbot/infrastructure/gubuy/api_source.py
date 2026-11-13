@@ -12,14 +12,12 @@ import time as monotonic_time
 from collections.abc import Sequence
 from http.cookies import SimpleCookie
 from pathlib import Path
-from urllib.parse import urlparse
 
 import aiohttp
 from yarl import URL
 
 from rcbot.application.ports import Clock, SessionCookie
 from rcbot.domain.errors import (
-    ManualStepRequired,
     RateLimited,
     SessionExpired,
     SiteUnavailable,
@@ -27,24 +25,26 @@ from rcbot.domain.errors import (
     UnexpectedResponse,
 )
 from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
-from rcbot.infrastructure.gubuy.pages import LOGIN_HOST, PageKind, classify
+from rcbot.infrastructure.gubuy.pages import (
+    PAGE_ERRORS,
+    RATE_LIMIT_STATUSES,
+    PageKind,
+    classify,
+    is_login_redirect,
+)
 from rcbot.infrastructure.gubuy.quarantine import quarantine
 from rcbot.infrastructure.gubuy.schemas import parse_disponibilidades
 from rcbot.infrastructure.http.client import SafeHttp
 
-BPMGOB_HOST = "bpmgob.mec.gub.uy"
+# Прежнее имя функции: переадресация на вход распознаётся в pages.py
+_is_login_redirect = is_login_redirect
 
-
-def _is_login_redirect(location: str) -> bool:
-    """Переадресация на вход: страница ID Uruguay или `/autenticacion` самого bpmgob.
-
-    Разбираем адрес, а не ищем подстроку: чужой адрес с «mi.iduruguay.gub.uy» в запросе — не вход.
-    """
-    parsed = urlparse(location)
-    host = (parsed.hostname or "").lower()
-    if host == LOGIN_HOST:
-        return True
-    return host in ("", BPMGOB_HOST) and parsed.path.startswith("/autenticacion")
+# Чем источник объясняет страницу, пришедшую вместо ответа API
+_PAGE_TEXTS = {
+    PageKind.LOGIN: "вместо ответа API пришла страница входа",
+    PageKind.STEP1: "сайт требует пройти шаг 1",
+    PageKind.BLOCKED: "страница блокировки вместо ответа API",
+}
 
 
 class ApiSource:
@@ -95,21 +95,17 @@ class ApiSource:
         latency_ms = (monotonic_time.perf_counter() - started) * 1000
 
         if 300 <= status < 400:
-            if _is_login_redirect(location):
+            if is_login_redirect(location):
                 raise SessionExpired("API переадресует на вход")
             raise self._unexpected(status, content_type, body, "неожиданная переадресация")
-        if status in (403, 429):
+        if status in RATE_LIMIT_STATUSES:
             raise RateLimited(f"API ответил {status}")
         if status >= 500:
             raise SiteUnavailable(f"API ответил {status}")
         if "json" not in content_type.lower():
             page = classify(self._api_url, body, status)
-            if page is PageKind.LOGIN:
-                raise SessionExpired("вместо ответа API пришла страница входа")
-            if page is PageKind.STEP1:
-                raise ManualStepRequired("сайт требует пройти шаг 1")
-            if page is PageKind.BLOCKED:
-                raise RateLimited("страница блокировки вместо ответа API")
+            if (error := PAGE_ERRORS.get(page)) is not None:
+                raise error(_PAGE_TEXTS[page])
             raise self._unexpected(status, content_type, body, "HTML вместо ответа API")
         try:
             slots = parse_disponibilidades(json.loads(body))

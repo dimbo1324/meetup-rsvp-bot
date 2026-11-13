@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from datetime import date
 
 from rcbot.domain.errors import UnexpectedResponse
 from rcbot.domain.models import Slot
+from rcbot.infrastructure.gubuy.pages import NO_SLOTS_TEXT
 
 MONTHS_ES = {
     "enero": 1,
@@ -31,7 +33,7 @@ MONTHS_ES = {
 }
 
 # Выполняется в странице: только чтение DOM, без кликов и без изменения формы
-READ_MONTH_JS = """
+_READ_MONTH_TEMPLATE = """
 () => {
   const root = document.querySelector('.ui-datepicker');
   if (!root) return null;
@@ -53,7 +55,7 @@ READ_MONTH_JS = """
     }
   }
   const next = root.querySelector('.ui-datepicker-next');
-  const banner = document.body.innerText.includes('No hay cupos disponibles');
+  const banner = document.body.innerText.includes(__NO_SLOTS_TEXT__);
   return {
     title: title.trim(),
     days,
@@ -62,6 +64,7 @@ READ_MONTH_JS = """
   };
 }
 """
+READ_MONTH_JS = _READ_MONTH_TEMPLATE.replace("__NO_SLOTS_TEXT__", json.dumps(NO_SLOTS_TEXT))
 
 
 @dataclass(frozen=True)

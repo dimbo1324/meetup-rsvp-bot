@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-from rcbot.infrastructure.gubuy.pages import PageKind, classify, is_login_url
+from rcbot.config import settings
+from rcbot.domain.errors import ManualStepRequired, RateLimited, SessionExpired
+from rcbot.infrastructure.gubuy import api_source, dom_source, pages
+from rcbot.infrastructure.gubuy.pages import (
+    LOGIN_PATH_PREFIX,
+    NO_SLOTS_TEXT,
+    PAGE_ERRORS,
+    RATE_LIMIT_STATUSES,
+    PageKind,
+    classify,
+    is_login_redirect,
+    is_login_url,
+)
+from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS
 
 AGENDA_URL = "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA/1"
 LOGIN_URL = "https://mi.iduruguay.gub.uy/login?process_state=TEST"
@@ -131,3 +144,61 @@ def test_страница_входа_по_тексту_узнаётся_и_на_
 )
 def test_is_login_url_сравнивает_хост_строго(url: str, expected: bool) -> None:
     assert is_login_url(url) is expected
+
+
+# --- общие признаки для ApiSource и DomSource (аудит DUP-1/2/3/5) ---
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("https://mi.iduruguay.gub.uy/login?x=1", True),
+        ("https://MI.IDURUGUAY.GUB.UY/login", True),
+        ("https://bpmgob.mec.gub.uy/autenticacion/login", True),
+        ("/autenticacion/login?redirect=x", True),
+        ("https://bpmgob.mec.gub.uy/etapas/home", False),
+        ("https://evil.example/autenticacion/login", False),
+        ("https://evil.example/?next=https://mi.iduruguay.gub.uy/login", False),
+        ("/etapas/home", False),
+        ("", False),
+    ],
+)
+def test_is_login_redirect_та_же_семантика_что_была_в_api_source(
+    location: str, expected: bool
+) -> None:
+    assert is_login_redirect(location) is expected
+
+
+def test_прежнее_имя_переадресации_в_api_source_осталось_псевдонимом() -> None:
+    assert api_source._is_login_redirect is pages.is_login_redirect
+
+
+def test_хост_bpmgob_один_на_весь_бот() -> None:
+    assert pages.BPMGOB_HOST is settings.BPMGOB_HOST
+
+
+def test_префикс_входа_и_статусы_блокировки_именованы() -> None:
+    assert LOGIN_PATH_PREFIX == "/autenticacion"
+    assert frozenset({403, 429}) == RATE_LIMIT_STATUSES
+    for status in RATE_LIMIT_STATUSES:
+        assert classify(AGENDA_URL, "Seleccionar día", status) is PageKind.BLOCKED
+
+
+def test_тип_страницы_отображается_в_класс_исключения() -> None:
+    assert dict(PAGE_ERRORS) == {
+        PageKind.LOGIN: SessionExpired,
+        PageKind.STEP1: ManualStepRequired,
+        PageKind.BLOCKED: RateLimited,
+    }
+    assert PageKind.AGENDA not in PAGE_ERRORS
+    assert PageKind.UNKNOWN not in PAGE_ERRORS
+
+
+def test_источники_объясняют_каждую_страницу_из_общей_таблицы() -> None:
+    assert set(api_source._PAGE_TEXTS) == set(PAGE_ERRORS)
+    assert set(dom_source._PAGE_TEXTS) == set(PAGE_ERRORS)
+
+
+def test_текст_баннера_без_дат_подставлен_в_js_из_константы() -> None:
+    assert f'"{NO_SLOTS_TEXT}"' in READ_MONTH_JS
+    assert "__NO_SLOTS_TEXT__" not in READ_MONTH_JS
