@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+import logging
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import ClassVar
 from urllib.parse import urlsplit
 
@@ -21,6 +23,7 @@ from rcbot.domain.models import (
     WatchTarget,
 )
 from rcbot.infrastructure.db.tables import (
+    DELIVERY_ERROR_MAX,
     AppEventRow,
     Base,
     DeliveryRow,
@@ -32,8 +35,6 @@ from rcbot.infrastructure.db.tables import (
 )
 from rcbot.infrastructure.logging.redaction import REDACTOR
 
-_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
-
 
 def _slot_rows(incident_id: int, slots: frozenset[Slot]) -> list[IncidentSlotRow]:
     return [
@@ -42,9 +43,7 @@ def _slot_rows(incident_id: int, slots: frozenset[Slot]) -> list[IncidentSlotRow
             day=slot.day.isoformat(),
             at=None if slot.at is None else slot.at.strftime("%H:%M"),
         )
-        # Slot.__lt__ не сравнивает None со временем: в одном наборе день без времени и тот же
-        # день со временем бросали TypeError и теряли запись инцидента
-        for slot in sorted(slots, key=lambda s: (s.day, s.at is not None, s.at or time.min))
+        for slot in sorted(slots)
     ]
 
 
@@ -156,7 +155,8 @@ class SqlIncidentRepository:
                     ok=result.ok,
                     latency_ms=result.latency_ms,
                     attempt=result.attempt,
-                    error=result.error[:300],
+                    # Текст ошибки мог собрать чужой ответ или исключение: в БД секретов нет
+                    error=REDACTOR.redact(result.error)[:DELIVERY_ERROR_MAX],
                 )
             )
 
@@ -175,21 +175,56 @@ class SqlIncidentRepository:
             ]
 
 
+@dataclass(frozen=True)
+class _HourBase:
+    """Строка часа, которую процесс застал в БД до своего первого сохранения этого часа."""
+
+    checks: int = 0
+    errors: int = 0
+    relogins: int = 0
+    p50_ms: float = 0.0
+    p95_ms: float = 0.0
+
+
 class SqlStatsRepository:
+    """Статистика по часам.
+
+    Опрос копит счётчики часа в памяти с нуля и сохраняет их целиком (накопленным итогом).
+    После перезапуска в тот же час в БД уже лежит строка прошлого процесса: при первом
+    сохранении часа она запоминается как база, и в БД пишется база + счётчики процесса.
+    Повторные сохранения того же часа складываются с той же базой, а не с уже записанной
+    суммой, — задвоения нет.
+    """
+
+    # Сохраняются только текущий и только что закончившийся час: старые базы не нужны
+    _KEEP_BASES = timedelta(hours=2)
+
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
+        self._bases: dict[datetime, _HourBase] = {}
 
     async def save_hour(self, stats: PollStatsHour) -> None:
         async with self._sessions.begin() as session:
             row = await session.get(PollStatsHourRow, stats.hour)
+            base = self._bases.get(stats.hour)
+            if base is None:
+                base = (
+                    _HourBase()
+                    if row is None
+                    else _HourBase(row.checks, row.errors, row.relogins, row.p50_ms, row.p95_ms)
+                )
+                self._remember(stats.hour, base)
             if row is None:
                 row = PollStatsHourRow(hour=stats.hour)
                 session.add(row)
-            row.checks = stats.checks
-            row.errors = stats.errors
-            row.relogins = stats.relogins
-            row.p50_ms = stats.percentile(0.50)
-            row.p95_ms = stats.percentile(0.95)
+            row.checks = base.checks + stats.checks
+            row.errors = base.errors + stats.errors
+            row.relogins = base.relogins + stats.relogins
+            row.p50_ms, row.p95_ms = _merged_percentiles(base, stats)
+
+    def _remember(self, hour: datetime, base: _HourBase) -> None:
+        self._bases = {h: b for h, b in self._bases.items() if h > hour - self._KEEP_BASES}
+        self._bases[hour] = base
 
     async def since(self, since: datetime) -> list[PollStatsHour]:
         async with self._sessions() as session:
@@ -205,6 +240,20 @@ class SqlStatsRepository:
                 hour.latencies_ms = [row.p50_ms, row.p95_ms]
                 result.append(hour)
             return result
+
+
+def _merged_percentiles(base: _HourBase, stats: PollStatsHour) -> tuple[float, float]:
+    """Перцентили базы и замеров процесса.
+
+    Замеры прошлого процесса не хранятся — только его p50 и p95; как и в `since`, они
+    восстанавливаются двумя точками. Это приближение, а не точный перцентиль объединения.
+    """
+    if base.checks == 0:
+        return stats.percentile(0.50), stats.percentile(0.95)
+    if not stats.latencies_ms:
+        return base.p50_ms, base.p95_ms
+    merged = PollStatsHour(stats.hour, latencies_ms=[*stats.latencies_ms, base.p50_ms, base.p95_ms])
+    return merged.percentile(0.50), merged.percentile(0.95)
 
 
 class SqlEventLog:
@@ -224,7 +273,9 @@ class SqlEventLog:
             )
 
     async def last(self, limit: int, min_level: str = "WARNING") -> list[AppEvent]:
-        levels = [name for name, value in _LEVELS.items() if value >= _LEVELS.get(min_level, 30)]
+        names = logging.getLevelNamesMapping()
+        threshold = names.get(min_level, logging.WARNING)
+        levels = [name for name, value in names.items() if value >= threshold]
         async with self._sessions() as session:
             rows = await session.scalars(
                 select(AppEventRow)
