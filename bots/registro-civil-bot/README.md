@@ -16,7 +16,12 @@ CallMeBot. Записывается владелец сам — бот толь�
 
 Один ноутбук с Windows 11, Python 3.14, `uv`. Бот — часть монорепозитория: всё, что к нему
 относится, лежит в этом каталоге (`data/`, `logs/`, `.browsers/`, `.cache/` в git не попадают).
-Вне каталога — только секреты в Windows Credential Manager и задание Планировщика.
+Вне каталога — только секреты в Windows Credential Manager, задание Планировщика и журнал
+наблюдения `rcbot-journal` на рабочем столе (решение R6, см. ниже).
+
+Переменная окружения `RCBOT_HOME` (необязательная) переназначает каталог бота: оттуда берутся
+`.env`, `alembic.ini`, `data/`, `logs/`, `.browsers/`, `.cache/`. Без неё — каталог
+`bots/registro-civil-bot/`. Нужна тестам и особым случаям; в обычной работе её не задают.
 
 ## Быстрый старт (Windows 11)
 
@@ -55,7 +60,7 @@ rcbot.cmd run             работа в этом окне; постоянна�
 
 ```powershell
 uv run python dev.py setup --bot registro-civil-bot   # зависимости, .env, Chromium в .browsers/
-uv run --all-packages rcbot init                      # секреты, тема ntfy, ваш chat_id
+uv run --all-packages rcbot init                      # .env, номер этапа и заявки, секреты, тема ntfy, chat_id
 uv run --all-packages rcbot doctor                    # проверка всего
 ```
 
@@ -81,15 +86,18 @@ Chromium Playwright (его ставит `dev.py setup`, около 740 МБ). �
 
 | Команда | Что делает |
 |---|---|
-| `init` | Мастер: секреты в Credential Manager, тема ntfy, определение вашего chat_id |
+| `init` | Мастер: создаёт `.env` из `.env.example`, если его нет; спрашивает номер этапа (можно весь адрес шага «Agenda») и номер заявки и пишет их в `.env`; секреты в Credential Manager, тема ntfy, определение вашего chat_id |
 | `doctor [--offline] [--full]` | Версии, браузеры (Chrome, Edge, Chromium), секреты, настройки, OneDrive, доступ к хостам, часы; `--full` — ещё `pip-audit` |
 | `discover` | Разведка: окно браузера, вы входите сами, бот записывает очищенные запросы календаря |
 | `login [--check]` | Вход на сайт; `--check` — пускает ли сайт сразу на шаг «Agenda» |
 | `check --once` | Одна проверка календаря |
 | `run` | Постоянная работа (для отладки в консоли; в обычной жизни — через Планировщик) |
 | `simulate [--wait 600]` | Тестовая тревога во все каналы с повторами до «Вижу» |
-| `purge` | Удалить логи, временные файлы, карантин, снимки, дампы, кеш |
+| `purge` | Удалить логи, временные файлы, карантин, снимки, дампы, кеш (база, `.env` и Chromium остаются) |
 | `uninstall` | Удалить секреты из Credential Manager и задание Планировщика |
+
+Ни `purge`, ни `uninstall` не трогают журнал наблюдения: папку `rcbot-journal` на рабочем столе
+(или `RCBOT_JOURNAL_DIR`) после удаления бота удалите вручную.
 
 Автозапуск: `powershell -ExecutionPolicy Bypass -File bots\registro-civil-bot\scripts\register_task.ps1`
 (при входе в Windows, без окна, перезапуск при сбое). В настройках питания от сети: «Переводить
@@ -130,8 +138,8 @@ Chromium требуют `uv run python dev.py setup --bot registro-civil-bot`, �
 
 ## Управление из Telegram
 
-`/status`, `/pause [минуты]`, `/resume`, `/interval <сек>` (не меньше 10), `/test`, `/last`,
-`/relogin`, `/cleanup`, `/menu`. Тревога подтверждается кнопкой «✅ Вижу» или словом «ок».
+`/help` (и `/start`) — список команд; `/status`, `/pause [минуты]`, `/resume`, `/interval <сек>`
+(не меньше 10), `/test`, `/last`, `/relogin`, `/cleanup`, `/menu`. Тревога подтверждается кнопкой «✅ Вижу» или словом «ок».
 Если сайт потребует шаг 1 с контрольным вопросом, бот попросит пройти его в вашем браузере и
 нажать «Готово» — сам он на вопрос не отвечает.
 
