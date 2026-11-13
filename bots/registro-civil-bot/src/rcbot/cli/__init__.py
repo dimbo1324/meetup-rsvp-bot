@@ -10,11 +10,15 @@ from collections.abc import Callable, Sequence
 from pydantic import ValidationError
 
 from rcbot import __version__
+from rcbot.cli.exit_codes import EXIT_INTERRUPTED, EXIT_RUNNING, EXIT_SETTINGS
+from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretMissing
 
 logger = logging.getLogger(__name__)
 
 Handler = Callable[[argparse.Namespace], int]
+
+__all__ = ["EXIT_INTERRUPTED", "EXIT_RUNNING", "EXIT_SETTINGS", "main"]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -34,7 +38,10 @@ def _parser() -> argparse.ArgumentParser:
         "--check", action="store_true", help="только проверить вход и доступ к шагу 2"
     )
     check = sub.add_parser("check", help="проверить календарь")
-    check.add_argument("--once", action="store_true", help="одна проверка (по умолчанию)")
+    # Флаг оставлен для совместимости со скриптами и SPEC 4.5: проверка и так одна
+    check.add_argument(
+        "--once", action="store_true", help="одна проверка — по умолчанию; флаг не обязателен"
+    )
     sub.add_parser("run", help="постоянная работа")
     simulate = sub.add_parser("simulate", help="тестовый инцидент во все каналы")
     simulate.add_argument("--wait", type=int, default=600, help="сколько ждать «Вижу», секунд")
@@ -70,18 +77,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _handlers()[args.command](args)
     except SecretMissing as error:
         _fail(f"Ошибка: {error}")
-        return 2
+        return EXIT_SETTINGS
     except ValidationError as error:
         problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors())
         _fail(f"Ошибка настроек в .env: {problems}")
-        return 2
+        return EXIT_SETTINGS
     except KeyboardInterrupt:
-        return 130
+        return EXIT_INTERRUPTED
     except Exception as error:
         # Под pythonw.exe (Планировщик) консоли нет: причина падения должна остаться в логе
         logger.critical("необработанная ошибка в команде %s", args.command, exc_info=True)
         print(
-            f"Неожиданная ошибка {type(error).__name__}: подробности в logs/rcbot.log",
+            f"Неожиданная ошибка {type(error).__name__}: подробности в {Paths.default().log_file}",
             file=sys.stderr,
         )
         return 1

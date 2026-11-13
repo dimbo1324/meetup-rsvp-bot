@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import getpass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -18,12 +19,16 @@ from tests.conftest import MemoryKeyring
 from rcbot.cli import setup
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey, SecretStore
-from rcbot.config.settings import Settings
+from rcbot.config.settings import CALLMEBOT_HOST, Settings
+from rcbot.infrastructure.http.client import SafeHttp
+from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
 
 DOC = "SYN-DOC-0000001"
 PASSWORD = "syn-parol-Zx9!qL"
 TOKEN = "123456789:AAH-synthetic-token-abcdefghijklmnopqrstuvwxyz0123"
 SECRETS = (DOC, PASSWORD, TOKEN)
+# Одноразовый код владельца подменяется: тест должен знать, что «написать» боту
+CODE = "c0de42"
 
 
 class Wizard:
@@ -35,8 +40,12 @@ class Wizard:
         *,
         stage: list[str] | None = None,
         tramite: list[str] | None = None,
+        confirm: str = "да",
     ) -> None:
         self.answers = answers
+        # Ответ на «Это вы: …?» перед записью chat_id владельца
+        self.confirm = confirm
+        self.confirm_questions: list[str] = []
         self.prompts: dict[SecretKey, str] = {}
         self.hidden: dict[SecretKey, bool] = {}
         # Вопросы про номер этапа и номер заявки: пустой ответ — «пропустить»
@@ -45,6 +54,9 @@ class Wizard:
         self.case_questions: list[str] = []
 
     def _answer(self, prompt: str, hidden: bool) -> str:
+        if prompt.startswith("Это вы:"):
+            self.confirm_questions.append(prompt)
+            return self.confirm
         for name, queue in (("Номер этапа", self.stage), ("Номер заявки", self.tramite)):
             if prompt.startswith(name):
                 self.case_questions.append(name)
@@ -61,12 +73,23 @@ class Wizard:
         monkeypatch.setattr(getpass, "getpass", lambda prompt="": self._answer(prompt, True))
 
 
-def update(update_id: int, chat_id: int, chat_type: str, name: str = "Тест Владелец") -> Any:
+def update(
+    update_id: int,
+    chat_id: int,
+    chat_type: str,
+    name: str = "Тест Владелец",
+    *,
+    text: str = f"/start {CODE}",
+    date: datetime | None = None,
+) -> Any:
+    """Сообщение боту; по умолчанию — свежее и с верным кодом из консоли."""
     return SimpleNamespace(
         update_id=update_id,
         message=SimpleNamespace(
             chat=SimpleNamespace(id=chat_id, type=chat_type),
             from_user=SimpleNamespace(full_name=name),
+            text=text,
+            date=date or datetime.now(UTC) + timedelta(hours=1),
         ),
     )
 
@@ -110,6 +133,7 @@ def fake_bot(monkeypatch: pytest.MonkeyPatch) -> type[FakeBot]:
     FakeBot.poll_delay = 0.0
     monkeypatch.setattr(aiogram, "Bot", FakeBot)
     monkeypatch.setattr(setup, "CHAT_ID_WAIT_SEC", 0.3)
+    monkeypatch.setattr(setup, "_owner_code", lambda: CODE)
     return FakeBot
 
 
@@ -117,7 +141,7 @@ FULL = {
     SecretKey.DOC_NUMBER: DOC,
     SecretKey.PASSWORD: PASSWORD,
     SecretKey.TELEGRAM_TOKEN: TOKEN,
-    SecretKey.CALLMEBOT_USER: "owner_name",
+    SecretKey.CALLMEBOT_USER: "@owner_name",
 }
 
 
@@ -152,6 +176,8 @@ def test_первый_запуск_кладёт_секреты_в_keyring_и_о�
     assert stored(store, SecretKey.TELEGRAM_TOKEN) == TOKEN
     assert stored(store, SecretKey.TELEGRAM_CHAT_ID) == "777"
     assert "Владелец определён: Тест Владелец" in out
+    assert f"/start {CODE}" in out  # код показан в консоли до ожидания
+    assert wizard.confirm_questions == ["Это вы: Тест Владелец? [да/нет] "]
     assert paths.env_file.exists()
     assert "Создан" in out
     # Все пароли и токены вводятся скрыто, имя для звонка — открыто
@@ -285,10 +311,10 @@ def test_новое_значение_заменяет_старое(
 
 @pytest.mark.parametrize(
     ("typed", "saved"),
-    [("owner_name", "@owner_name"), ("@owner_name", "@owner_name"), ("  name  ", "@name")],
+    [("owner_name", "owner_name"), ("@owner_name", "@owner_name"), ("  name  ", "name")],
 )
 @pytest.mark.usefixtures("env_example")
-def test_к_имени_callmebot_добавляется_собака(
+def test_имя_callmebot_сохраняется_как_введено_собаку_добавляет_канал(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     fake_bot: type[FakeBot],
@@ -298,6 +324,11 @@ def test_к_имени_callmebot_добавляется_собака(
     Wizard({SecretKey.CALLMEBOT_USER: typed}).install(monkeypatch)
     run_init(capsys)
     assert stored(SecretStore(), SecretKey.CALLMEBOT_USER) == saved
+    # «@» перед именем ставит канал CallMeBot: мастер не дублирует это правило
+    notifier = CallMeBotNotifier(
+        SafeHttp([CALLMEBOT_HOST], timeout_sec=1), saved, "ru-RU-Standard-A"
+    )
+    assert notifier._user == f"@{saved.lstrip('@')}"  # type: ignore[attr-defined]
 
 
 @pytest.mark.usefixtures("env_example")
@@ -391,13 +422,98 @@ def test_сообщение_без_отправителя_пропускаетс
 
 
 @pytest.mark.usefixtures("env_example")
-def test_вебхук_снимается_без_потери_ожидающих_обновлений(
+def test_вебхук_снимается_и_старые_обновления_сбрасываются(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
 ) -> None:
+    """Сообщения, пришедшие боту до запуска мастера, владельцем никого не делают (SEC-1)."""
     Wizard(FULL).install(monkeypatch)
     fake_bot.batches = [[update(1, 5, "private")]]
     run_init(capsys)
-    assert fake_bot.instances[0].webhook_deleted == {"drop_pending_updates": False}
+    assert fake_bot.instances[0].webhook_deleted == {"drop_pending_updates": True}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["/start", "привет", "/start 000000", f"/start {CODE} лишнее", f"/help {CODE}", ""],
+    ids=["без-кода", "текст", "чужой-код", "лишние-слова", "другая-команда", "пусто"],
+)
+@pytest.mark.usefixtures("env_example")
+def test_сообщение_без_верного_кода_не_делает_владельцем(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_bot: type[FakeBot],
+    text: str,
+) -> None:
+    wizard = Wizard(FULL)
+    wizard.install(monkeypatch)
+    fake_bot.batches = [[update(10, 666, "private", "Чужой", text=text)]]
+
+    code, out = run_init(capsys)
+
+    assert code == 1
+    assert stored(SecretStore(), SecretKey.TELEGRAM_CHAT_ID) is None
+    assert wizard.confirm_questions == []
+    assert "Чужой" not in out
+
+
+@pytest.mark.parametrize(
+    "text", [f"/start {CODE}", CODE, f"  {CODE.upper()}  ", f"/start@rcbot_test_bot {CODE}"]
+)
+@pytest.mark.usefixtures("env_example")
+def test_код_принимается_с_start_и_без(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_bot: type[FakeBot],
+    text: str,
+) -> None:
+    Wizard(FULL).install(monkeypatch)
+    fake_bot.batches = [[update(10, 555, "private", text=text)]]
+    assert run_init(capsys)[0] == 0
+    assert stored(SecretStore(), SecretKey.TELEGRAM_CHAT_ID) == "555"
+
+
+@pytest.mark.usefixtures("env_example")
+def test_чужое_сообщение_без_кода_пропускается_а_владелец_с_кодом_принимается(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
+) -> None:
+    Wizard(FULL).install(monkeypatch)
+    fake_bot.batches = [
+        [update(10, 666, "private", "Чужой", text="/start")],
+        [update(11, 555, "private", "Владелец")],
+    ]
+    assert run_init(capsys)[0] == 0
+    assert stored(SecretStore(), SecretKey.TELEGRAM_CHAT_ID) == "555"
+
+
+@pytest.mark.usefixtures("env_example")
+def test_сообщение_до_начала_ожидания_игнорируется_даже_с_кодом(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
+) -> None:
+    Wizard(FULL).install(monkeypatch)
+    old = datetime.now(UTC) - timedelta(minutes=5)
+    fake_bot.batches = [[update(10, 666, "private", "Старое", date=old)]]
+
+    code, _ = run_init(capsys)
+
+    assert code == 1
+    assert stored(SecretStore(), SecretKey.TELEGRAM_CHAT_ID) is None
+
+
+@pytest.mark.usefixtures("env_example")
+def test_ответ_нет_на_подтверждение_не_записывает_chat_id(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
+) -> None:
+    wizard = Wizard(FULL, confirm="нет")
+    wizard.install(monkeypatch)
+    fake_bot.batches = [[update(10, 555, "private", "Кто-то")]]
+
+    code, out = run_init(capsys)
+
+    assert code == 1
+    assert wizard.confirm_questions == ["Это вы: Кто-то? [да/нет] "]
+    assert stored(SecretStore(), SecretKey.TELEGRAM_CHAT_ID) is None
+    assert "Владелец не записан" in out
+    assert "Готово" not in out
 
 
 @pytest.mark.usefixtures("env_example")
@@ -478,7 +594,8 @@ def test_parse_stage_принимает_номер_и_адрес(text: str, expe
     [
         "",
         "12",  # слишком короткий
-        "1234567890123456",  # слишком длинный
+        "1" * 3,  # три цифры: фильтр логов такое не маскирует
+        "1" * 16,  # слишком длинный
         "12ab34",
         f"http://bpmgob.mec.gub.uy/etapas/ejecutar/{STAGE}/1",  # не https
         f"https://evil.example/etapas/ejecutar/{STAGE}/1",  # чужой хост
@@ -493,7 +610,7 @@ def test_parse_stage_отклоняет_лишнее(text: str) -> None:
 
 def test_parse_tramite_только_цифры() -> None:
     assert setup.parse_tramite(f" {TRAMITE} ") == TRAMITE
-    for bad in ("", "12", "12ab", "<НОМЕР_ЗАЯВКИ>", "1" * 16):
+    for bad in ("", "12", "1" * 3, "12ab", "<НОМЕР_ЗАЯВКИ>", "1" * 16):
         assert setup.parse_tramite(bad) is None
 
 

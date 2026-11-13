@@ -29,6 +29,11 @@ from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.files import FileJournal
 
 CHAT_ID_WAIT_SEC = 180
+GET_UPDATES_TIMEOUT_SEC = 20
+OWNER_CODE_BYTES = 3
+CLOCK_DRIFT_MAX_SEC = 30
+BYTES_PER_MB = 2**20
+YES_ANSWERS = ("да", "д", "y", "yes")
 
 
 def _ask(key: SecretKey, *, hidden: bool, existing: bool) -> str:
@@ -38,8 +43,12 @@ def _ask(key: SecretKey, *, hidden: bool, existing: bool) -> str:
 
 
 AGENDA_URL_TEMPLATE = "https://bpmgob.mec.gub.uy/etapas/ejecutar/{stage}/1"
-_STAGE_URL = re.compile(r"^https://bpmgob\.mec\.gub\.uy/etapas/ejecutar/(\d{3,15})/\d{1,3}/?$")
-_NUMBER = re.compile(r"^\d{3,15}$")
+# Короче четырёх знаков фильтр логов значение не маскирует: такой номер утёк бы в логи (R1)
+NUMBER_MIN_DIGITS = 4
+NUMBER_MAX_DIGITS = 15
+_DIGITS = rf"\d{{{NUMBER_MIN_DIGITS},{NUMBER_MAX_DIGITS}}}"
+_STAGE_URL = re.compile(rf"^https://bpmgob\.mec\.gub\.uy/etapas/ejecutar/({_DIGITS})/\d{{1,3}}/?$")
+_NUMBER = re.compile(rf"^{_DIGITS}$")
 ASK_ATTEMPTS = 3
 
 
@@ -77,14 +86,17 @@ def _ask_number(prompt: str, parse: Callable[[str], str | None]) -> str | None:
             return None
         if (value := parse(answer)) is not None:
             return value
-        print("Не подошло: нужны только цифры (от 3 до 15) — проверьте и введите ещё раз.")
+        print(
+            f"Не подошло: нужны только цифры (от {NUMBER_MIN_DIGITS} до {NUMBER_MAX_DIGITS}) — "
+            "проверьте и введите ещё раз."
+        )
     return None
 
 
 def _ask_case(core: Core) -> None:
     """Номер этапа и номер заявки: нужны один раз, лежат в локальном `.env`, не в репозитории."""
     s = core.settings
-    if "<" in s.agenda_url:
+    if not s.agenda_configured:
         stage = _ask_number(
             "Номер этапа — число из адресной строки шага «Agenda» (можно весь адрес;\n"
             "  Enter — пропустить и вписать в .env позже): ",
@@ -103,7 +115,11 @@ def _ask_case(core: Core) -> None:
 
 
 def cmd_init(_: argparse.Namespace) -> int:
-    core = build_core(command="init")
+    with build_core(command="init") as core:
+        return _init(core)
+
+
+def _init(core: Core) -> int:
     if not core.paths.env_file.exists():
         example = core.paths.home / ".env.example"
         shutil.copyfile(example, core.paths.env_file)
@@ -120,8 +136,6 @@ def cmd_init(_: argparse.Namespace) -> int:
     ):
         value = _ask(key, hidden=hidden, existing=present[key])
         if value:
-            if key is SecretKey.CALLMEBOT_USER and not value.startswith("@"):
-                value = f"@{value}"
             core.secrets.set(key, value)
         elif not present[key] and key in REQUIRED:
             print(f"Пропущено обязательное: {DESCRIPTIONS[key]}. Запустите init ещё раз.")
@@ -138,9 +152,13 @@ def cmd_init(_: argparse.Namespace) -> int:
 
     token = core.secrets.get(SecretKey.TELEGRAM_TOKEN)
     if token is not None and not present[SecretKey.TELEGRAM_CHAT_ID]:
-        print(f"Напишите своему боту /start в Telegram — жду до {CHAT_ID_WAIT_SEC} секунд…")
+        code = _owner_code()
+        print(
+            f"Напишите своему боту в личные сообщения Telegram: /start {code}\n"
+            f"(или просто {code}) — жду до {CHAT_ID_WAIT_SEC} секунд…"
+        )
         try:
-            chat = asyncio.run(_wait_owner_chat(token.get_secret_value()))
+            chat = asyncio.run(_wait_owner_chat(token.get_secret_value(), code, core.clock.now()))
         except TelegramAPIError as error:
             print(
                 f"Telegram отклонил запрос ({type(error).__name__}): проверьте токен и сеть, "
@@ -151,6 +169,9 @@ def cmd_init(_: argparse.Namespace) -> int:
             print("Сообщение не пришло. Запустите `rcbot init` ещё раз.")
             return 1
         chat_id, name = chat
+        if input(f"Это вы: {name}? [да/нет] ").strip().lower() not in YES_ANSWERS:
+            print("Владелец не записан. Запустите `rcbot init` ещё раз.")
+            return 1
         core.secrets.set(SecretKey.TELEGRAM_CHAT_ID, str(chat_id))
         print(f"Владелец определён: {name}. Бот будет отвечать только ему.")
     if missing := [k for k in REQUIRED if not core.secrets.present()[k]]:
@@ -160,20 +181,44 @@ def cmd_init(_: argparse.Namespace) -> int:
     return 0
 
 
-async def _wait_owner_chat(token: str) -> tuple[int, str] | None:
+def _owner_code() -> str:
+    return secrets.token_hex(OWNER_CODE_BYTES)
+
+
+def _carries_code(text: str | None, code: str) -> bool:
+    """`/start <код>`, `/start@имя_бота <код>` или просто `<код>`."""
+    words = (text or "").split()
+    if words and words[0].split("@")[0] == "/start":
+        words = words[1:]
+    return len(words) == 1 and secrets.compare_digest(words[0].lower().encode(), code.encode())
+
+
+async def _wait_owner_chat(token: str, code: str, since: datetime) -> tuple[int, str] | None:
+    """Владелец — тот, кто прислал одноразовый код из консоли: первый встречный им не станет."""
     from aiogram import Bot
 
+    # Telegram ставит дату с точностью до секунды: сообщение той же секунды — уже после начала
+    since = since.replace(microsecond=0)
     bot = Bot(token)
     try:
-        await bot.delete_webhook(drop_pending_updates=False)
+        # Старые сообщения, пришедшие до запуска мастера, к владельцу отношения не имеют
+        await bot.delete_webhook(drop_pending_updates=True)
         offset: int | None = None
         deadline = asyncio.get_running_loop().time() + CHAT_ID_WAIT_SEC
         while asyncio.get_running_loop().time() < deadline:
-            updates = await bot.get_updates(offset=offset, timeout=20, allowed_updates=["message"])
+            updates = await bot.get_updates(
+                offset=offset, timeout=GET_UPDATES_TIMEOUT_SEC, allowed_updates=["message"]
+            )
             for update in updates:
                 offset = update.update_id + 1
                 message = update.message
-                if message and message.chat.type == "private" and message.from_user:
+                if (
+                    message
+                    and message.chat.type == "private"
+                    and message.from_user
+                    and message.date >= since
+                    and _carries_code(message.text, code)
+                ):
                     await bot.get_updates(offset=offset, timeout=0)
                     return message.chat.id, message.from_user.full_name
         return None
@@ -229,7 +274,7 @@ def _doctor_journal(core: Core) -> None:
         return
     root = core.journal.root
     size = core.journal.size()
-    _line(True, f"Журнал наблюдения: {root} ({size / 2**20:.1f} МБ)")
+    _line(True, f"Журнал наблюдения: {root} ({size / BYTES_PER_MB:.1f} МБ)")
     _line(
         True,
         f"Квота журнала: больше {s.journal_max_gb:g} ГБ — очистка старых дней до "
@@ -263,7 +308,11 @@ def _doctor_browsers(choice: str) -> bool:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    core = build_core(console=False, command="doctor")
+    with build_core(console=False, command="doctor") as core:
+        return _doctor(core, full=args.full, offline=args.offline)
+
+
+def _doctor(core: Core, *, full: bool, offline: bool) -> int:
     ok = True
     py = sys.version_info
     _line(py[:2] == (3, 14), f"Python {py.major}.{py.minor}.{py.micro} (нужен 3.14)")
@@ -294,17 +343,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     _doctor_journal(core)
 
-    probes = [] if args.offline else asyncio.run(_probe_hosts(core.settings))
+    probes = [] if offline else asyncio.run(_probe_hosts(core.settings))
     for host, reachable, detail, drift in probes:
         ok &= reachable
         _line(reachable, f"{host}: {detail}")
-        if drift is not None and abs(drift) > 30:
+        if drift is not None and abs(drift) > CLOCK_DRIFT_MAX_SEC:
             _line(
                 False,
                 f"часы ПК расходятся с {host} на {drift:+.0f} с — включите синхронизацию времени",
             )
 
-    if args.full:
+    if full:
         audit = subprocess.run([sys.executable, "-m", "pip_audit", "--skip-editable"], check=False)
         ok &= audit.returncode == 0
         _line(audit.returncode == 0, "pip-audit: известных уязвимостей нет")
