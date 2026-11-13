@@ -10,6 +10,7 @@ from itertools import pairwise
 import pytest
 
 from rcbot.application import poll_loop
+from rcbot.application.liveness import HUNG_CHECK_SEC
 from rcbot.domain.models import Channel, PollState, SourceKind
 from tests.e2e.helpers import MIN_GAP
 from tests.e2e.site import FakeSite, SiteAuthenticator
@@ -96,9 +97,9 @@ async def test_монитор_живости_замечает_зависший_�
     old_task = stand.supervisor._tasks["poll"]
     assert stand.loop.tick_started_at is not None, "проверка идёт и не заканчивается"
 
-    await stand.advance(240)  # норма — до 150 с, порог монитора 240 с
+    await stand.advance(HUNG_CHECK_SEC)  # норма — до запроса и входа, дальше порог монитора
     assert stand.liveness.recoveries == 0 and stand.journal.read_status()["hung"] is False
-    await stand.advance(30)  # ближайший тик монитора видит 270 с
+    await stand.advance(30)  # ближайший тик монитора видит время за порогом
     assert stand.liveness.recoveries == 1
     assert stand.journal.read_status()["hung"] is True
 
@@ -133,7 +134,7 @@ async def test_зависший_вход_тоже_ловится_и_блокир
     stand = await make_stand(site=site, auth=auth, ignore={"tick"})
     assert stand.session.logins == 0, "первый вход завис"
 
-    await stand.advance(270)
+    await stand.advance(HUNG_CHECK_SEC + 30)
     assert stand.liveness.recoveries == 1
     await stand.advance(30)
     assert stand.session.logins >= 1, "после перезапуска вход прошёл: блокировка освобождена"

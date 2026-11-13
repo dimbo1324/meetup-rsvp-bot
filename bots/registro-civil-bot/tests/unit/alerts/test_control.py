@@ -240,11 +240,21 @@ async def test_relogin_отложен_после_тревоги_и_сообща�
     assert ctl.rig.session.logins == 0
 
 
-async def test_relogin_неожиданное_исключение_не_маскируется() -> None:
+async def test_relogin_любая_ошибка_возвращается_текстом_а_не_исключением() -> None:
+    # Раньше чужое исключение (нет секрета, сбой keyring) уходило в обработчик Telegram
     ctl = make_control()
-    ctl.rig.session._auth = FakeAuthenticator(failures=[RuntimeError("баг")])
-    with pytest.raises(RuntimeError):
-        await ctl.controller.relogin()
+    ctl.rig.session._auth = FakeAuthenticator(failures=[RuntimeError("секретный текст")])
+    text = await ctl.controller.relogin()
+    assert text == "RuntimeError"  # у чужих исключений — только имя типа, без текста
+    assert "секретный" not in text
+
+
+async def test_relogin_нет_секрета_возвращается_текстом() -> None:
+    from rcbot.config.secrets import SecretMissing
+
+    ctl = make_control()
+    ctl.rig.session._auth = FakeAuthenticator(failures=[SecretMissing("нет секрета")])
+    assert await ctl.controller.relogin() == "SecretMissing"
 
 
 # --- очистка, инциденты, ошибки ---

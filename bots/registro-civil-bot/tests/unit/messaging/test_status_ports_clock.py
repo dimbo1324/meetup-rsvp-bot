@@ -35,7 +35,6 @@ def test_статус_по_умолчанию_работает_без_ошибо
     assert (status.checks_total, status.errors_total) == (0, 0)
     assert status.last_check_at is None and status.last_latency_ms is None
     assert status.last_error == "" and status.last_error_at is None
-    assert status.next_check_in_sec is None
     assert status.recent_latencies == []
 
 

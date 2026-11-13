@@ -9,11 +9,10 @@ from datetime import datetime, timedelta
 
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.incidents import IncidentBook
-from rcbot.application.poll_loop import PollLoop
+from rcbot.application.poll_loop import PollLoop, describe_error
 from rcbot.application.ports import Clock, EventLog, IncidentRepository, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
-from rcbot.domain.errors import RcbotError
 from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, Incident, SourceKind
 
@@ -155,8 +154,8 @@ class Controller:
         self._journal.event("command.relogin", "повторный вход по команде")
         try:
             await self._loop.relogin()
-        except RcbotError as error:
-            return str(error)
+        except Exception as error:  # отказ входа, нет секрета, сбой keyring: текст, а не падение
+            return describe_error(error)
         return ""
 
     async def cleanup(self) -> dict[str, int]:

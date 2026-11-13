@@ -7,10 +7,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import random
 import traceback
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import replace
 from datetime import datetime
 from pathlib import PurePath
@@ -18,6 +19,7 @@ from typing import Any
 
 from rcbot.application.background import BackgroundTasks
 from rcbot.application.bus import EventBus
+from rcbot.application.hourly_stats import HourlyStats
 from rcbot.application.ports import (
     AvailabilitySource,
     CheckRecord,
@@ -65,14 +67,24 @@ BACKOFF_START_SEC = 30.0
 BACKOFF_MAX_SEC = 900.0
 RATE_LIMIT_PAUSE_SEC = 900.0
 MANUAL_RECHECK_SEC = 900.0
+# Бессрочная пауза: состояние перепроверяется раз в это время (команда /resume будит цикл сразу)
+PAUSE_RECHECK_SEC = 900.0
 REAUTH_RETRY_SEC = 30.0
 REAUTH_FAILURES_TO_BACKOFF = 3
 UNEXPECTED_TO_SWITCH = 3
+# Со скольки подряд идущих сбоев состояние становится BACKOFF и владельцу уходит сообщение
+BACKOFF_STATE_AFTER = 2
 # Проверка дольше этого прерывается, браузер перезапускается (защита от зависания)
 FETCH_TIMEOUT_SEC = 150.0
+# Вход внутри проверки (после SessionExpired) дольше этого прерывается; шаги входа в auth.py
+# (30 с на шаг, 60 с на возврат, 45 с на навигацию) укладываются с запасом
+LOGIN_TIMEOUT_SEC = 240.0
 
 
-def _describe(error: BaseException) -> str:
+_ErrorHandler = Callable[[str], float | Awaitable[float]]
+
+
+def describe_error(error: BaseException) -> str:
     """Текст ошибки для журнала: свои исключения безопасны, чужие — только имя типа."""
     return str(error) if isinstance(error, RcbotError) else type(error).__name__
 
@@ -113,7 +125,6 @@ class PollLoop:
         self._clock = clock
         self.runtime = runtime
         self._runtime_store = runtime_store
-        self._stats = stats
         self._event_log = event_log
         self._journal: Journal = journal or NullJournal()
         self._target = target
@@ -123,6 +134,7 @@ class PollLoop:
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
         self._background = BackgroundTasks("цикл опроса")
+        self._hourly = HourlyStats(clock, stats, self._background)
         self._next_due = 0.0
         # Не начинать проверку раньше этого момента: минимум между запросами (SPEC 0.3, правило 3)
         # держится при любых пробуждениях (/interval, «Готово», /resume, вход по команде)
@@ -132,7 +144,6 @@ class PollLoop:
         self._backoff_step = 0
         self._reauth_failures = 0
         self._unexpected_streak = 0
-        self._hour: PollStatsHour | None = None
         # Ход цикла для обнаружения зависаний (application/liveness.py)
         self.tick_started_at: float | None = None
         self.last_tick_finished_at: float | None = None
@@ -198,7 +209,7 @@ class PollLoop:
                 if self.runtime.paused(now):
                     self._set_state(PollState.PAUSED, "пауза по команде")
                     until = self.runtime.paused_until
-                    pause_sec = (until - now).total_seconds() if until else BACKOFF_MAX_SEC
+                    pause_sec = (until - now).total_seconds() if until else PAUSE_RECHECK_SEC
                     self._next_due = self._clock.monotonic() + pause_sec
                     await self._wait(pause_sec)
                     continue
@@ -212,7 +223,6 @@ class PollLoop:
                     delay = await self._tick()
                 except Exception as error:  # сбой самого цикла, не источника: опрос не рвём
                     delay = self._loop_crashed(error)
-                self.status.next_check_in_sec = delay
                 await self._wait(delay)
         finally:
             # Ещё и при отмене задачи (остановка, перезапуск): статистика часа не теряется
@@ -271,9 +281,11 @@ class PollLoop:
             async with asyncio.timeout(FETCH_TIMEOUT_SEC) as scope:
                 snapshot = await self._source.fetch(target)
         except Exception as error:  # источник мог бросить что угодно: цикл не должен падать
+            # Длительность — до разбора ошибки: повторный вход в «время ответа» не входит
+            duration_ms = (self._clock.monotonic() - started) * 1000
             timed_out = isinstance(error, TimeoutError) and scope.expired()
             delay = await self._handle_error(error, timed_out=timed_out)
-            self._record_check(None, (self._clock.monotonic() - started) * 1000, error)
+            self._record_check(None, duration_ms, error, interval_sec=delay)
             return delay
         finally:
             self.tick_started_at = None
@@ -288,12 +300,14 @@ class PollLoop:
         self.status.last_latency_ms = snapshot.latency_ms
         self.status.checks_total += 1
         self.status.note_latency(snapshot.latency_ms)
-        self._count(latency_ms=snapshot.latency_ms)
+        self._hourly.count(latency_ms=snapshot.latency_ms)
         event = self._detector.compare(snapshot)
         if event is not None:
             self._bus.publish(event)
         delay = self._schedule_next()
-        self._record_check(snapshot, snapshot.latency_ms, None)
+        self._record_check(
+            snapshot, snapshot.latency_ms, None, interval_sec=self.status.interval_sec
+        )
         return delay
 
     async def _handle_error(self, error: Exception, *, timed_out: bool = False) -> float:
@@ -305,21 +319,28 @@ class PollLoop:
             return self._backoff(reason)
         if not isinstance(error, RcbotError):
             return self._source_crashed(error)
-        if isinstance(error, SessionExpired):
-            return await self._reauth(str(error))
-        if isinstance(error, ManualStepRequired):
-            return self._needs_manual(str(error))
-        if isinstance(error, RateLimited):
-            return await self._rate_limited(str(error))
-        if isinstance(error, UnexpectedResponse):
-            return self._unexpected(str(error))
-        if isinstance(error, SourceNotConfigured):
-            if self._switch_to_fallback(str(error)):
-                return self._delay(MIN_POLL_INTERVAL_SEC)
-            return self._backoff(str(error))
-        if isinstance(error, (SiteUnavailable, HostNotAllowed)):
-            return self._backoff(str(error))
+        for error_type, handler in self._error_handlers():
+            if isinstance(error, error_type):
+                outcome = handler(str(error))
+                return await outcome if inspect.isawaitable(outcome) else outcome
         return self._backoff(f"{type(error).__name__}: {error}")
+
+    def _error_handlers(self) -> tuple[tuple[type[RcbotError], _ErrorHandler], ...]:
+        """Что делать с каждой ошибкой источника; прочие ошибки бота — обычное отступление."""
+        return (
+            (SessionExpired, self._reauth),
+            (ManualStepRequired, self._needs_manual),
+            (RateLimited, self._rate_limited),
+            (UnexpectedResponse, self._unexpected),
+            (SourceNotConfigured, self._source_not_configured),
+            (SiteUnavailable, self._backoff),
+            (HostNotAllowed, self._backoff),
+        )
+
+    def _source_not_configured(self, reason: str) -> float:
+        if self._switch_to_fallback(reason):
+            return self._delay(self._min_spacing())
+        return self._backoff(reason)
 
     def _source_crashed(self, error: BaseException) -> float:
         """Источник бросил не наше исключение (баг адаптера, сбой браузера): ведём себя как при
@@ -337,7 +358,12 @@ class PollLoop:
         return self._backoff(reason)
 
     def _record_check(
-        self, snapshot: AvailabilitySnapshot | None, latency_ms: float, error: BaseException | None
+        self,
+        snapshot: AvailabilitySnapshot | None,
+        latency_ms: float,
+        error: BaseException | None,
+        *,
+        interval_sec: float,
     ) -> None:
         self._journal.check(
             CheckRecord(
@@ -347,9 +373,9 @@ class PollLoop:
                 slots=snapshot.slots if snapshot else frozenset(),
                 latency_ms=latency_ms,
                 state=self.status.state.value,
-                interval_sec=self.status.interval_sec,
+                interval_sec=interval_sec,
                 error_kind=type(error).__name__ if error else "",
-                error=_describe(error) if error else "",
+                error=describe_error(error) if error else "",
             )
         )
 
@@ -415,7 +441,8 @@ class PollLoop:
         self._session.mark_expired()
         self._journal.event("login.start", f"вход на сайт: {reason}")
         try:
-            await self._session.relogin(reason)
+            async with asyncio.timeout(LOGIN_TIMEOUT_SEC):
+                await self._session.relogin(reason)
         except ReloginDeferred:
             return self._delay(max(REAUTH_RETRY_SEC, self._session.quiet_remaining()))
         except ReloginBudgetExceeded as error:
@@ -426,8 +453,15 @@ class PollLoop:
         except RateLimited as error:
             # Страница входа заблокирована шлюзом: не стучимся каждые 30 с, а отступаем (D4)
             return await self._rate_limited(f"вход: {error}")
+        except SiteUnavailable as error:
+            # Сайт входа недоступен: то же экспоненциальное отступление, что и у проверки
+            return self._backoff(f"вход: {error}")
         except Exception as error:  # вход мог упасть и не нашим исключением
-            description = _describe(error)
+            description = (
+                f"вход не уложился в {LOGIN_TIMEOUT_SEC:g} с"
+                if isinstance(error, TimeoutError)
+                else describe_error(error)
+            )
             self._reauth_failures += 1
             self._journal.event("login.failed", f"вход не удался: {description}", "WARNING")
             self._error(f"вход не удался: {description}")
@@ -473,7 +507,7 @@ class PollLoop:
             and self._switch_to_fallback(f"{self._unexpected_streak} неожиданных ответа подряд")
         ):
             self._error(reason)  # и последний неожиданный ответ — тоже ошибка проверки
-            return self._delay(MIN_POLL_INTERVAL_SEC)
+            return self._delay(self._min_spacing())
         return self._backoff(reason)
 
     def _switch_to_fallback(self, reason: str) -> bool:
@@ -483,7 +517,7 @@ class PollLoop:
         self._source, self._fallback = self._fallback, None
         self._unexpected_streak = 0
         # Новый источник ещё не опрашивался, но запросы к сайту не чаще минимума
-        self._not_before = self._clock.monotonic() + MIN_POLL_INTERVAL_SEC
+        self._not_before = self._clock.monotonic() + self._min_spacing()
         self.status.source = self._source.kind
         self._bus.publish(SourceSwitched(self._clock.now(), old.kind, self._source.kind, reason))
         self._spawn(old.close())
@@ -494,7 +528,7 @@ class PollLoop:
         self._error(reason)
         self._backoff_step += 1
         # Одиночный сбой сети — не повод беспокоить владельца: в BACKOFF со второго подряд
-        if self._backoff_step >= 2:
+        if self._backoff_step >= BACKOFF_STATE_AFTER:
             self._set_state(PollState.BACKOFF, reason)
         return self._delay(self._backoff_delay())
 
@@ -521,7 +555,7 @@ class PollLoop:
         self.status.errors_total += 1
         self.status.last_error = reason
         self.status.last_error_at = self._clock.now()
-        self._count(error=True)
+        self._hourly.count(error=True)
         logger.warning("проверка не удалась: %s", reason)
 
     def _count_relogins(self) -> None:
@@ -529,37 +563,17 @@ class PollLoop:
         done = self._session.logins - self._logins_counted
         if done > 0:
             self._logins_counted = self._session.logins
-            self._count(relogins=done)
-
-    def _count(
-        self, *, latency_ms: float | None = None, error: bool = False, relogins: int = 0
-    ) -> None:
-        now = self._clock.now()
-        hour = now.replace(minute=0, second=0, microsecond=0)
-        if self._hour is not None and self._hour.hour != hour:
-            self._spawn(self._stats.save_hour(self._hour))
-            self._hour = None
-        if self._hour is None:
-            self._hour = PollStatsHour(hour)
-        if latency_ms is not None:
-            self._hour.checks += 1
-            self._hour.latencies_ms.append(latency_ms)
-        self._hour.errors += int(error)
-        self._hour.relogins += relogins
+            self._hourly.count(relogins=done)
 
     async def _flush_hour(self) -> None:
-        if self._hour is not None:
-            try:
-                await self._stats.save_hour(self._hour)
-            except Exception as error:  # остановку не задерживаем из-за сбоя записи статистики
-                logger.warning("статистика часа не сохранена: %s", type(error).__name__)
+        await self._hourly.flush()
         await self._background.drain()
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
         self._background.spawn(coro)
 
     def current_hour(self) -> PollStatsHour | None:
-        return self._hour
+        return self._hourly.current
 
     @property
     def source_kind(self) -> SourceKind:
