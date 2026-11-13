@@ -77,6 +77,20 @@ class Slot:
         )
 
 
+def iso_days(slots: frozenset[Slot]) -> list[str]:
+    """Дни слотов без повторов, по порядку, в ISO-формате: время слота здесь не важно."""
+    return sorted({slot.day.isoformat() for slot in slots})
+
+
+def percentile(values: list[float], q: float) -> float:
+    """Перцентиль по ближайшему рангу; без данных — 0, а не исключение."""
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
+    return ordered[index]
+
+
 def fingerprint_of(slots: frozenset[Slot]) -> str:
     joined = "|".join(slot.label() for slot in sorted(slots))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
@@ -130,6 +144,8 @@ class Alert:
     kind: AlertKind
     text: str
     call_text: str = ""
+    # Запасной текст звонка на другом голосе, если основной не принят; пусто — без запасного
+    call_fallback_text: str = ""
     push_title: str = ""
     push_text: str = ""
     action: AlertAction = AlertAction.NONE
@@ -157,11 +173,7 @@ class PollStatsHour:
     latencies_ms: list[float] = field(default_factory=list)
 
     def percentile(self, q: float) -> float:
-        if not self.latencies_ms:
-            return 0.0
-        ordered = sorted(self.latencies_ms)
-        index = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
-        return ordered[index]
+        return percentile(self.latencies_ms, q)
 
 
 @dataclass(frozen=True)

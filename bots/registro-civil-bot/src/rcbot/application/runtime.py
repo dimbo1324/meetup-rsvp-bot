@@ -1,6 +1,6 @@
 """Настройки, меняемые из Telegram (таблица `kv_settings`), и лестница частоты опроса (D4).
 
-Нижняя граница интервала зашита в `config.settings` и проверяется здесь ещё раз: ни `.env`, ни
+Нижняя граница интервала зашита в `domain.limits` и проверяется здесь ещё раз: ни `.env`, ни
 Telegram не могут задать меньше 10 с (SPEC 0.3, правило 3; критерий приёмки 9).
 """
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from rcbot.application.ports import KeyValueStore
-from rcbot.config.settings import (
+from rcbot.domain.limits import (
     MAX_MONTHS_AHEAD,
     MAX_POLL_INTERVAL_SEC,
     MIN_MONTHS_AHEAD,
@@ -38,6 +38,10 @@ def clamp_interval(seconds: float) -> float:
     if math.isnan(seconds):
         raise ValueError("интервал опроса должен быть числом")
     return min(max(seconds, MIN_POLL_INTERVAL_SEC), MAX_POLL_INTERVAL_SEC)
+
+
+def clamp_months(months: int) -> int:
+    return min(max(months, MIN_MONTHS_AHEAD), MAX_MONTHS_AHEAD)
 
 
 @dataclass
@@ -119,7 +123,7 @@ class RuntimeStore:
         started = now if stored_start is None else min(stored_start, now)
         settings = RuntimeSettings(
             base_interval_sec=clamp_interval(interval),
-            months_ahead=min(max(months, MIN_MONTHS_AHEAD), MAX_MONTHS_AHEAD),
+            months_ahead=clamp_months(months),
             ladder_started_at=started,
             paused_until=_parse(values.get(K_PAUSED_UNTIL), _moment, None),
             channels_off=_channels(values.get(K_CHANNELS_OFF, "")),

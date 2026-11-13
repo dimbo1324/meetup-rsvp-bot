@@ -15,13 +15,17 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from rcbot import __version__
-from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC, PollLoop
+from rcbot.application.messages import MessageComposer
+from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC, LOGIN_TIMEOUT_SEC, PollLoop
 from rcbot.application.ports import Clock, Journal
 
 logger = logging.getLogger(__name__)
 
 STATUS_EVERY_SEC = 30.0
-HUNG_CHECK_SEC = FETCH_TIMEOUT_SEC + 90.0
+# Проверка — это запрос (до FETCH_TIMEOUT_SEC) и повторный вход после него (до LOGIN_TIMEOUT_SEC):
+# порог выше обоих, иначе монитор перезапускал бы цикл, пока вход ещё законно идёт
+HUNG_MARGIN_SEC = 90.0
+HUNG_CHECK_SEC = FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC + HUNG_MARGIN_SEC
 HUNG_LATE_SEC = 180.0
 # Если после перезапуска цикл всё ещё завис, лечим снова не чаще, чем раз в это время
 HUNG_RETRY_SEC = 300.0
@@ -52,7 +56,8 @@ class LivenessMonitor:
         mono = self._clock.monotonic()
         started = self._loop.tick_started_at
         if started is not None and mono - started > HUNG_CHECK_SEC:
-            return f"проверка идёт {mono - started:.0f} с (норма — до {FETCH_TIMEOUT_SEC:.0f} с)"
+            normal = FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC
+            return f"проверка идёт {mono - started:.0f} с (норма — до {normal:.0f} с)"
         late = mono - self._loop.next_due
         if started is None and self._loop.next_due > 0 and late > HUNG_LATE_SEC:
             return f"следующая проверка опаздывает на {late:.0f} с"
@@ -92,7 +97,7 @@ class LivenessMonitor:
         logger.error("цикл опроса завис: %s; перезапуск", problem)
         self._journal.event("liveness.hung", f"цикл опроса завис: {problem}; перезапуск", "ERROR")
         try:
-            await self._notify(f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его и браузер.")
+            await self._notify(MessageComposer.poll_hung(problem))
         except Exception as error:  # сообщение не должно мешать восстановлению
             logger.warning("сообщение о зависании не отправлено: %s", type(error).__name__)
         try:

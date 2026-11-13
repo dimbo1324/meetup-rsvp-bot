@@ -15,6 +15,7 @@ from tests.integration.process.harness import CHAT_ID, TOKEN, Rig, build_rig
 
 from rcbot import runner
 from rcbot.application.alerting import RepeatPolicy
+from rcbot.application.liveness import HUNG_CHECK_SEC
 from rcbot.application.poll_loop import PollLoop
 from rcbot.bot import texts
 from rcbot.config.secrets import SecretKey, SecretMissing, SecretStore
@@ -491,7 +492,7 @@ async def test_зависший_опрос_перезапускается_мон
         await rig.until(lambda: len(rig.dom.calls) == 1, "зависшая проверка")
         assert rig.dom.closed == 0
 
-        await rig.clock.advance(300)  # монитор: проверка идёт дольше HUNG_CHECK_SEC
+        await rig.clock.advance(HUNG_CHECK_SEC + 60)  # монитор: проверка идёт дольше порога
         await rig.until(lambda: len(rig.dom.calls) >= 2, "перезапущенная проверка")
 
         assert rig.dom.closed >= 1  # браузер закрыт: зависшая проверка прервана

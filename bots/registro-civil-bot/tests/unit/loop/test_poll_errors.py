@@ -33,6 +33,7 @@ from rcbot.domain.events import (
     SlotsAppeared,
     SourceSwitched,
 )
+from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC
 from rcbot.domain.models import PollState, SourceKind
 
 EMPTY: frozenset = frozenset()  # type: ignore[type-arg]
@@ -300,7 +301,9 @@ async def test_три_неожиданных_ответа_api_включают_�
     assert rig.loop.status.source is SourceKind.DOM
     assert rig.loop.status.errors_total == 3
     await rig.advance(10)
-    assert rig.rel(rig.fallback.starts) == [100]  # type: ignore[union-attr]
+    assert rig.fallback.starts == []  # type: ignore[union-attr]  # DomSource: не чаще раза в 60 с
+    await rig.advance(MIN_DOM_POLL_INTERVAL_SEC - 10)
+    assert rig.rel(rig.fallback.starts) == [90 + MIN_DOM_POLL_INTERVAL_SEC]  # type: ignore[union-attr]
     await rig.kill()
 
 
@@ -355,15 +358,16 @@ async def test_DomSource_на_неожиданном_ответе_не_пере�
     await rig.kill()
 
 
-async def test_источник_не_настроен_переключение_на_запасной_через_10_с() -> None:
+async def test_источник_не_настроен_переключение_на_запасной_через_60_с() -> None:
+    # Запасной источник — DomSource: минимум между его запросами 60 с, а не 10 с API (COL-11)
     rig = make_rig([SourceNotConfigured("адрес API не задан")], fallback_script=[EMPTY])
     await rig.start()
     assert len(rig.of_type(SourceSwitched)) == 1
-    assert rig.loop.next_due - rig.clock.monotonic() == 10.0
-    await rig.advance(9.9)
+    assert rig.loop.next_due - rig.clock.monotonic() == MIN_DOM_POLL_INTERVAL_SEC
+    await rig.advance(MIN_DOM_POLL_INTERVAL_SEC - 0.1)
     assert rig.fallback.starts == []  # type: ignore[union-attr]
     await rig.advance(0.1)
-    assert rig.rel(rig.fallback.starts) == [10]  # type: ignore[union-attr]
+    assert rig.rel(rig.fallback.starts) == [MIN_DOM_POLL_INTERVAL_SEC]  # type: ignore[union-attr]
     assert rig.source.closed == 1
     await rig.kill()
 
@@ -565,4 +569,60 @@ async def test_несколько_разных_сбоев_подряд_нара�
     assert rig.loop.status.state is B
     await rig.advance(60)
     assert rig.rel(rig.source.starts) == [0, 30, 90]
+    await rig.kill()
+
+
+# --- вход внутри проверки: отступление, таймаут, учёт времени (COL-4, COL-5, COL-7) ---
+
+
+async def test_сайт_входа_недоступен_это_экспоненциальное_отступление_а_не_30_с() -> None:
+    rig = make_rig(
+        [SessionExpired("x"), SessionExpired("x"), SessionExpired("x"), EMPTY],
+        failures=[SiteUnavailable("503"), SiteUnavailable("503")],
+    )
+    await rig.start()
+    await rig.advance(30)  # вторая неудача входа: пауза растёт 30 → 60
+    assert rig.loop.status.state is B
+    await rig.advance(60)
+    assert rig.rel(rig.source.starts)[:3] == [0, 30, 90]
+    assert rig.journal.codes().count("login.failed") == 0  # это отступление, а не «вход не удался»
+    await rig.kill()
+
+
+async def test_вход_зависший_дольше_лимита_прерывается_как_неудачный_вход(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(poll_loop, "LOGIN_TIMEOUT_SEC", 0.05)
+
+    async def stuck_login() -> None:
+        await asyncio.Event().wait()
+
+    rig = make_rig([SessionExpired("x"), EMPTY], auth_delay=stuck_login)
+    await rig.start()
+    await asyncio.sleep(0.12)  # настоящее ожидание таймаута
+    assert rig.task is not None and not rig.task.done()
+    assert rig.loop.status.errors_total == 1
+    assert "не уложился" in rig.loop.status.last_error
+    assert "login.failed" in rig.journal.codes()
+    assert rig.loop.tick_started_at is None
+    await rig.kill()
+
+
+async def test_длительность_проверки_с_ошибкой_не_включает_повторный_вход() -> None:
+    holder: dict[str, Rig] = {}
+
+    async def slow_login() -> None:
+        await holder["rig"].clock.sleep(5)
+
+    rig = make_rig([SessionExpired("x"), EMPTY], auth_delay=slow_login)
+    holder["rig"] = rig
+    await rig.start()
+    await rig.advance(5)
+    assert rig.journal.checks[0].latency_ms == 0.0  # раньше сюда попадали секунды входа
+
+
+async def test_у_проверки_с_ошибкой_в_журнале_фактическая_задержка_до_следующей() -> None:
+    rig = make_rig([SiteUnavailable("503"), EMPTY])
+    await rig.start()
+    assert rig.journal.checks[0].interval_sec == 30.0  # раньше — 0.0
     await rig.kill()

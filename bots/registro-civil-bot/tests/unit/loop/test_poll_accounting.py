@@ -123,7 +123,6 @@ async def test_статус_после_успешных_проверок() -> No
     assert status.last_latency_ms == 5.0
     assert status.recent_latencies == [5.0, 5.0, 5.0]
     assert status.interval_sec == 20.0
-    assert status.next_check_in_sec == 20.0
     assert status.errors_total == 0 and status.last_error == ""
     assert status.state is PollState.RUNNING
     await rig.kill()

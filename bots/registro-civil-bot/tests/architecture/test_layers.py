@@ -21,7 +21,8 @@ STDLIB = sys.stdlib_module_names
 # Что каждый слой может импортировать из rcbot (первый уровень имени)
 ALLOWED = {
     "domain": {"domain"},
-    "config": {"config"},
+    # из домена — только жёсткие пределы (domain/limits.py): см. отдельный тест ниже
+    "config": {"config", "domain"},
     "application": {"application", "domain", "config", "__init__"},
     "infrastructure": {"infrastructure", "application", "domain", "config"},
     "bot": {"bot", "application", "domain", "config"},
@@ -75,6 +76,32 @@ def test_слой_импортирует_только_разрешённое(lay
         if (rel, name.split(".")[1] if name.startswith("rcbot.") else "") not in KNOWN_DEBT
     ]
     assert bad == []
+
+
+def test_config_берёт_из_домена_только_пределы() -> None:
+    found = {
+        name
+        for module in ALL
+        if module.package == "config"
+        for name, _ in imports(module)
+        if name.startswith("rcbot.domain")
+    }
+    assert found
+    assert {name.removeprefix("rcbot.domain.").split(".")[0] for name in found} == {"limits"}
+
+
+def test_пределы_опроса_одни_и_те_же_в_домене_и_настройках() -> None:
+    from rcbot.config import settings
+    from rcbot.domain import limits
+
+    for name in (
+        "MIN_POLL_INTERVAL_SEC",
+        "MIN_DOM_POLL_INTERVAL_SEC",
+        "MAX_POLL_INTERVAL_SEC",
+        "MIN_MONTHS_AHEAD",
+        "MAX_MONTHS_AHEAD",
+    ):
+        assert getattr(settings, name) is getattr(limits, name)
 
 
 def test_bot_не_импортирует_infrastructure() -> None:

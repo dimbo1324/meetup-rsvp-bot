@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
 
+from rcbot.application.background import BackgroundTasks
 from rcbot.application.incidents import IncidentBook
 from rcbot.application.messages import MessageComposer
 from rcbot.application.ports import Clock, Coordinator, Journal, Notifier, NullJournal
@@ -27,12 +27,16 @@ from rcbot.domain.events import (
     SourceSwitched,
     UnconfirmedSlotsSeen,
 )
-from rcbot.domain.models import Alert, Channel, DeliveryResult, PollState
+from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult, PollState
 
 logger = logging.getLogger(__name__)
 
 SEND_TIMEOUT_SEC = 12.0
 WARMUP_EVERY_SEC = 240.0
+# Состояния, о которых владелец узнаёт сообщением; выход из них сообщается «▶️ снова работает»
+DEGRADED = frozenset({PollState.BACKOFF, PollState.NEEDS_MANUAL})
+# Доставки пишутся в журнал инцидентов только у тревог о местах
+SLOT_ALERTS = frozenset({AlertKind.APPEARED, AlertKind.CHANGED})
 
 
 @dataclass(frozen=True)
@@ -63,8 +67,9 @@ class AlertOrchestrator:
         self._clock = clock
         self._coordinator = coordinator
         self._repeats: list[asyncio.Task[None]] = []
-        self._background: set[asyncio.Task[None]] = set()
+        self._background = BackgroundTasks("рассылка")
         self._stopped = asyncio.Event()
+        self._degraded_told = False
         self._journal: Journal = journal or NullJournal()
         self.delivery_listeners: list[Callable[[DeliveryResult], None]] = []
 
@@ -92,21 +97,23 @@ class AlertOrchestrator:
         await self._wave(self._composer.manual_step(event.reason), attempt=1)
 
     async def on_source_switched(self, event: SourceSwitched) -> None:
-        text = f"🔀 Источник данных: {event.old} → {event.new}. Причина: {event.reason}."
-        await self._wave(self._composer.service(text), attempt=1)
+        alert = self._composer.source_switched(event.old, event.new, event.reason)
+        await self._wave(alert, attempt=1)
 
     async def on_state_changed(self, event: PollerStateChanged) -> None:
-        # NEEDS_MANUAL сообщается отдельным сообщением с кнопкой; REAUTH обычно проходит сам
+        # NEEDS_MANUAL сообщается отдельным сообщением с кнопкой; REAUTH обычно проходит сам.
+        # «Снова работает» — при первом RUNNING после любой сообщённой деградации, даже если
+        # между ними была пауза (BACKOFF → PAUSED → RUNNING)
+        if event.new in DEGRADED or event.old in DEGRADED:
+            self._degraded_told = True
         if event.new is PollState.BACKOFF:
-            text = f"⏸ Бот замедлился: {event.reason}. Опрос продолжится сам."
-        elif event.new is PollState.RUNNING and event.old in (
-            PollState.BACKOFF,
-            PollState.NEEDS_MANUAL,
-        ):
-            text = "▶️ Опрос снова работает."
+            alert = self._composer.slowed_down(event.reason)
+        elif event.new is PollState.RUNNING and self._degraded_told:
+            self._degraded_told = False
+            alert = self._composer.poll_resumed()
         else:
             return
-        await self._wave(self._composer.service(text), attempt=1)
+        await self._wave(alert, attempt=1)
 
     # --- управление ---
 
@@ -137,6 +144,10 @@ class AlertOrchestrator:
     # --- рассылка ---
 
     async def _campaign(self, alert: Alert, *, record: bool = True) -> None:
+        if self._stopped.is_set():
+            # После close() новые повторы никто не отменит и не дождётся
+            logger.warning("тревога %s после остановки рассылки не отправлена", alert.kind)
+            return
         self._cancel_repeats()
         # Повторы создаются до волны: «Вижу», пропажа мест или новая тревога, пришедшие пока идёт
         # первая отправка, должны их отменить, а срок первого повтора считается от начала волны
@@ -159,11 +170,14 @@ class AlertOrchestrator:
                 continue
             result = await self._send_one(self._notifiers[channel], alert, attempt)
             if record:
-                self._spawn(self._book.record(result))
+                self._background.spawn(self._book.record(result))
 
     async def _wave(
         self, alert: Alert, attempt: int, *, record: bool = True, respect_disabled: bool = True
     ) -> list[DeliveryResult]:
+        if self._stopped.is_set():
+            logger.warning("тревога %s после остановки рассылки не отправлена", alert.kind)
+            return []
         targets = [
             self._notifiers[c]
             for c in alert.channels
@@ -177,9 +191,9 @@ class AlertOrchestrator:
         async with asyncio.TaskGroup() as group:
             tasks = [group.create_task(self._send_one(n, alert, attempt)) for n in targets]
         results = [task.result() for task in tasks]
-        if record and alert.kind.value in ("appeared", "changed"):
+        if record and alert.kind in SLOT_ALERTS:
             for result in results:
-                self._spawn(self._book.record(result))
+                self._background.spawn(self._book.record(result))
         return results
 
     async def _send_one(self, notifier: Notifier, alert: Alert, attempt: int) -> DeliveryResult:
@@ -215,11 +229,6 @@ class AlertOrchestrator:
             task.cancel()
         self._repeats.clear()
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.create_task(coro)
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
     # --- прогрев ---
 
     async def keep_warm(self) -> None:
@@ -235,6 +244,8 @@ class AlertOrchestrator:
 
     async def close(self) -> None:
         self._stopped.set()
+        repeats = list(self._repeats)
         self._cancel_repeats()
-        if self._background:
-            await asyncio.gather(*self._background, return_exceptions=True)
+        # Отменённый повтор может быть посреди отправки: дожидаемся, пока он действительно встанет
+        await asyncio.gather(*repeats, return_exceptions=True)
+        await self._background.drain()

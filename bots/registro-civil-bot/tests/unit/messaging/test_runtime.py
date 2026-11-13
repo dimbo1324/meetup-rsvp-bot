@@ -18,7 +18,9 @@ from rcbot.application.runtime import (
     RuntimeSettings,
     RuntimeStore,
     clamp_interval,
+    clamp_months,
 )
+from rcbot.domain.limits import MAX_MONTHS_AHEAD, MIN_MONTHS_AHEAD
 from rcbot.domain.models import Channel
 from tests.fakes import T0, MemoryKV
 
@@ -357,3 +359,14 @@ async def test_загруженное_значение_интервала_не_�
     kv = MemoryKV({K_INTERVAL: "abc", K_LADDER_START: T0.isoformat()})
     rt = await RuntimeStore(kv).load(3.0, 6, T0)
     assert rt.base_interval_sec >= 10.0
+
+
+# --- clamp_months ---
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [(-5, 1), (0, 1), (1, 1), (6, 6), (12, 12), (13, 12), (10**9, 12)]
+)
+def test_clamp_months_держит_месяцы_в_пределах_домена(raw: int, expected: int) -> None:
+    assert clamp_months(raw) == expected
+    assert MIN_MONTHS_AHEAD <= clamp_months(raw) <= MAX_MONTHS_AHEAD

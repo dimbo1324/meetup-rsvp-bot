@@ -9,12 +9,11 @@ from datetime import datetime, timedelta
 
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.incidents import IncidentBook
-from rcbot.application.poll_loop import PollLoop
+from rcbot.application.poll_loop import PollLoop, describe_error
 from rcbot.application.ports import Clock, EventLog, IncidentRepository, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
-from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
-from rcbot.domain.errors import RcbotError
+from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, Incident, SourceKind
 
 FOREVER = timedelta(days=3650)
@@ -101,12 +100,13 @@ class Controller:
         )
 
     async def pause(self, minutes: int | None) -> datetime:
-        if minutes is not None and not 0 <= minutes <= MAX_PAUSE_MINUTES:
+        """`None` — бессрочная пауза (до /resume); иначе — от 1 минуты до года."""
+        if minutes is not None and not 1 <= minutes <= MAX_PAUSE_MINUTES:
             # timedelta(minutes=10**12) падает OverflowError: отказ должен быть понятным
             raise ValueError(
-                f"пауза от 1 минуты до {MAX_PAUSE_MINUTES} (год); без числа — до /resume"
+                f"пауза от 1 до {MAX_PAUSE_MINUTES} минут (год); без числа — до /resume"
             )
-        until = self._clock.now() + (timedelta(minutes=minutes) if minutes else FOREVER)
+        until = self._clock.now() + (FOREVER if minutes is None else timedelta(minutes=minutes))
         await self._loop.pause(until)
         self._journal.event("command.pause", f"пауза до {until.isoformat()}")
         return until
@@ -154,8 +154,8 @@ class Controller:
         self._journal.event("command.relogin", "повторный вход по команде")
         try:
             await self._loop.relogin()
-        except RcbotError as error:
-            return str(error)
+        except Exception as error:  # отказ входа, нет секрета, сбой keyring: текст, а не падение
+            return describe_error(error)
         return ""
 
     async def cleanup(self) -> dict[str, int]:

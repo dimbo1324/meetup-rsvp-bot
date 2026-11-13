@@ -13,11 +13,12 @@ from rcbot import __version__
 from rcbot.application.liveness import (
     HUNG_CHECK_SEC,
     HUNG_LATE_SEC,
+    HUNG_MARGIN_SEC,
     HUNG_RETRY_SEC,
     STATUS_EVERY_SEC,
     LivenessMonitor,
 )
-from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC
+from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC, LOGIN_TIMEOUT_SEC
 from rcbot.application.supervisor import Supervisor
 from rcbot.domain.errors import ManualStepRequired, SiteUnavailable
 
@@ -73,8 +74,11 @@ class Harness:
 # --- diagnose ---
 
 
-def test_пороги_заданы_от_таймаута_проверки() -> None:
-    assert HUNG_CHECK_SEC == FETCH_TIMEOUT_SEC + 90.0
+def test_пороги_заданы_от_таймаутов_проверки_и_входа() -> None:
+    # Проверка включает повторный вход: порог выше запроса и входа вместе взятых (COL-7)
+    assert HUNG_CHECK_SEC == FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC + HUNG_MARGIN_SEC
+    assert HUNG_CHECK_SEC > FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC
+    assert LOGIN_TIMEOUT_SEC > (30 + 60 + 45)  # шаги входа в auth.py укладываются
     assert HUNG_LATE_SEC == 180.0 and STATUS_EVERY_SEC == 30.0
 
 
@@ -307,7 +311,8 @@ async def test_зависшая_проверка_лечится_перезапу
     assert monitor.recoveries == 1
     assert len(notified) == 1
     assert rig.source.closed == 1
-    assert rig.rel(rig.source.starts)[:2] == [0, 270]
+    # Зависание замечает ближайший тик монитора после порога
+    assert rig.rel(rig.source.starts)[:2] == [0, HUNG_CHECK_SEC + STATUS_EVERY_SEC]
     await rig.advance(30)
     assert monitor.hung_since is None
     assert rig.journal.codes().count("liveness.recovered") == 1
@@ -318,9 +323,10 @@ async def test_новое_зависание_после_перезапуска_�
     rig = make_rig()
     rig.source.push(_hanging(rig), _hanging(rig), EMPTY)
     supervisor, monitor, _ = await _wire(rig)
-    await rig.advance(900)
+    cycle = HUNG_CHECK_SEC + STATUS_EVERY_SEC
+    await rig.advance(2 * cycle + STATUS_EVERY_SEC)
     assert monitor.recoveries == 2
-    assert rig.rel(rig.source.starts)[:3] == [0, 270, 540]
+    assert rig.rel(rig.source.starts)[:3] == [0, cycle, 2 * cycle]
     assert rig.loop.status.checks_total >= 1
     await supervisor.stop()
 

@@ -11,18 +11,22 @@ from zoneinfo import ZoneInfo
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Жёсткие ограничения SPEC 0.3 (правило 3) и 2.3: не настраиваются ни .env, ни Telegram.
-MIN_POLL_INTERVAL_SEC = 10.0
-MIN_DOM_POLL_INTERVAL_SEC = 60.0
-MAX_POLL_INTERVAL_SEC = 3600.0
-MIN_MONTHS_AHEAD = 1
-MAX_MONTHS_AHEAD = 12
+# Пределы живут в домене; здесь — реэкспорт под прежними именами для остальных слоёв
+from rcbot.domain.limits import MAX_MONTHS_AHEAD as MAX_MONTHS_AHEAD
+from rcbot.domain.limits import MAX_POLL_INTERVAL_SEC as MAX_POLL_INTERVAL_SEC
+from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC as MIN_DOM_POLL_INTERVAL_SEC
+from rcbot.domain.limits import MIN_MONTHS_AHEAD as MIN_MONTHS_AHEAD
+from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC as MIN_POLL_INTERVAL_SEC
 
 BPMGOB_HOST = "bpmgob.mec.gub.uy"
-GUBUY_HOSTS = (BPMGOB_HOST, "mi.iduruguay.gub.uy")
+IDURUGUAY_HOST = "mi.iduruguay.gub.uy"
+GUBUY_HOSTS = (BPMGOB_HOST, IDURUGUAY_HOST)
 TELEGRAM_HOST = "api.telegram.org"
 CALLMEBOT_HOST = "api.callmebot.com"
 SAE_HOST = "sae.mec.gub.uy"
+
+AGENDA_URL_TEMPLATE = f"https://{BPMGOB_HOST}/etapas/ejecutar/{{stage}}/1"
+STAGE_PLACEHOLDER = "<НОМЕР_ЭТАПА>"
 
 
 class Settings(BaseSettings):
@@ -30,7 +34,7 @@ class Settings(BaseSettings):
         env_prefix="RCBOT_", env_file_encoding="utf-8", extra="ignore", validate_default=True
     )
 
-    agenda_url: str = "https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1"
+    agenda_url: str = AGENDA_URL_TEMPLATE.format(stage=STAGE_PLACEHOLDER)
     tramite_id: str = ""
     location_text: str = "Oficina Tramite Extranjeros"
     doc_country: str = "Rusia"
@@ -100,7 +104,7 @@ class Settings(BaseSettings):
             raise ValueError(f"неизвестный часовой пояс: {value!r}") from error
         return value
 
-    @field_validator("agenda_url", "login_url", "ntfy_server", "sae_url")
+    @field_validator("login_url", "ntfy_server", "sae_url")
     @classmethod
     def _https_only(cls, value: str) -> str:
         return _require_https(value)
@@ -114,11 +118,13 @@ class Settings(BaseSettings):
     @classmethod
     def _api_on_bpmgob(cls, value: str) -> str:
         """API календаря живёт на bpmgob: чужой хост получил бы cookies сессии и права запроса."""
-        if not value:
-            return value
-        if _host(_require_https(value)) != BPMGOB_HOST:
-            raise ValueError(f"адрес API календаря допустим только на {BPMGOB_HOST}")
-        return value
+        return _require_bpmgob(value, "адрес API календаря") if value else value
+
+    @field_validator("agenda_url")
+    @classmethod
+    def _agenda_on_bpmgob(cls, value: str) -> str:
+        # Этот адрес открывает браузер с сессией владельца: чужой хост получил бы её cookies
+        return _require_bpmgob(value, "адрес этапа")
 
     @property
     def tz(self) -> ZoneInfo:
@@ -142,6 +148,12 @@ def _require_https(value: str) -> str:
     parsed = urlparse(value)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("допустим только https-адрес с указанием хоста")
+    return value
+
+
+def _require_bpmgob(value: str, what: str) -> str:
+    if _host(_require_https(value)) != BPMGOB_HOST:
+        raise ValueError(f"{what} допустим только на {BPMGOB_HOST}")
     return value
 
 

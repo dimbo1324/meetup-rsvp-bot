@@ -373,13 +373,31 @@ async def test_доставки_появления_и_изменения_пиш�
     rig = make_rig(policies=NO_REPEATS)
     await rig.book.on_appeared(appeared(23))
     await rig.alerts.on_appeared(appeared(23))
-    await rig.alerts.close()  # дожидается фоновых записей
+    await rig.alerts._background.drain()  # дожидается фоновых записей, рассылка остаётся живой
     recorded = await rig.repo.deliveries_for(1)
     assert {r.channel for r in recorded} == set(Channel)
     assert all(r.attempt == 1 for r in recorded)
     await rig.alerts.on_changed(changed(23, 24))
-    await rig.alerts.close()
+    await rig.alerts._background.drain()
     assert len(await rig.repo.deliveries_for(1)) == 6
+
+
+async def test_после_close_новые_тревоги_не_отправляются_и_повторы_не_создаются() -> None:
+    rig = make_rig()
+    await rig.alerts.close()
+    await rig.alerts.on_appeared(appeared(23))
+    await rig.alerts.service("после остановки")
+    assert all(not n.sent for n in rig.notifiers.values())
+    assert not rig.alerts.repeating()
+
+
+async def test_close_дожидается_отменённых_повторов() -> None:
+    rig = make_rig()
+    await rig.alerts.on_appeared(appeared(23))
+    assert rig.alerts.repeating()
+    repeats = list(rig.alerts._repeats)
+    await rig.alerts.close()
+    assert repeats and all(t.done() for t in repeats)
 
 
 async def test_служебные_тестовые_и_имитированные_тревоги_в_бд_не_пишутся() -> None:
@@ -442,3 +460,31 @@ async def test_уведомление_об_успешной_отправке_и�
     await rig.alerts.on_appeared(appeared(23))
     [tg] = [r for r in rig.delivered if r.channel is Channel.TELEGRAM]
     assert tg.latency_ms == 42.0
+
+
+async def test_возврат_через_паузу_после_замедления_тоже_сообщается() -> None:
+    # BACKOFF → PAUSED → RUNNING раньше молчал: «снова работает» требовало old == BACKOFF
+    rig = make_rig()
+    for old, new in [
+        (PollState.RUNNING, PollState.BACKOFF),
+        (PollState.BACKOFF, PollState.PAUSED),
+        (PollState.PAUSED, PollState.RUNNING),
+    ]:
+        await rig.alerts.on_state_changed(PollerStateChanged(T0, old, new, "429"))
+    texts = _only_telegram(rig)
+    assert len(texts) == 2
+    assert "замедлился" in texts[0] and "снова работает" in texts[1]
+
+
+async def test_снова_работает_сообщается_один_раз_на_одну_деградацию() -> None:
+    rig = make_rig()
+    await rig.alerts.on_state_changed(
+        PollerStateChanged(T0, PollState.RUNNING, PollState.BACKOFF, "x")
+    )
+    await rig.alerts.on_state_changed(
+        PollerStateChanged(T0, PollState.BACKOFF, PollState.RUNNING, "x")
+    )
+    await rig.alerts.on_state_changed(
+        PollerStateChanged(T0, PollState.PAUSED, PollState.RUNNING, "x")
+    )
+    assert len(_only_telegram(rig)) == 2

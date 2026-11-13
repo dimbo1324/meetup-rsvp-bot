@@ -30,11 +30,6 @@ class SlotsGone(DomainEvent):
 
 
 @dataclass(frozen=True)
-class SessionExpired(DomainEvent):
-    reason: str
-
-
-@dataclass(frozen=True)
 class ManualActionRequired(DomainEvent):
     reason: str
 

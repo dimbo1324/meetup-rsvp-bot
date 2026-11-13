@@ -72,7 +72,6 @@ def test_события_состояния_и_источника_хранят_п
         "3 неожиданных ответа",
     )
     assert (changed.old, changed.new) == (PollState.RUNNING, PollState.BACKOFF)
-    assert events.SessionExpired(T0, "302").reason == "302"
     assert events.ManualActionRequired(T0, "шаг 1").reason == "шаг 1"
     assert events.UnconfirmedSlotsSeen(T0, snapshot(slots(23))).snapshot.has_slots
 
@@ -82,7 +81,6 @@ def test_все_события_наследуют_domain_event() -> None:
         "SlotsAppeared",
         "SlotsChanged",
         "SlotsGone",
-        "SessionExpired",
         "ManualActionRequired",
         "SourceSwitched",
         "PollerStateChanged",

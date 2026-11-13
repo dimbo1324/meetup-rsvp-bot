@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from rcbot.application.bus import EventBus
+from rcbot.application.messages import GONE_REASON
 from rcbot.application.ports import Clock, Journal, OpeningRecord
 from rcbot.domain.events import (
     DomainEvent,
@@ -15,6 +16,7 @@ from rcbot.domain.events import (
     SourceSwitched,
     UnconfirmedSlotsSeen,
 )
+from rcbot.domain.models import iso_days
 
 
 class JournalFeed:
@@ -30,25 +32,21 @@ class JournalFeed:
         match event:
             case SlotsAppeared(snapshot=snapshot):
                 self._opened_at = self._clock.monotonic()
-                days = sorted({s.day.isoformat() for s in snapshot.slots})
-                self._journal.event(
-                    "slots.appeared", f"появились места: {', '.join(days)}", "WARNING"
-                )
+                days = ", ".join(iso_days(snapshot.slots))
+                self._journal.event("slots.appeared", f"появились места: {days}", "WARNING")
                 self._journal.opening(
                     OpeningRecord(event.at, "появились", snapshot.slots, snapshot.source)
                 )
             case SlotsChanged(snapshot=snapshot, added=added):
-                days = sorted({s.day.isoformat() for s in added})
-                self._journal.event(
-                    "slots.changed", f"добавились места: {', '.join(days)}", "WARNING"
-                )
+                days = ", ".join(iso_days(added))
+                self._journal.event("slots.changed", f"добавились места: {days}", "WARNING")
                 self._journal.opening(OpeningRecord(event.at, "добавились", added, snapshot.source))
             case SlotsGone(snapshot=snapshot):
                 lasted = (
                     None if self._opened_at is None else self._clock.monotonic() - self._opened_at
                 )
                 self._opened_at = None
-                self._journal.event("slots.gone", "места пропали: три проверки подряд без мест")
+                self._journal.event("slots.gone", f"места пропали: {GONE_REASON}")
                 self._journal.opening(
                     OpeningRecord(event.at, "пропали", frozenset(), snapshot.source, lasted)
                 )
@@ -64,5 +62,3 @@ class JournalFeed:
                 self._journal.event(
                     "sae.seen", f"SAE: {len(snapshot.slots)} мест (неподтверждённые)"
                 )
-            case _:
-                self._journal.event("event", type(event).__name__)

@@ -20,7 +20,6 @@ class PollStatus:
     last_error_at: datetime | None = None
     checks_total: int = 0
     errors_total: int = 0
-    next_check_in_sec: float | None = None
     state_reason: str = ""
     recent_latencies: list[float] = field(default_factory=list)
 
