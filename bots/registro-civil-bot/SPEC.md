@@ -275,7 +275,7 @@ class Notifier(Protocol):
 | Канал | Как работает | Детали реализации |
 |---|---|---|
 | **Telegram** | Сообщение от собственного бота (создаётся через @BotFather) | aiogram. Текст + кнопка «✅ Вижу». Повтор **каждые 60 с**, пока владелец не нажмёт кнопку или не напишет «ок». Не больше 30 повторов на инцидент. |
-| **ntfy** | Push в приложение ntfy на телефоне | `POST https://ntfy.sh/` с JSON: `{"topic": …, "title": …, "message": …, "priority": 5, "tags": ["rotating_light"], "click": "<AGENDA_URL>"}`. Приоритет 5 (max). Повтор каждые 2 минуты, не больше 10. |
+| **ntfy** | Push в приложение ntfy на телефоне | `POST https://ntfy.sh/` с JSON: `{"topic": …, "title": …, "message": …, "priority": 5, "tags": ["rotating_light"]}` — без ссылки: номер этапа на сторонний сервис не уходит (решение R10). Приоритет 5 (max). Повтор каждые 2 минуты, не больше 10. |
 | **CallMeBot** | Голосовой звонок в Telegram, робот читает текст | `GET https://api.callmebot.com/start.php?user=@<username>&text=<текст>&lang=<код>&rpt=2`. Звонок при открытии инцидента, затем каждые 3 минуты, не больше 5. Текст до 256 символов. |
 
 **Настройка каналов владельцем (один раз):**
@@ -377,7 +377,7 @@ https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1
 | `Slot` | `date`, `time \| None` | Свободное место. Время может быть неизвестно (только день). |
 | `AvailabilitySnapshot` | `target_id`, `observed_at`, `slots: frozenset[Slot]`, `fingerprint`, `source`, `latency_ms` | Результат одной проверки. |
 | `Incident` | `id`, `target_id`, `opened_at`, `closed_at`, `slots`, `acked_at`, `status` | Период, когда места были. |
-| `Alert` | `incident_id`, `kind` (appeared/changed/service), `text`, `call_text`, `click_url` | Что отправить. |
+| `Alert` | `incident_id`, `kind` (appeared/changed/service), `text`, `call_text`, `push_title`, `push_text` | Что отправить. |
 | `DeliveryResult` | `channel`, `ok`, `latency_ms`, `error`, `attempt` | Итог одной отправки. |
 | `PollState` | перечисление из 2.3 | Состояние опроса. |
 | `PollStatsHour` | `hour`, `checks`, `errors`, `p50_ms`, `p95_ms`, `relogins` | Статистика за час. |
