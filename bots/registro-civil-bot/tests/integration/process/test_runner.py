@@ -616,9 +616,9 @@ def test_звонок_создаётся_только_с_именем_и_ход�
 
 def test_два_звонка_callmebot_укладываются_в_лимит_отправки() -> None:
     """Русский голос и запасной английский — два запроса подряд в одной отправке (D8)."""
-    from rcbot.application.alerting import SEND_TIMEOUT_SEC
+    from rcbot.application.alerting import CALL_SEND_TIMEOUT_SEC
 
-    assert 2 * runner.CALLMEBOT_TIMEOUT_SEC <= SEND_TIMEOUT_SEC
+    assert 2 * runner.CALLMEBOT_TIMEOUT_SEC <= CALL_SEND_TIMEOUT_SEC
 
 
 async def test_сторож_ходит_только_на_свой_хост(monkeypatch: pytest.MonkeyPatch) -> None:

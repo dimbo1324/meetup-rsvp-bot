@@ -25,7 +25,8 @@ WARMUP_URL = f"https://{CALLMEBOT_HOST}/"
 FALLBACK_LANG = "en-US-Standard-B"
 # Тайм-аут одного запроса: русский звонок и запасной английский подряд (2 × 5 с) укладываются
 # в общий лимит отправки оркестратора (12 с), и отказ успевает записаться как ошибка канала
-CALLMEBOT_TIMEOUT_SEC = 5
+# Два запроса (русский и запасной английский голос) укладываются в лимит звонка рассылки
+CALLMEBOT_TIMEOUT_SEC = 30
 _ERROR_MARKERS = ("error", "not authorized", "invalid", "you need to")
 EXCERPT_CHARS = 200
 

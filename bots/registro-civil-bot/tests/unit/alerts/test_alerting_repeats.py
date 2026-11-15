@@ -85,6 +85,7 @@ async def test_повтор_после_таймаута_канала_продо�
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(alerting, "SEND_TIMEOUT_SEC", 0.02)
+    monkeypatch.setattr(alerting, "CALL_SEND_TIMEOUT_SEC", 0.02)
     never = asyncio.Event()
     rig = make_rig(notifier_kwargs={Channel.TELEGRAM: {"delay": never.wait}})
     await rig.alerts.on_appeared(appeared(23))
@@ -309,6 +310,7 @@ async def test_ошибка_и_таймаут_прогрева_не_остана
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(alerting, "SEND_TIMEOUT_SEC", 0.02)
+    monkeypatch.setattr(alerting, "CALL_SEND_TIMEOUT_SEC", 0.02)
     rig = make_rig()
 
     async def broken() -> None:

@@ -91,6 +91,7 @@ async def test_у_каждого_канала_свой_таймаут_и_рез�
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(alerting, "SEND_TIMEOUT_SEC", 0.05)
+    monkeypatch.setattr(alerting, "CALL_SEND_TIMEOUT_SEC", 0.05)
     never = asyncio.Event()
     rig = make_rig(
         policies=NO_REPEATS,

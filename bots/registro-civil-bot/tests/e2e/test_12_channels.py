@@ -124,6 +124,7 @@ async def test_канал_упал_другой_завис_третий_не_з�
     make_stand, site: FakeSite, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(alerting, "SEND_TIMEOUT_SEC", 0.05)  # настоящее время: asyncio.timeout
+    monkeypatch.setattr(alerting, "CALL_SEND_TIMEOUT_SEC", 0.05)
     never = asyncio.Event()
 
     async def hang() -> None:

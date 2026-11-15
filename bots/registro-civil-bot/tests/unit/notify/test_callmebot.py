@@ -287,12 +287,12 @@ async def test_тревоги_о_местах_получают_запасной_
 
 def test_адреса_и_таймаут_callmebot_из_констант() -> None:
     """MAG-2, MAG-1/COL-1: хост — из настроек; две попытки укладываются в лимит оркестратора."""
-    from rcbot.application.alerting import SEND_TIMEOUT_SEC
+    from rcbot.application.alerting import CALL_SEND_TIMEOUT_SEC
     from rcbot.config.settings import CALLMEBOT_HOST
 
     assert f"https://{CALLMEBOT_HOST}/start.php" == callmebot.API_URL
     assert f"https://{CALLMEBOT_HOST}/" == callmebot.WARMUP_URL
-    assert 2 * callmebot.CALLMEBOT_TIMEOUT_SEC < SEND_TIMEOUT_SEC
+    assert 2 * callmebot.CALLMEBOT_TIMEOUT_SEC < CALL_SEND_TIMEOUT_SEC
 
 
 async def test_английский_язык_без_повтора(server: LocalTlsServer) -> None:

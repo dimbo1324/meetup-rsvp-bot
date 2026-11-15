@@ -32,6 +32,15 @@ from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult, PollS
 logger = logging.getLogger(__name__)
 
 SEND_TIMEOUT_SEC = 12.0
+# CallMeBot отвечает, только когда звонок поставлен: на живом сервисе это 4–5 с и дольше, а с
+# запасным английским голосом запросов два. Общий лимит в 12 с обрывал звонок до его начала
+CALL_SEND_TIMEOUT_SEC = 70.0
+
+
+def send_timeout(channel: Channel) -> float:
+    return CALL_SEND_TIMEOUT_SEC if channel is Channel.CALL else SEND_TIMEOUT_SEC
+
+
 WARMUP_EVERY_SEC = 240.0
 # Состояния, о которых владелец узнаёт сообщением; выход из них сообщается «▶️ снова работает»
 DEGRADED = frozenset({PollState.BACKOFF, PollState.NEEDS_MANUAL})
@@ -198,11 +207,11 @@ class AlertOrchestrator:
 
     async def _send_one(self, notifier: Notifier, alert: Alert, attempt: int) -> DeliveryResult:
         try:
-            async with asyncio.timeout(SEND_TIMEOUT_SEC):
+            async with asyncio.timeout(send_timeout(notifier.channel)):
                 result = await notifier.send(alert, attempt)
         except TimeoutError:
             result = DeliveryResult(
-                notifier.channel, False, SEND_TIMEOUT_SEC * 1000, attempt, "таймаут"
+                notifier.channel, False, send_timeout(notifier.channel) * 1000, attempt, "таймаут"
             )
         except Exception as error:  # канал не должен уронить рассылку по остальным
             logger.exception("канал %s упал", notifier.channel)
