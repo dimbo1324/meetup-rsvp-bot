@@ -24,11 +24,10 @@ from rcbot.infrastructure.http.client import SafeHttp
 from tests.fakes import LocalTlsServer
 
 SRC = Path(rcbot.__file__).resolve().parent
-# SPEC 2.6: «bpmgob.mec.gub.uy, mi.iduruguay.gub.uy, api.telegram.org, ntfy.sh, api.callmebot.com,
-# адрес "сторожа" (если включён)»
+# SPEC 2.6 с решением R13: страница записи SAE, Telegram, ntfy, CallMeBot и адрес «сторожа»
+# (если включён). На bpmgob и ID Uruguay бот не ходит
 SPEC_HOSTS = {
-    "bpmgob.mec.gub.uy",
-    "mi.iduruguay.gub.uy",
+    "sae.mec.gub.uy",
     "api.telegram.org",
     "ntfy.sh",
     "api.callmebot.com",
@@ -46,39 +45,17 @@ def test_список_разрешённых_хостов_по_умолчани�
     assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS)
 
 
-def test_сторож_и_sae_добавляют_ровно_свой_хост(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_сторож_добавляет_ровно_свой_хост(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RCBOT_WATCHDOG_URL", "https://hc-ping.example/abc-uuid")
     assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS | {"hc-ping.example"})
-    # Решение R12: страница SAE — главный источник, её хост добавляется, когда источник включён
-    monkeypatch.setenv("RCBOT_SAE_SOURCE_ENABLED", "true")
-    assert Settings().allowed_hosts() == frozenset(
-        SPEC_HOSTS | {"hc-ping.example", "sae.mec.gub.uy"}
-    )
 
 
 def test_http_в_настройках_отклоняется() -> None:
-    for name in ("RCBOT_WATCHDOG_URL", "RCBOT_NTFY_SERVER", "RCBOT_API_URL", "RCBOT_AGENDA_URL"):
+    for name in ("RCBOT_WATCHDOG_URL", "RCBOT_NTFY_SERVER", "RCBOT_SAE_URL", "RCBOT_AGENDA_URL"):
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv(name, "http://example.org/x")
             with pytest.raises(ValueError, match="https"):
                 Settings()
-
-
-def test_api_url_на_чужом_хосте_отклоняется_и_список_не_расширяется(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for url in (
-        "https://evil.example/agenda_sae_api_disponibilidades",
-        "https://bpmgob.mec.gub.uy.evil.example/x",
-        "https://sub.bpmgob.mec.gub.uy/x",
-    ):
-        monkeypatch.setenv("RCBOT_API_URL", url)
-        with pytest.raises(ValueError, match=r"bpmgob\.mec\.gub\.uy"):
-            Settings()
-    monkeypatch.setenv(
-        "RCBOT_API_URL", "https://bpmgob.mec.gub.uy/api/agenda_sae_api_disponibilidades"
-    )
-    assert Settings().allowed_hosts() == frozenset(SPEC_HOSTS)
 
 
 # --- проверка адреса ---

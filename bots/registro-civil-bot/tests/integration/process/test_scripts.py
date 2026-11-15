@@ -84,11 +84,6 @@ function global:winget {
     $global:LASTEXITCODE = 0
     if ($env:RC_WINGET_INSTALLS_UV -eq '1') {
         Set-Item -Path function:global:uv -Value $global:uvBlock } }
-function global:Test-Path { param([Parameter(Position = 0)]$Path, $PathType, $LiteralPath)
-    # Chrome и Edge на машине разработчика настоящие: «что установлено» задаёт тест (RC_BROWSERS)
-    if ($env:RC_BROWSERS -and "$Path" -match '(chrome|msedge)\.exe$') {
-        return (@($env:RC_BROWSERS -split '\|') -contains (Split-Path "$Path" -Leaf)) }
-    Microsoft.PowerShell.Management\Test-Path @PSBoundParameters }
 foreach ($cmd in 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'New-ScheduledTaskAction',
                  'Stop-ScheduledTask', 'Get-ScheduledTask', 'uv') {
     if ((Get-Command $cmd).CommandType -ne 'Function') {

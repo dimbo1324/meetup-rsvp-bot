@@ -32,7 +32,6 @@ def next_report_at(now: datetime, tz: ZoneInfo, hour: int) -> datetime:
 def report_text(hours: list[PollStatsHour], incidents_24h: int, size_bytes: int | None) -> str:
     checks = sum(h.checks for h in hours)
     errors = sum(h.errors for h in hours)
-    relogins = sum(h.relogins for h in hours)
     # Сырые задержки прошлых часов в БД не хранятся: сводим часовые перцентили (медиана медиан,
     # худший 95-й), а не пересчитываем по всем проверкам суток
     p50 = [h.percentile(MEDIAN_Q) for h in hours if h.checks]
@@ -40,7 +39,6 @@ def report_text(hours: list[PollStatsHour], incidents_24h: int, size_bytes: int 
     return MessageComposer.daily_report(
         checks=checks,
         errors=errors,
-        relogins=relogins,
         median_ms=statistics.median(p50) if p50 else 0.0,
         p95_ms=max(p95) if p95 else 0.0,
         incidents=incidents_24h,

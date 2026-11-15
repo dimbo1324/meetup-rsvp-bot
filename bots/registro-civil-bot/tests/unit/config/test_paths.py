@@ -48,8 +48,10 @@ def test_ensure_создаёт_все_каталоги_данных_но_не_л
     home = tmp_path / "ещё" / "не" / "создан"
     p = Paths(home)
     p.ensure()
-    for directory in (p.data, p.discovery, p.quarantine, p.shots, p.tmp, p.logs):
+    for directory in (p.data, p.shots, p.tmp, p.logs):
         assert directory.is_dir()
+    # Каталоги прежнего пути bpmgob (R13) больше не создаются
+    assert not p.discovery.exists() and not p.quarantine.exists()
     assert not p.browsers.exists()
     assert not p.cache.exists()
     assert not p.database.exists()
@@ -58,7 +60,7 @@ def test_ensure_создаёт_все_каталоги_данных_но_не_л
 def test_ensure_идемпотентен_и_не_трогает_существующие_файлы(tmp_path: Path) -> None:
     p = Paths(tmp_path)
     p.ensure()
-    keep = p.quarantine / "dump.json"
+    keep = p.shots / "sae-x-empty.html"
     keep.write_text("{}", encoding="utf-8")
     p.ensure()
     p.ensure()
@@ -95,24 +97,21 @@ def test_default_без_rcbot_home_это_каталог_бота(
     assert (home / "pyproject.toml").is_file()
 
 
-def test_apply_process_env_задаёт_каталоги_браузера_и_кеша(tmp_path: Path) -> None:
+def test_apply_process_env_задаёт_каталог_кеша(tmp_path: Path) -> None:
     p = Paths(tmp_path)
     with mock.patch.dict(os.environ):
         os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
         os.environ.pop("PYTHONPYCACHEPREFIX", None)
         p.apply_process_env()
-        assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == str(p.browsers)
         assert os.environ["PYTHONPYCACHEPREFIX"] == str(p.cache / "pycache")
+        assert "PLAYWRIGHT_BROWSERS_PATH" not in os.environ  # браузер боту не нужен (R13)
 
 
 def test_apply_process_env_не_перекрывает_заданное_заранее(tmp_path: Path) -> None:
     p = Paths(tmp_path)
-    with mock.patch.dict(
-        os.environ, {"PLAYWRIGHT_BROWSERS_PATH": "общий-браузер", "PYTHONPYCACHEPREFIX": "мой-кеш"}
-    ):
+    with mock.patch.dict(os.environ, {"PYTHONPYCACHEPREFIX": "мой-кеш"}):
         p.apply_process_env()
         p.apply_process_env()
-        assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "общий-браузер"
         assert os.environ["PYTHONPYCACHEPREFIX"] == "мой-кеш"
 
 

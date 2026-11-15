@@ -87,9 +87,10 @@ class FileJanitor:
 
 
 def purge(paths: Paths) -> list[Path]:
-    """`rcbot purge`: логи, временные данные, карантин, снимки, дампы разведки, кеш байт-кода."""
+    """`rcbot purge`: логи, временные данные, снимки, кеш байт-кода и остатки пути bpmgob
+    (карантин, дампы разведки, Chromium)."""
     removed = []
-    for directory in (paths.logs, *data_dirs(paths).values(), paths.cache):
+    for directory in (paths.logs, *data_dirs(paths).values(), paths.cache, paths.browsers):
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=True)
             removed.append(directory)

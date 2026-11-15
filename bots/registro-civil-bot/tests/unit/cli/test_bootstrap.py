@@ -23,8 +23,7 @@ from rcbot.bootstrap import (
     upgrade_database_async,
 )
 from rcbot.config.paths import Paths
-from rcbot.infrastructure.gubuy.api_source import ApiSource
-from rcbot.infrastructure.gubuy.dom_source import DomSource
+from rcbot.infrastructure.gubuy.sae_source import SaeSource
 from rcbot.infrastructure.journal.files import FileJournal
 from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
 
@@ -43,24 +42,14 @@ def test_build_core_создаёт_каталоги_и_задаёт_окруже
     paths: Paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("PYTHONPYCACHEPREFIX", raising=False)
-    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
 
     core = build_core()
 
-    for directory in (paths.data, paths.discovery, paths.quarantine, paths.shots, paths.tmp):
+    for directory in (paths.data, paths.shots, paths.tmp):
         assert directory.is_dir()
     assert paths.logs.is_dir()
     assert core.paths == paths
-    assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == str(paths.browsers)
     assert os.environ["PYTHONPYCACHEPREFIX"] == str(paths.cache / "pycache")
-
-
-def test_build_core_не_перезаписывает_заданный_путь_браузера(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "общий-браузер"))
-    build_core()
-    assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "общий-браузер")
 
 
 def test_логи_идут_в_файл_и_проходят_через_фильтр_секретов(paths: Paths) -> None:
@@ -252,29 +241,6 @@ def test_разовая_цель_для_check_не_имеет_записи_в_б
 # --- сборка источников ---
 
 
-def test_api_источник_настроен_только_при_заданном_адресе(paths: Paths) -> None:
-    core = build_core(console=False)
-    assert isinstance(bootstrap.build_api_source(core), ApiSource)
-    assert bootstrap.build_api_source(core).configured is False
-    write_env(paths, api_url="https://bpmgob.mec.gub.uy/api/x")
-    assert bootstrap.build_api_source(build_core(console=False)).configured is True
-
-
-def test_dom_источник_и_параметры_браузера(paths: Paths) -> None:
-    write_env(paths, headless="false")
-    core = build_core(console=False)
-    assert isinstance(bootstrap.build_dom_source(core), DomSource)
-    assert bootstrap.browser_options(core).headless is False
-    assert bootstrap.browser_options(core, headless=True).headless is True
-    assert bootstrap.browser_options(core, channel="msedge").channel == "msedge"
-
-
-def test_сессия_собирается_с_лимитом_входов_из_настроек(paths: Paths) -> None:
-    write_env(paths, relogin_max_per_hour="2")
-    session = bootstrap.build_session(build_core(console=False))
-    assert session._max_per_hour == 2
-
-
 # --- ключ сторожа, выбор источников, поля хранилища ---
 
 PING_KEY = "ping" + "-key-" + "7" * 8
@@ -294,41 +260,13 @@ def test_ключ_пинга_это_путь_адреса(url: str, key: str) ->
     assert bootstrap._ping_key(url) == key
 
 
-async def test_build_sources_без_api_только_dom_и_api_закрыт(
-    paths: Paths, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    closed: list[str] = []
-
-    class Api:
-        configured = False
-
-        async def close(self) -> None:
-            closed.append("api")
-
-    dom = object()
-    monkeypatch.setattr(bootstrap, "build_api_source", lambda core: Api())
-    monkeypatch.setattr(bootstrap, "build_dom_source", lambda core: dom)
-    primary, fallback = await bootstrap.build_sources(build_core(console=False))
-    assert primary is dom and fallback is None
-    assert closed == ["api"]
-
-
-async def test_build_sources_с_api_он_основной_dom_запасной(
-    paths: Paths, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class Api:
-        configured = True
-
-    api, dom = Api(), object()
-    monkeypatch.setattr(bootstrap, "build_api_source", lambda core: api)
-    monkeypatch.setattr(bootstrap, "build_dom_source", lambda core: dom)
-    primary, fallback = await bootstrap.build_sources(build_core(console=False))
-    assert primary is api and fallback is dom
-
-
-def test_api_источник_ходит_только_на_bpmgob(paths: Paths) -> None:
-    api = bootstrap.build_api_source(build_core(console=False))
-    assert api._http._allowed == frozenset({"bpmgob.mec.gub.uy"})  # type: ignore[attr-defined]
+async def test_источник_sae_ходит_только_на_свой_хост(paths: Paths) -> None:
+    source = bootstrap.build_source(build_core(console=False))
+    try:
+        assert isinstance(source, SaeSource)
+        assert source._http._allowed == frozenset({"sae.mec.gub.uy"})  # type: ignore[attr-defined]
+    finally:
+        await source.close()
 
 
 def test_core_как_менеджер_контекста_закрывает_журнал(paths: Paths) -> None:

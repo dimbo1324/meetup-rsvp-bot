@@ -1,11 +1,10 @@
 """Дымовая проверка стека из SPEC.md (2.1) до начала фаз: зависимости ставятся и работают вместе.
 
-Живой сайт и внешние сервисы не трогаем (SPEC.md, 6.4): браузер открывает страницу из строки.
+Живой сайт и внешние сервисы не трогаем (SPEC.md, 6.4).
 """
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import sys
 from importlib.metadata import version
@@ -23,7 +22,6 @@ STACK = (
     "pydantic",
     "pydantic_settings",
     "sentry_sdk",
-    "playwright.async_api",
     "keyring",
     "hypothesis",
     "trustme",
@@ -85,22 +83,3 @@ async def test_фальшивый_сервер_aiohttp_отвечает_клие
     ):
         assert response.status == 200
         assert await response.json() == {"cupos": []}
-
-
-async def test_chromium_запускается_без_сети() -> None:
-    from playwright.async_api import Error, async_playwright
-
-    async with async_playwright() as pw:
-        installed = await asyncio.to_thread(Path(pw.chromium.executable_path).exists)
-        if not installed:
-            pytest.skip("Chromium не установлен: dev.py setup --bot registro-civil-bot")
-        try:
-            browser = await pw.chromium.launch(headless=True)
-        except Error as error:  # pragma: no cover - зависит от машины
-            pytest.fail(f"Chromium установлен, но не запускается: {error}")
-        try:
-            page = await browser.new_page()
-            await page.set_content("<p id='probe'>ok</p>")
-            assert await page.inner_text("#probe") == "ok"
-        finally:
-            await browser.close()

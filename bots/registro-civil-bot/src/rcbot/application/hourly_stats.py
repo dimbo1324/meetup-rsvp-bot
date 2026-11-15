@@ -20,9 +20,7 @@ class HourlyStats:
         self._background = background
         self.current: PollStatsHour | None = None
 
-    def count(
-        self, *, latency_ms: float | None = None, error: bool = False, relogins: int = 0
-    ) -> None:
+    def count(self, *, latency_ms: float | None = None, error: bool = False) -> None:
         hour = self._clock.now().replace(minute=0, second=0, microsecond=0)
         if self.current is not None and self.current.hour != hour:
             # Закрытый час сохраняется фоном: запись в БД не задерживает проверки
@@ -34,7 +32,6 @@ class HourlyStats:
             self.current.checks += 1
             self.current.latencies_ms.append(latency_ms)
         self.current.errors += int(error)
-        self.current.relogins += relogins
 
     async def flush(self) -> None:
         if self.current is None:

@@ -1,4 +1,4 @@
-"""Цикл опроса (SPEC 2.2–2.3): расписание без дрейфа, состояния, отступление, смена источника.
+"""Цикл опроса (SPEC 2.2–2.3): расписание без дрейфа, состояния, отступление.
 
 Следующая проверка считается от `loop.time()` предыдущего срока с разбросом ±jitter, а не
 «сон после окончания». Ошибки сайта замедляют опрос, а не учащают его (SPEC 0.3, правило 4).
@@ -35,23 +35,17 @@ from rcbot.application.runtime import (
     clamp_interval,
     clamp_months,
 )
-from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
 from rcbot.domain.detector import Detector
 from rcbot.domain.errors import (
     HostNotAllowed,
-    ManualStepRequired,
     RateLimited,
     RcbotError,
-    ReloginBudgetExceeded,
-    ReloginDeferred,
-    SessionExpired,
     SiteUnavailable,
-    SourceNotConfigured,
     UnexpectedResponse,
 )
-from rcbot.domain.events import ManualActionRequired, PollerStateChanged, SourceSwitched
-from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
+from rcbot.domain.events import PollerStateChanged
+from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import (
     AppEvent,
     AvailabilitySnapshot,
@@ -66,19 +60,12 @@ logger = logging.getLogger(__name__)
 BACKOFF_START_SEC = 30.0
 BACKOFF_MAX_SEC = 900.0
 RATE_LIMIT_PAUSE_SEC = 900.0
-MANUAL_RECHECK_SEC = 900.0
 # Бессрочная пауза: состояние перепроверяется раз в это время (команда /resume будит цикл сразу)
 PAUSE_RECHECK_SEC = 900.0
-REAUTH_RETRY_SEC = 30.0
-REAUTH_FAILURES_TO_BACKOFF = 3
-UNEXPECTED_TO_SWITCH = 3
 # Со скольки подряд идущих сбоев состояние становится BACKOFF и владельцу уходит сообщение
 BACKOFF_STATE_AFTER = 2
-# Проверка дольше этого прерывается, браузер перезапускается (защита от зависания)
+# Проверка дольше этого прерывается, соединение создаётся заново (защита от зависания)
 FETCH_TIMEOUT_SEC = 150.0
-# Вход внутри проверки (после SessionExpired) дольше этого прерывается; шаги входа в auth.py
-# (30 с на шаг, 60 с на возврат, 45 с на навигацию) укладываются с запасом
-LOGIN_TIMEOUT_SEC = 240.0
 
 
 _ErrorHandler = Callable[[str], float | Awaitable[float]]
@@ -102,9 +89,7 @@ class PollLoop:
     def __init__(
         self,
         *,
-        primary: AvailabilitySource,
-        fallback: AvailabilitySource | None,
-        session: SessionManager,
+        source: AvailabilitySource,
         detector: Detector,
         bus: EventBus,
         clock: Clock,
@@ -117,9 +102,7 @@ class PollLoop:
         rng: random.Random | None = None,
         journal: Journal | None = None,
     ) -> None:
-        self._source = primary
-        self._fallback = fallback
-        self._session = session
+        self._source = source
         self._detector = detector
         self._bus = bus
         self._clock = clock
@@ -130,20 +113,16 @@ class PollLoop:
         self._target = target
         self._jitter = jitter
         self._rng = rng or random.Random()
-        self.status = PollStatus(started_at=clock.now(), source=primary.kind)
+        self.status = PollStatus(started_at=clock.now(), source=source.kind)
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
         self._background = BackgroundTasks("цикл опроса")
         self._hourly = HourlyStats(clock, stats, self._background)
         self._next_due = 0.0
         # Не начинать проверку раньше этого момента: минимум между запросами (SPEC 0.3, правило 3)
-        # держится при любых пробуждениях (/interval, «Готово», /resume, вход по команде)
+        # держится при любых пробуждениях (/interval, /resume)
         self._not_before = 0.0
-        self._logins_counted = session.logins
-        self._manual_confirmed = False
         self._backoff_step = 0
-        self._reauth_failures = 0
-        self._unexpected_streak = 0
         # Ход цикла для обнаружения зависаний (application/liveness.py)
         self.tick_started_at: float | None = None
         self.last_tick_finished_at: float | None = None
@@ -180,24 +159,8 @@ class PollLoop:
     async def save_runtime(self) -> None:
         await self._runtime_store.save(self.runtime)
 
-    def manual_done(self) -> None:
-        """Владелец прошёл шаг 1 сам и нажал «Готово» (D3): проверка — сразу."""
-        self._manual_confirmed = True
-        self.wake()
-
-    async def relogin(self) -> None:
-        """Вход по команде владельца. Отказ (пауза после тревоги, лимит) не трогает сессию."""
-        try:
-            await self._session.relogin("по команде владельца", force=True)
-        finally:
-            self._count_relogins()
-        self.wake()
-
     def current_interval(self, now: datetime) -> float:
-        interval = self.runtime.ladder_interval(now)
-        if self._source.kind is SourceKind.DOM:
-            interval = max(interval, MIN_DOM_POLL_INTERVAL_SEC)
-        return clamp_interval(interval)
+        return clamp_interval(self.runtime.ladder_interval(now))
 
     # --- цикл ---
 
@@ -227,11 +190,6 @@ class PollLoop:
         finally:
             # Ещё и при отмене задачи (остановка, перезапуск): статистика часа не теряется
             await self._flush_hour()
-
-    def _min_spacing(self) -> float:
-        if self._source.kind is SourceKind.DOM:
-            return MIN_DOM_POLL_INTERVAL_SEC
-        return MIN_POLL_INTERVAL_SEC
 
     async def _respect_minimum(self) -> None:
         """Пробуждение по команде не сокращает минимум между проверками: ждём, прерываясь стопом."""
@@ -276,12 +234,11 @@ class PollLoop:
         target = replace(self._target, months_ahead=self.runtime.months_ahead)
         started = self._clock.monotonic()
         self.tick_started_at = started
-        self._not_before = started + self._min_spacing()
+        self._not_before = started + MIN_POLL_INTERVAL_SEC
         try:
             async with asyncio.timeout(FETCH_TIMEOUT_SEC) as scope:
                 snapshot = await self._source.fetch(target)
         except Exception as error:  # источник мог бросить что угодно: цикл не должен падать
-            # Длительность — до разбора ошибки: повторный вход в «время ответа» не входит
             duration_ms = (self._clock.monotonic() - started) * 1000
             timed_out = isinstance(error, TimeoutError) and scope.expired()
             delay = await self._handle_error(error, timed_out=timed_out)
@@ -290,11 +247,8 @@ class PollLoop:
         finally:
             self.tick_started_at = None
             self.last_tick_finished_at = self._clock.monotonic()
-            self._count_relogins()
 
         self._backoff_step = 0
-        self._unexpected_streak = 0
-        self._manual_confirmed = False
         self._set_state(PollState.RUNNING, "проверка прошла")
         self.status.last_check_at = snapshot.observed_at
         self.status.last_latency_ms = snapshot.latency_ms
@@ -312,7 +266,7 @@ class PollLoop:
 
     async def _handle_error(self, error: Exception, *, timed_out: bool = False) -> float:
         if timed_out:
-            # Зависшая проверка: браузер или соединение закрываются и создаются заново
+            # Зависшая проверка: соединение закрывается и создаётся заново
             reason = f"проверка не уложилась в {FETCH_TIMEOUT_SEC:g} с и прервана"
             self._journal.event("check.timeout", reason, "WARNING")
             self._spawn(self.reset_source())
@@ -328,23 +282,15 @@ class PollLoop:
     def _error_handlers(self) -> tuple[tuple[type[RcbotError], _ErrorHandler], ...]:
         """Что делать с каждой ошибкой источника; прочие ошибки бота — обычное отступление."""
         return (
-            (SessionExpired, self._reauth),
-            (ManualStepRequired, self._needs_manual),
             (RateLimited, self._rate_limited),
-            (UnexpectedResponse, self._unexpected),
-            (SourceNotConfigured, self._source_not_configured),
+            (UnexpectedResponse, self._backoff),
             (SiteUnavailable, self._backoff),
             (HostNotAllowed, self._backoff),
         )
 
-    def _source_not_configured(self, reason: str) -> float:
-        if self._switch_to_fallback(reason):
-            return self._delay(self._min_spacing())
-        return self._backoff(reason)
-
     def _source_crashed(self, error: BaseException) -> float:
-        """Источник бросил не наше исключение (баг адаптера, сбой браузера): ведём себя как при
-        недоступности сайта. Текст исключения не пишем: в нём бывают адреса с номером заявки."""
+        """Источник бросил не наше исключение (баг адаптера): ведём себя как при недоступности
+        сайта. Текст исключения не пишем: в нём бывают адреса и значения."""
         reason = f"неожиданный сбой источника: {type(error).__name__}"
         logger.error("%s (%s)", reason, _where(error))
         self._journal.event("check.crash", reason, "ERROR")
@@ -382,7 +328,7 @@ class PollLoop:
     async def reset_source(self) -> None:
         try:
             await self._source.close()
-        except Exception as error:  # закрытие сломанного браузера может падать по-разному
+        except Exception as error:  # закрытие сломанного соединения может падать по-разному
             logger.warning("источник не закрылся чисто: %s", type(error).__name__)
 
     @property
@@ -420,8 +366,8 @@ class PollLoop:
         interval = self.current_interval(self._clock.now())
         self.status.interval_sec = interval
         factor = 1 + self._rng.uniform(-self._jitter, self._jitter)
-        # Разброс не опускает интервал ниже минимума источника: 10 с у API, 60 с у DomSource
-        self._next_due += max(self._min_spacing(), interval * factor)
+        # Разброс не опускает интервал ниже жёсткого минимума
+        self._next_due += max(MIN_POLL_INTERVAL_SEC, interval * factor)
         if self._next_due < now_mono:
             # Проверка длилась дольше интервала: без «догоняющей» серии запросов
             self._next_due = now_mono + MIN_POLL_INTERVAL_SEC
@@ -433,61 +379,6 @@ class PollLoop:
 
     # --- ошибки ---
 
-    async def _reauth(self, reason: str) -> float:
-        if self.status.state is not PollState.BACKOFF:
-            # Из BACKOFF в REAUTH и обратно не прыгаем: каждый возврат слал бы владельцу
-            # сообщение «Бот замедлился» заново
-            self._set_state(PollState.REAUTH, reason)
-        self._session.mark_expired()
-        self._journal.event("login.start", f"вход на сайт: {reason}")
-        try:
-            async with asyncio.timeout(LOGIN_TIMEOUT_SEC):
-                await self._session.relogin(reason)
-        except ReloginDeferred:
-            return self._delay(max(REAUTH_RETRY_SEC, self._session.quiet_remaining()))
-        except ReloginBudgetExceeded as error:
-            self._set_state(PollState.BACKOFF, str(error))
-            return self._delay(BACKOFF_MAX_SEC)
-        except ManualStepRequired as error:
-            return self._needs_manual(str(error))
-        except RateLimited as error:
-            # Страница входа заблокирована шлюзом: не стучимся каждые 30 с, а отступаем (D4)
-            return await self._rate_limited(f"вход: {error}")
-        except SiteUnavailable as error:
-            # Сайт входа недоступен: то же экспоненциальное отступление, что и у проверки
-            return self._backoff(f"вход: {error}")
-        except Exception as error:  # вход мог упасть и не нашим исключением
-            description = (
-                f"вход не уложился в {LOGIN_TIMEOUT_SEC:g} с"
-                if isinstance(error, TimeoutError)
-                else describe_error(error)
-            )
-            self._reauth_failures += 1
-            self._journal.event("login.failed", f"вход не удался: {description}", "WARNING")
-            self._error(f"вход не удался: {description}")
-            if self._reauth_failures >= REAUTH_FAILURES_TO_BACKOFF:
-                self._set_state(
-                    PollState.BACKOFF, f"{self._reauth_failures} неудачных входов подряд"
-                )
-                self._backoff_step += 1
-                return self._delay(self._backoff_delay())
-            return self._delay(REAUTH_RETRY_SEC)
-        self._reauth_failures = 0
-        self._journal.event("login.ok", "вход выполнен")
-        self._set_state(PollState.RUNNING, "вход выполнен")
-        return self._delay(0.0)
-
-    def _needs_manual(self, reason: str) -> float:
-        if self.status.state is not PollState.NEEDS_MANUAL:
-            self._set_state(PollState.NEEDS_MANUAL, reason)
-            self._bus.publish(ManualActionRequired(self._clock.now(), reason))
-        elif self._manual_confirmed:
-            # Владелец нажал «Готово», а сайт всё ещё просит шаг 1: напоминаем ему один раз
-            self._bus.publish(ManualActionRequired(self._clock.now(), reason))
-        self._manual_confirmed = False
-        # Если владелец пройдёт шаг 1 и не нажмёт «Готово», бот сам заметит это через 15 минут
-        return self._delay(MANUAL_RECHECK_SEC)
-
     async def _rate_limited(self, reason: str) -> float:
         self._error(reason)
         self.runtime.step_back(self._clock.now())
@@ -498,31 +389,6 @@ class PollLoop:
         except Exception as error:  # пауза уже назначена: сбой записи не должен её отменить
             logger.warning("шаг назад по лестнице не сохранён: %s", type(error).__name__)
         return delay
-
-    def _unexpected(self, reason: str) -> float:
-        self._unexpected_streak += 1
-        if (
-            self._source.kind is SourceKind.API
-            and self._unexpected_streak >= UNEXPECTED_TO_SWITCH
-            and self._switch_to_fallback(f"{self._unexpected_streak} неожиданных ответа подряд")
-        ):
-            self._error(reason)  # и последний неожиданный ответ — тоже ошибка проверки
-            return self._delay(self._min_spacing())
-        return self._backoff(reason)
-
-    def _switch_to_fallback(self, reason: str) -> bool:
-        if self._fallback is None or self._fallback is self._source:
-            return False
-        old = self._source
-        self._source, self._fallback = self._fallback, None
-        self._unexpected_streak = 0
-        # Новый источник ещё не опрашивался, но запросы к сайту не чаще минимума
-        self._not_before = self._clock.monotonic() + self._min_spacing()
-        self.status.source = self._source.kind
-        self._bus.publish(SourceSwitched(self._clock.now(), old.kind, self._source.kind, reason))
-        self._spawn(old.close())
-        logger.warning("источник %s → %s: %s", old.kind, self._source.kind, reason)
-        return True
 
     def _backoff(self, reason: str) -> float:
         self._error(reason)
@@ -557,13 +423,6 @@ class PollLoop:
         self.status.last_error_at = self._clock.now()
         self._hourly.count(error=True)
         logger.warning("проверка не удалась: %s", reason)
-
-    def _count_relogins(self) -> None:
-        """Вход мог пройти внутри проверки или по команде: считаем разницу, а не события."""
-        done = self._session.logins - self._logins_counted
-        if done > 0:
-            self._logins_counted = self._session.logins
-            self._hourly.count(relogins=done)
 
     async def _flush_hour(self) -> None:
         await self._hourly.flush()

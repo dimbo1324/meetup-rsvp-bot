@@ -62,7 +62,7 @@ class SafeHttp:
             )
             if self._jar is None:
                 # Хранилище cookies живёт дольше сессии: после сброса зависшего источника
-                # (закрытие и новая сессия) вход не теряется и не тратит лимит 6 входов в час
+                # (закрытие и новая сессия) сайт видит того же посетителя, а не нового
                 self._jar = aiohttp.CookieJar()
             self._session = aiohttp.ClientSession(
                 connector=connector, timeout=self._timeout, cookie_jar=self._jar

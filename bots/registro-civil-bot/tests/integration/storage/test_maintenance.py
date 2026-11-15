@@ -31,7 +31,7 @@ async def test_события_удаляются_строго_старше_гр�
 
 async def test_статистика_удаляется_строго_старше_границы(db: Db) -> None:
     for moment in (CUTOFF - timedelta(hours=1), CUTOFF, CUTOFF + timedelta(hours=1)):
-        await db.stats.save_hour(PollStatsHour(moment, 1, 0, 0, [1.0]))
+        await db.stats.save_hour(PollStatsHour(moment, 1, 0, [1.0]))
     removed = await db.maintenance.delete_older_than({"poll_stats_hourly": CUTOFF})
     assert removed == {"poll_stats_hourly": 1}
     assert [h.hour for h in await db.stats.since(CUTOFF - timedelta(days=1))] == [
@@ -91,7 +91,7 @@ async def test_старые_доставки_без_инцидента_тоже_
 async def test_несколько_таблиц_за_один_вызов_и_счётчики_по_таблицам(db: Db) -> None:
     await db.events.write(AppEvent(CUTOFF - timedelta(days=1), "INFO", "a", "m"))
     await db.events.write(AppEvent(CUTOFF - timedelta(days=2), "INFO", "b", "m"))
-    await db.stats.save_hour(PollStatsHour(CUTOFF - timedelta(days=1), 1, 0, 0, [1.0]))
+    await db.stats.save_hour(PollStatsHour(CUTOFF - timedelta(days=1), 1, 0, [1.0]))
     removed = await db.maintenance.delete_older_than(
         {"app_events": CUTOFF, "poll_stats_hourly": CUTOFF, "incidents": CUTOFF}
     )
@@ -101,7 +101,7 @@ async def test_несколько_таблиц_за_один_вызов_и_сч�
 async def test_разные_границы_для_разных_таблиц(db: Db) -> None:
     now = datetime(2026, 11, 12, tzinfo=UTC)
     await db.events.write(AppEvent(now - timedelta(days=40), "INFO", "old-event", "m"))
-    await db.stats.save_hour(PollStatsHour(now - timedelta(days=40), 1, 0, 0, [1.0]))
+    await db.stats.save_hour(PollStatsHour(now - timedelta(days=40), 1, 0, [1.0]))
     removed = await db.maintenance.delete_older_than(
         {"app_events": now - timedelta(days=30), "poll_stats_hourly": now - timedelta(days=60)}
     )

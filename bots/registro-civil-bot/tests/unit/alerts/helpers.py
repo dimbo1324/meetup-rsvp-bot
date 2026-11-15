@@ -15,7 +15,6 @@ from tests.fakes import (
     AGENDA_URL,
     T0,
     TARGET,
-    FakeAuthenticator,
     FakeNotifier,
     FakeSource,
     ManualClock,
@@ -36,7 +35,6 @@ from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import Coordinator, NoopCoordinator
 from rcbot.application.runtime import RuntimeSettings, RuntimeStore
-from rcbot.application.session_manager import SessionManager
 from rcbot.domain.detector import Detector
 from rcbot.domain.events import SlotsAppeared, SlotsChanged, SlotsGone
 from rcbot.domain.models import Alert, Channel, DeliveryResult, Slot
@@ -72,7 +70,6 @@ class Rig:
     notifiers: dict[Channel, TimedNotifier]
     repo: MemoryIncidentRepository
     book: IncidentBook
-    session: SessionManager
     runtime: RuntimeSettings
     journal: RecordingJournal
     alerts: AlertOrchestrator
@@ -102,7 +99,6 @@ def make_rig(
     }
     repo = MemoryIncidentRepository()
     book = IncidentBook(repo, clock, TARGET.id)
-    session = SessionManager(FakeAuthenticator(), clock, max_per_hour=6)
     runtime = RuntimeSettings(base_interval_sec=20.0, months_ahead=6, ladder_started_at=T0)
     journal = RecordingJournal()
     composer = MessageComposer(MONTEVIDEO, AGENDA_URL, "TEST-1")
@@ -111,13 +107,12 @@ def make_rig(
         SPEC_POLICIES if policies is None else policies,
         composer,
         book,
-        session,
         runtime,
         clock,
         coordinator or NoopCoordinator(),
         journal=journal,
     )
-    rig = Rig(clock, notifiers, repo, book, session, runtime, journal, alerts, composer)
+    rig = Rig(clock, notifiers, repo, book, runtime, journal, alerts, composer)
     alerts.delivery_listeners.append(rig.delivered.append)
     return rig
 
@@ -170,9 +165,7 @@ def make_control(
     event_log = MemoryEventLog()
     bus = EventBus()
     loop = PollLoop(
-        primary=source,
-        fallback=None,
-        session=rig.session,
+        source=source,
         detector=Detector(),
         bus=bus,
         clock=rig.clock,
@@ -196,7 +189,6 @@ def make_control(
         rig.book,
         rig.repo,
         event_log,
-        rig.session,
         rig.clock,
         cleanup=cleanup if with_hooks else None,
         folder_size=(lambda: folder_bytes or 0)

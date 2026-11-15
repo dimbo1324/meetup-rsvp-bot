@@ -6,7 +6,7 @@ import pytest
 
 from rcbot.bot import texts
 from rcbot.domain.events import SlotsAppeared
-from rcbot.infrastructure.notify.telegram import CALLBACK_ACK, CALLBACK_MANUAL_DONE
+from rcbot.infrastructure.notify.telegram import CALLBACK_ACK
 from tests.fakes import T0, slots, snapshot
 from tests.unit.bot.harness import Setup, make_setup, stranger_of
 
@@ -72,24 +72,6 @@ async def test_ответ_на_нажатие_не_длиннее_лимита_t
 
 
 # --- кнопка «Готово» ---
-
-
-async def test_готово_будит_цикл_и_благодарит() -> None:
-    setup = await make_setup()
-    setup.rig.loop._wake.clear()
-    await setup.owner.press(CALLBACK_MANUAL_DONE)
-    assert [a.text for a in setup.session.answers] == [texts.MANUAL_THANKS]
-    assert setup.rig.loop._wake.is_set()
-    assert "command.manual_done" in setup.rig.journal.codes()
-
-
-async def test_готово_не_подтверждает_тревогу_и_не_останавливает_повторы() -> None:
-    """«Готово» — про шаг 1, «Вижу» — про места: смешивать их нельзя."""
-    setup = await make_setup()
-    await alarm(setup)
-    await setup.owner.press(CALLBACK_MANUAL_DONE)
-    assert setup.rig.alerts.repeating() is True
-    assert not (await setup.rig.book.current()).acked  # type: ignore[union-attr]
 
 
 async def test_неизвестная_кнопка_ничего_не_делает() -> None:

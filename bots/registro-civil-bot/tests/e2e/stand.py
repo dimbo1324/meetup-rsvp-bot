@@ -1,10 +1,11 @@
-"""Стенд: весь граф `runner.run_app` без Telegram-сети и без Chromium.
+"""Стенд: весь граф `runner.run_app` без Telegram-сети и без живых сайтов.
 
 Настоящее: `PollLoop`, `EventBus`, `AlertOrchestrator`, `IncidentBook`, `JournalFeed`,
-`SessionManager`, `Controller`, `LivenessMonitor`, `Housekeeping`, `Supervisor`, файловая SQLite с
-миграциями, `FileJournal` в временной папке, `ApiSource` поверх `SafeHttp` и локального TLS-сервера.
-Подставное: вход (`SiteAuthenticator`), канал Telegram, запасной источник (вместо `DomSource`).
-Каналы ntfy и CallMeBot — фальшивые или настоящие против локального сервера (`channels=`).
+`Controller`, `LivenessMonitor`, `Housekeeping`, `Supervisor`, файловая SQLite с миграциями,
+`FileJournal` во временной папке, `SaeSource` поверх `SafeHttp` и локального TLS-сервера.
+Подставное: канал Telegram и разбор дат со страницы с местами (`SiteDates`: настоящего разбора
+пока нет, решение R12). Каналы ntfy и CallMeBot — фальшивые или настоящие против локального
+сервера (`channels=`).
 
 Порядок остановки и подписки событий — те же функции, что в `runner` (`_wire`, `_shutdown`,
 `_policies`): стенд не разойдётся с корнем сборки молча.
@@ -19,12 +20,11 @@ import json
 import random
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-import aiohttp
 import pytest
 
 from rcbot.application.alerting import AlertOrchestrator
@@ -36,25 +36,24 @@ from rcbot.application.journal_feed import JournalFeed
 from rcbot.application.liveness import LivenessMonitor
 from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
-from rcbot.application.ports import (
-    Authenticator,
-    AvailabilitySource,
-    CheckRecord,
-    NoopCoordinator,
-    Notifier,
-)
+from rcbot.application.ports import AvailabilitySource, CheckRecord, NoopCoordinator, Notifier
 from rcbot.application.runtime import K_LADDER_START, RuntimeSettings, RuntimeStore
-from rcbot.application.session_manager import SessionManager
 from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, Storage, ensure_target, open_storage
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import MIN_POLL_INTERVAL_SEC, Settings
+from rcbot.config.settings import Settings
 from rcbot.domain.detector import Detector
-from rcbot.domain.models import Alert, Channel, DeliveryResult, SourceKind, WatchTarget
+from rcbot.domain.models import (
+    Alert,
+    AvailabilitySnapshot,
+    Channel,
+    DeliveryResult,
+    SourceKind,
+    WatchTarget,
+)
 from rcbot.infrastructure.files import FileJanitor
-from rcbot.infrastructure.gubuy import api_source as api_source_module
-from rcbot.infrastructure.gubuy.api_source import ApiSource
+from rcbot.infrastructure.gubuy.sae_source import SaeSource
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.files import FileJournal
 from rcbot.infrastructure.logging.redaction import REDACTOR
@@ -63,7 +62,7 @@ from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
 from rcbot.infrastructure.notify.ntfy import NtfyNotifier
 from rcbot.runner import Closers, _policies, _shutdown, _wire
 from tests.e2e.clock import StandClock
-from tests.e2e.site import ChannelsSite, FakeSite, SiteAuthenticator, parse_test_payload
+from tests.e2e.site import ChannelsSite, FakeSite, parse_test_dates
 from tests.fakes import AGENDA_URL, FakeNotifier, FakeSource
 
 TRAMITE_ID = "TEST-TRAMITE-0001"
@@ -74,7 +73,37 @@ STOP_MESSAGE_CODE = "bot.stop"
 CALM_SPINS = 40
 
 
-# --- журнал и каналы под наблюдением ---
+# --- источник, журнал и каналы под наблюдением ---
+
+
+class SiteDates:
+    """Настоящий `SaeSource` на проводе и тестовый разбор дат страницы с местами.
+
+    `SaeSource` видит места без дат (`dates_unknown`). Даты в работе появятся с разбором страницы
+    (R12); стенд подставляет даты, которые «сайт» показал последней страницей с местами.
+    """
+
+    def __init__(self, inner: SaeSource, site: FakeSite) -> None:
+        self.inner = inner
+        self._site = site
+
+    @property
+    def kind(self) -> SourceKind:
+        return self.inner.kind
+
+    @property
+    def _http(self) -> object:
+        return self.inner._http
+
+    async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
+        snapshot = await self.inner.fetch(target)
+        if snapshot.dates_unknown and self._site.served:
+            found = parse_test_dates(self._site.served)
+            return replace(snapshot, slots=found, dates_unknown=False, fingerprint="")
+        return snapshot
+
+    async def close(self) -> None:
+        await self.inner.close()
 
 
 class StandJournal(FileJournal):
@@ -195,13 +224,10 @@ class Stand:
     controller: Controller
     liveness: LivenessMonitor
     housekeeping: Housekeeping
-    session: SessionManager
     runtime: RuntimeSettings
     target: WatchTarget
     primary: AvailabilitySource
-    fallback: AvailabilitySource | None
     notifiers: dict[Channel, SpyNotifier]
-    auth: Authenticator
     t0: float
     ignore: set[str] = field(default_factory=set)
     closed: bool = False
@@ -218,8 +244,6 @@ class Stand:
         monkeypatch: pytest.MonkeyPatch,
         site: FakeSite | None = None,
         primary: AvailabilitySource | None = None,
-        fallback: AvailabilitySource | None = None,
-        auth: Authenticator | None = None,
         channels: ChannelsSite | None = None,
         notifiers: dict[Channel, Any] | None = None,
         ladder_age_hours: float | None = None,
@@ -262,28 +286,15 @@ class Stand:
             settings.poll_interval_sec, settings.months_ahead, clock.now()
         )
 
-        # Источники: ApiSource поверх настоящего SafeHttp; вместо DomSource — запасной по сценарию
+        # Источник: настоящий SaeSource поверх SafeHttp и локального сервера, или свой по сценарию
         if primary is None:
             assert site is not None, "нужен либо site, либо primary"
-            monkeypatch.setattr(api_source_module, "parse_disponibilidades", parse_test_payload)
-            # Как в build_api_source: SafeHttp без своего jar. Куки для IP-адреса aiohttp по
-            # умолчанию не хранит; включаем unsafe только для адреса 127.0.0.1 тестового сервера
-            monkeypatch.setattr(
-                aiohttp, "CookieJar", lambda *a, **kw: _UNSAFE_JAR(*a, unsafe=True, **kw)
-            )
             http = SafeHttp(
                 {"127.0.0.1"},
                 timeout_sec=settings.request_timeout_sec,
                 ssl_context=site.server.client_ssl,
             )
-            primary = ApiSource(http, site.api_url, AGENDA_URL, paths.quarantine, clock)
-        if auth is None:
-            assert site is not None, "нужен либо site, либо auth"
-            auth = SiteAuthenticator(site)
-        session = SessionManager(auth, clock, settings.relogin_max_per_hour)
-        sources = [src for src in (primary, fallback) if src is not None]
-        for source in sources:
-            session.subscribe(source.use_cookies)
+            primary = SiteDates(SaeSource(http, site.url, paths.shots, clock), site)
 
         book = IncidentBook(storage.incidents, clock, target.id)
         detector = Detector()
@@ -298,16 +309,13 @@ class Stand:
             _policies(core),
             composer,
             book,
-            session,
             runtime,
             clock,
             NoopCoordinator(),
             journal=journal,
         )
         loop = PollLoop(
-            primary=primary,
-            fallback=fallback,
-            session=session,
+            source=primary,
             detector=detector,
             bus=bus,
             clock=clock,
@@ -338,7 +346,6 @@ class Stand:
                 "incident_open": incident is not None,
                 "incident_days": days,
                 "alert_repeating": alerts.repeating(),
-                "logins_last_hour": session.logins_last_hour(),
             }
 
         liveness = LivenessMonitor(
@@ -350,7 +357,6 @@ class Stand:
             book,
             storage.incidents,
             storage.events,
-            session,
             clock,
             cleanup=housekeeping.run_once,
             folder_size=housekeeping.folder_size,
@@ -363,8 +369,7 @@ class Stand:
         closers = Closers()
         for spy in spies.values():
             closers.add(spy.close)
-        for source in sources:
-            closers.add(source.close)
+        closers.add(primary.close)
         closers.add(alerts.close)
         closers.add(bus.drain)
 
@@ -384,30 +389,17 @@ class Stand:
             controller=controller,
             liveness=liveness,
             housekeeping=housekeeping,
-            session=session,
             runtime=runtime,
             target=target,
             primary=primary,
-            fallback=fallback,
             notifiers=spies,
-            auth=auth,
             t0=clock.monotonic(),
             ignore=set(ignore or ()),
         )
         if start:
             stand.start()
             await stand.quiesce()
-            if site is not None and "tick" not in stand.ignore and "login" not in stand.ignore:
-                await stand.settle_login()
         return stand
-
-    async def settle_login(self) -> None:
-        """Первая проверка без cookies → 302 → вход; повторная идёт не раньше минимума (10 с).
-
-        После неё `t0` переставляется: сценарии отсчитывают расписание от первой успешной проверки.
-        """
-        await self.advance(MIN_POLL_INTERVAL_SEC)
-        self.t0 = self.clock.monotonic()
 
     def start(
         self,
@@ -532,8 +524,6 @@ class Stand:
 
 # --- вспомогательное ---
 
-_UNSAFE_JAR = aiohttp.CookieJar
-
 
 def _slow_down_open(storage: Storage, hook: Callable[[], Awaitable[None]]) -> None:
     repo = storage.incidents
@@ -568,6 +558,6 @@ def _build_notifiers(
 
 
 def fake_source(
-    clock: StandClock, *script: Any, kind: SourceKind = SourceKind.DOM, **kwargs: Any
+    clock: StandClock, *script: Any, kind: SourceKind = SourceKind.SAE, **kwargs: Any
 ) -> FakeSource:
     return FakeSource(list(script), kind=kind, clock=clock, **kwargs)  # type: ignore[arg-type]

@@ -12,7 +12,7 @@ from rcbot.domain.models import PollState, SourceKind
 class PollStatus:
     started_at: datetime
     state: PollState = PollState.RUNNING
-    source: SourceKind = SourceKind.DOM
+    source: SourceKind = SourceKind.SAE
     interval_sec: float = 0.0
     last_check_at: datetime | None = None
     last_latency_ms: float | None = None

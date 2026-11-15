@@ -14,11 +14,10 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from rcbot import __version__
-from rcbot.application.ports import AvailabilitySource, Journal, NullJournal
-from rcbot.application.session_manager import SessionManager
+from rcbot.application.ports import Journal, NullJournal
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import BPMGOB_HOST, SAE_HOST, Settings, load_settings
+from rcbot.config.settings import SAE_HOST, Settings, load_settings
 from rcbot.domain.models import WatchTarget
 from rcbot.infrastructure.clock import SystemClock
 from rcbot.infrastructure.db.engine import create_engine, create_session_factory
@@ -30,10 +29,6 @@ from rcbot.infrastructure.db.repositories import (
     SqlStatsRepository,
     SqlTargetRepository,
 )
-from rcbot.infrastructure.gubuy.api_source import ApiSource
-from rcbot.infrastructure.gubuy.auth import PlaywrightAuthenticator
-from rcbot.infrastructure.gubuy.browser import BrowserOptions
-from rcbot.infrastructure.gubuy.dom_source import DomSource
 from rcbot.infrastructure.gubuy.sae_source import SaeSource
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.desktop import journal_dir
@@ -170,63 +165,11 @@ async def open_storage(core: Core) -> Storage:
     )
 
 
-def browser_options(
-    core: Core, *, headless: bool | None = None, channel: str | None = None
-) -> BrowserOptions:
-    return BrowserOptions(
-        headless=core.settings.headless if headless is None else headless,
-        channel=core.settings.browser if channel is None else channel,
-    )
-
-
-def build_authenticator(core: Core) -> PlaywrightAuthenticator:
-    s = core.settings
-    return PlaywrightAuthenticator(
-        login_url=s.login_url,
-        doc_country=s.doc_country,
-        doc_type=s.doc_type,
-        credentials=core.secrets.credentials,
-        options=browser_options(core),
-    )
-
-
-def build_api_source(core: Core) -> ApiSource:
-    s = core.settings
-    # API календаря только на bpmgob (проверка настроек): остальные хосты списка ему не нужны
-    http = SafeHttp([BPMGOB_HOST], timeout_sec=s.request_timeout_sec)
-    return ApiSource(http, s.api_url, s.agenda_url, core.paths.quarantine, core.clock)
-
-
-def build_dom_source(core: Core) -> DomSource:
-    s = core.settings
-    return DomSource(
-        s.agenda_url, s.location_text, browser_options(core), core.paths.shots, core.clock
-    )
-
-
-def build_sae_source(core: Core) -> SaeSource:
+def build_source(core: Core) -> SaeSource:
+    """Единственный источник — публичная страница записи SAE без входа (решения R12, R13)."""
     s = core.settings
     http = SafeHttp([SAE_HOST], timeout_sec=s.request_timeout_sec)
     return SaeSource(http, s.sae_url, core.paths.shots, core.clock)
-
-
-async def build_sources(core: Core) -> tuple[AvailabilitySource, AvailabilitySource | None]:
-    """Основной источник и запасной.
-
-    По умолчанию — публичная страница SAE без входа (R12), запасного нет: календарь bpmgob после
-    входа закрыт контрольным вопросом шага 1. Без SAE — API и DomSource bpmgob, как до R12.
-    """
-    if core.settings.sae_source_enabled:
-        return build_sae_source(core), None
-    api, dom = build_api_source(core), build_dom_source(core)
-    if api.configured:
-        return api, dom
-    await api.close()
-    return dom, None
-
-
-def build_session(core: Core) -> SessionManager:
-    return SessionManager(build_authenticator(core), core.clock, core.settings.relogin_max_per_hour)
 
 
 def transient_target(core: Core) -> WatchTarget:

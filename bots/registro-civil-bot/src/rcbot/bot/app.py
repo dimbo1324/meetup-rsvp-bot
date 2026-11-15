@@ -26,7 +26,6 @@ COMMANDS = [
     BotCommand(command="test", description="проверить каналы"),
     BotCommand(command="last", description="последние инциденты"),
     BotCommand(command="interval", description="интервал опроса, с"),
-    BotCommand(command="relogin", description="войти заново"),
     BotCommand(command="cleanup", description="очистить старые данные"),
     BotCommand(command="menu", description="меню"),
 ]

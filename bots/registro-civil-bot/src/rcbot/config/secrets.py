@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from enum import StrEnum
 
 import keyring
@@ -18,24 +17,19 @@ SERVICE = "rcbot"
 
 
 class SecretKey(StrEnum):
-    DOC_NUMBER = "doc_number"
-    PASSWORD = "gubuy_password"
     TELEGRAM_TOKEN = "telegram_token"
     TELEGRAM_CHAT_ID = "telegram_chat_id"
     NTFY_TOPIC = "ntfy_topic"
     CALLMEBOT_USER = "callmebot_user"
 
 
-REQUIRED = (
-    SecretKey.DOC_NUMBER,
-    SecretKey.PASSWORD,
-    SecretKey.TELEGRAM_TOKEN,
-    SecretKey.TELEGRAM_CHAT_ID,
-)
+REQUIRED = (SecretKey.TELEGRAM_TOKEN, SecretKey.TELEGRAM_CHAT_ID)
+
+# Секреты входа на bpmgob (до решения R13): бот их больше не читает. `init` и `uninstall` удаляют
+# их из Credential Manager, чтобы номер паспорта и пароль не лежали там без надобности
+LEGACY_KEYS = ("doc_number", "gubuy_password")
 
 DESCRIPTIONS: dict[SecretKey, str] = {
-    SecretKey.DOC_NUMBER: "номер документа (паспорта) для входа в gub.uy",
-    SecretKey.PASSWORD: "пароль gub.uy",
     SecretKey.TELEGRAM_TOKEN: "токен Telegram-бота от @BotFather",
     SecretKey.TELEGRAM_CHAT_ID: "chat_id владельца в Telegram",
     SecretKey.NTFY_TOPIC: "имя темы ntfy (случайное, 32+ символа)",
@@ -45,12 +39,6 @@ DESCRIPTIONS: dict[SecretKey, str] = {
 
 class SecretMissing(Exception):
     """Нужного секрета нет в хранилище: запустите `rcbot init`."""
-
-
-@dataclass(frozen=True)
-class Credentials:
-    doc_number: SecretStr
-    password: SecretStr
 
 
 class SecretStore:
@@ -85,8 +73,16 @@ class SecretStore:
         """Какие секреты заданы — без чтения значений в логи."""
         return {key: bool(keyring.get_password(SERVICE, key.value)) for key in SecretKey}
 
-    def credentials(self) -> Credentials:
-        return Credentials(self.require(SecretKey.DOC_NUMBER), self.require(SecretKey.PASSWORD))
+    def delete_legacy(self) -> list[str]:
+        """Удаляет секреты прежнего входа на bpmgob; возвращает имена удалённых."""
+        removed = []
+        for name in LEGACY_KEYS:
+            try:
+                keyring.delete_password(SERVICE, name)
+            except keyring.errors.PasswordDeleteError:
+                continue
+            removed.append(name)
+        return removed
 
     def backend_name(self) -> str:
         return type(keyring.get_keyring()).__name__

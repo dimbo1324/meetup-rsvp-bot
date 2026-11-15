@@ -1,4 +1,4 @@
-"""Фальшивые внешние стороны для сквозных тестов: «bpmgob» и сервер каналов (ntfy, CallMeBot).
+"""Фальшивые внешние стороны для сквозных тестов: страница записи SAE и сервер каналов.
 
 Оба работают на настоящем локальном HTTPS-сервере (`LocalTlsServer`): бот ходит к ним по реальным
 сокетам и TLS, а не через подмену клиента. Живых адресов здесь нет.
@@ -17,21 +17,25 @@ from datetime import time as dtime
 
 from aiohttp import web
 
-from rcbot.application.ports import SessionCookie
-from rcbot.domain.errors import UnexpectedResponse
 from rcbot.domain.models import Slot
 from tests.e2e.clock import StandClock
-from tests.fakes import FakeAuthenticator, LocalTlsServer
+from tests.fakes import LocalTlsServer
 
-API_PATH = "/etapas/agenda_sae_api_disponibilidades"
-LOGIN_LOCATION = "https://bpmgob.mec.gub.uy/autenticacion/login"
-SESSION_COOKIE = "simple_bpm_session"
+SAE_PATH = "/sae/agendarReserva/Paso1.xhtml"
 
 Reply = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
-STEP1_HTML = (
-    "<html><body><h1>Paso 1 de 3</h1><div>Verificación de seguridad</div>"
-    "<a>Solicitar otra pregunta</a></body></html>"
+# Страница записи без мест — как в снимке живой страницы (надпись «нет мест» и выбор офиса)
+EMPTY_PAGE = (
+    "<html><body><h1>Inscripción Extranjeros</h1>"
+    '<div id="form:warnSinCupos"><h4>En la oficina seleccionada no hay cupos disponibles</h4></div>'
+    "<fieldset><span>Ubicación</span><input type=radio checked></fieldset></body></html>"
+)
+# Страница записи с местами: надписи нет; даты — в синтетическом блоке для тестового разбора
+OPEN_PAGE = (
+    "<html><body><h1>Inscripción Extranjeros</h1>"
+    "<fieldset><span>Ubicación</span><input type=radio checked></fieldset>"
+    '<div class="calendario">{dates}</div></body></html>'
 )
 BLOCKED_HTML = "<html><body>The requested URL was rejected. Please consult your administrator."
 
@@ -53,137 +57,96 @@ def html(text: str, code: int = 200) -> Reply:
     return reply
 
 
-def json_text(text: str) -> Reply:
-    """Тело как есть с типом JSON: можно отдать и невалидный JSON, и неожиданную структуру."""
-
+def redirect(location: str = "https://evil.example/") -> Reply:
     async def reply(_: web.Request) -> web.StreamResponse:
-        return web.Response(text=text, content_type="application/json")
+        return web.Response(status=302, headers={"Location": location})
 
     return reply
 
 
-def redirect_to_login() -> Reply:
+SITE_COOKIE = "SESSION-SAE-0001"
+
+
+def echo_secrets_html() -> Reply:
+    """Чужая страница с cookie сайта и «секретами» в теле: проверка очистки снимков и логов."""
+
     async def reply(_: web.Request) -> web.StreamResponse:
-        return web.Response(status=302, headers={"Location": LOGIN_LOCATION})
-
-    return reply
-
-
-def echo_cookies_html() -> Reply:
-    """Страница-мусор, которая эхом возвращает заголовок Cookie и «секреты»: проверка очистки."""
-
-    async def reply(request: web.Request) -> web.StreamResponse:
         body = (
-            "<html><body>Error inesperado. "
-            f"Cookie: {request.headers.get('Cookie', '')}\n"
+            "<html><body>Error inesperado.\n"
             "Set-Cookie: TS0191f197=deadbeefcafe0123; Path=/\n"
             "password=hunter22-test token=abcd1234efgh phone +598 99 123 456\n"
             "documento 123456789012 owner.test@example.org</body></html>"
         )
-        return web.Response(status=200, text=body, content_type="text/html")
+        headers = {"Set-Cookie": f"JSESSIONID={SITE_COOKIE}; Path=/; Secure"}
+        return web.Response(status=200, text=body, content_type="text/html", headers=headers)
 
     return reply
 
 
-def parse_test_payload(payload: object) -> frozenset[Slot]:
-    """Разбор тестового формата `{"slots": ["2027-02-23T10:30", "2027-03-01"]}`.
+def parse_test_dates(items: list[str]) -> frozenset[Slot]:
+    """Тестовый разбор дат: `["2027-02-23T10:30", "2027-03-01"]` → слоты.
 
-    Настоящий разбор появится после разведки (этап 3); до этого `parse_disponibilidades` всегда
-    отказывает. Стенд подменяет его этим разбором, чтобы проверить весь остальной путь. Как и
-    настоящему, неожиданная структура ему — `UnexpectedResponse`.
+    Настоящего разбора дат страницы SAE ещё нет (R12: ждём снимок страницы с местами). Стенд
+    подставляет этот разбор, чтобы проверить весь остальной путь тревоги с датами.
     """
-    if not isinstance(payload, dict) or not isinstance(payload.get("slots"), list):
-        raise UnexpectedResponse("в ответе нет списка slots")
     found: set[Slot] = set()
-    for item in payload["slots"]:
-        if not isinstance(item, str):
-            raise UnexpectedResponse("слот не строка")
-        try:
-            day, _, clock = item.partition("T")
-            found.add(Slot(date.fromisoformat(day), dtime.fromisoformat(clock) if clock else None))
-        except ValueError as error:
-            raise UnexpectedResponse("слот не разобран") from error
+    for item in items:
+        day, _, clock = item.partition("T")
+        found.add(Slot(date.fromisoformat(day), dtime.fromisoformat(clock) if clock else None))
     return frozenset(found)
 
 
 @dataclass
 class SiteCall:
     mono: float
-    cookie: str
     perf: float
 
 
 @dataclass
 class FakeSite:
-    """«bpmgob»: отдаёт календарь тем, у кого действующая сессия; остальных — на страницу входа.
+    """Страница записи SAE: без мест — надпись «нет мест», с местами — страница без неё.
 
-    `script` — очередь ответов, которые отдаются раньше обычной логики (ошибки, мусор, шаг 1).
+    `script` — очередь ответов, которые отдаются раньше обычной логики (ошибки, мусор, зависание).
+    `served` — даты, показанные последней страницей с местами (их читает тестовый разбор).
     """
 
     server: LocalTlsServer
     clock: StandClock
     slots: list[str] = field(default_factory=list)
-    valid_sessions: set[str] = field(default_factory=set)
     script: deque[Reply] = field(default_factory=deque)
     calls: list[SiteCall] = field(default_factory=list)
+    served: list[str] = field(default_factory=list)
     release_hang: asyncio.Event = field(default_factory=asyncio.Event)
 
     def __post_init__(self) -> None:
-        self.server.route("GET", API_PATH, self._api)
+        self.server.route("GET", SAE_PATH, self._page)
 
     @property
-    def api_url(self) -> str:
-        return self.server.url(API_PATH)
+    def url(self) -> str:
+        return self.server.url(SAE_PATH)
 
     def push(self, *replies: Reply, times: int = 1) -> None:
         for _ in range(times):
             self.script.extend(replies)
-
-    def expire_sessions(self) -> None:
-        self.valid_sessions.clear()
 
     def hang(self) -> Reply:
         """Ответ, который не приходит, пока тест не отпустит его (или не кончится тест)."""
 
         async def reply(_: web.Request) -> web.StreamResponse:
             await self.release_hang.wait()
-            return web.Response(status=200, text="{}", content_type="application/json")
+            return web.Response(status=200, text=EMPTY_PAGE, content_type="text/html")
 
         return reply
 
-    def _has_session(self, request: web.Request) -> bool:
-        for part in request.headers.get("Cookie", "").split(";"):
-            name, _, value = part.strip().partition("=")
-            if name == SESSION_COOKIE and value in self.valid_sessions:
-                return True
-        return False
-
-    async def _api(self, request: web.Request) -> web.StreamResponse:
-        self.calls.append(
-            SiteCall(self.clock.monotonic(), request.headers.get("Cookie", ""), time.perf_counter())
-        )
+    async def _page(self, request: web.Request) -> web.StreamResponse:
+        self.calls.append(SiteCall(self.clock.monotonic(), time.perf_counter()))
         if self.script:
             return await self.script.popleft()(request)
-        if not self._has_session(request):
-            return web.Response(status=302, headers={"Location": LOGIN_LOCATION})
-        return web.json_response({"slots": list(self.slots)})
-
-
-class SiteAuthenticator(FakeAuthenticator):
-    """Вход, после которого «сайт» узнаёт новую сессию; значение cookie у каждого входа своё."""
-
-    def __init__(self, site: FakeSite, *, domain: str = "127.0.0.1", **kwargs: object) -> None:
-        super().__init__(**kwargs)  # type: ignore[arg-type]
-        self._site = site
-        self._domain = domain
-        self.issued: list[str] = []
-
-    async def login(self) -> list[SessionCookie]:
-        await super().login()  # сценарные отказы и задержки FakeAuthenticator
-        value = f"SESSION-{self.logins}-{len(self.issued)}"
-        self.issued.append(value)
-        self._site.valid_sessions.add(value)
-        return [SessionCookie(SESSION_COOKIE, value, self._domain)]
+        self.served = list(self.slots)
+        if not self.slots:
+            return web.Response(text=EMPTY_PAGE, content_type="text/html")
+        page = OPEN_PAGE.format(dates=" ".join(self.slots))
+        return web.Response(text=page, content_type="text/html")
 
 
 # --- сервер каналов ---

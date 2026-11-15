@@ -9,7 +9,6 @@ import pytest
 
 from rcbot.bot import texts
 from rcbot.config.settings import MAX_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
-from rcbot.domain.errors import LoginFailed, ReloginBudgetExceeded, ReloginDeferred
 from rcbot.domain.events import SlotsAppeared
 from rcbot.domain.models import Channel
 from tests.fakes import T0, slots, snapshot
@@ -36,8 +35,9 @@ async def test_старт_и_справка_отвечают_справкой(co
 
 
 async def test_справка_перечисляет_все_команды_spec() -> None:
-    for name in ("status", "pause", "resume", "interval", "test", "last", "relogin", "cleanup"):
+    for name in ("status", "pause", "resume", "interval", "test", "last", "cleanup"):
         assert f"/{name}" in texts.HELP
+    assert "/relogin" not in texts.HELP  # бот на сайт не входит (R13)
     assert "/menu" in texts.HELP and "ок" in texts.HELP
 
 
@@ -275,35 +275,6 @@ async def test_last_не_больше_пяти() -> None:
         await setup.rig.incidents.open(1, T0, slots(23))
     await setup.owner.say("/last")
     assert setup.session.sent_texts[0].count("№") == 5
-
-
-# --- /relogin ---
-
-
-async def test_relogin_успех() -> None:
-    setup = await make_setup()
-    await setup.owner.say("/relogin")
-    assert setup.session.sent_texts == ["Вхожу заново…", texts.RELOGIN_OK]
-    assert setup.rig.auth.logins == 1 and setup.rig.loop._wake.is_set()
-
-
-@pytest.mark.parametrize(
-    "error",
-    [LoginFailed("страница входа изменилась"), ReloginBudgetExceeded("уже 6 входов за час")],
-)
-async def test_relogin_ошибка_показывается_владельцу(error: Exception) -> None:
-    setup = await make_setup(relogin_failures=(error,))
-    await setup.owner.say("/relogin")
-    assert setup.session.sent_texts == ["Вхожу заново…", texts.RELOGIN_FAILED.format(error=error)]
-
-
-async def test_relogin_после_тревоги_отложен_d5_и_сообщает_об_этом() -> None:
-    setup = await make_setup()
-    setup.rig.session.quiet_after_alert()
-    await setup.owner.say("/relogin")
-    assert setup.rig.auth.logins == 0
-    assert "отложен" in setup.session.sent_texts[-1]
-    assert isinstance(ReloginDeferred("x"), Exception)
 
 
 # --- /cleanup ---

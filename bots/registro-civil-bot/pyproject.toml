@@ -17,7 +17,6 @@ dependencies = [
     "tzdata>=2026.5",
     "sentry-sdk>=2.73",
     "uvloop>=0.23; sys_platform == 'linux'",
-    "playwright>=1.65",
     "keyring>=25.7",
 ]
 
@@ -45,9 +44,6 @@ packages = ["src/rcbot"]
 [tool.monorepo]
 package = "rcbot"
 platform = "windows-desktop"
-# Chromium для Playwright живёт в каталоге бота (SPEC.md, 2.7), а не в профиле пользователя.
-env = { PLAYWRIGHT_BROWSERS_PATH = "./.browsers" }
-setup = [["playwright", "install", "chromium"]]
 # Полный прогон тестов проверяет порог покрытия этих пакетов (SPEC 3.4)
 coverage = ["rcbot.domain", "rcbot.application"]
 coverage_min = 85
@@ -80,7 +76,6 @@ filterwarnings = [
     "error::RuntimeWarning",
 ]
 markers = [
-    "browser: нужен Chromium из .browsers/ (dev.py setup); без него тест пропускается",
     "slow: дольше пяти секунд",
 ]
 

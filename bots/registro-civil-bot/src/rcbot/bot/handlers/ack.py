@@ -1,4 +1,4 @@
-"""Подтверждение тревоги («✅ Вижу» или слово «ок») и «Готово» после шага 1 (SPEC 2.4, D3)."""
+"""Подтверждение тревоги: кнопка «✅ Вижу» или слово «ок» (SPEC 2.4)."""
 
 from __future__ import annotations
 
@@ -21,11 +21,6 @@ async def on_ack_button(callback: CallbackQuery, controller: Controller) -> None
         await callback.message.answer(texts.ACKED)
 
 
-async def on_manual_done(callback: CallbackQuery, controller: Controller) -> None:
-    controller.manual_done()
-    await callback.answer(texts.MANUAL_THANKS)
-
-
 async def on_ok_word(message: Message, controller: Controller) -> None:
     await message.answer(texts.ACKED if await controller.ack() else texts.NOT_ACKED)
 
@@ -34,6 +29,5 @@ def build_router() -> Router:
     """Новый роутер на каждый Dispatcher: один роутер нельзя подключить к двум."""
     router = Router(name="ack")
     router.callback_query.register(on_ack_button, F.data == AlertAction.ACK.value)
-    router.callback_query.register(on_manual_done, F.data == AlertAction.MANUAL_DONE.value)
     router.message.register(on_ok_word, F.text.regexp(OK_WORDS))
     return router

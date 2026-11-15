@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from rcbot import bootstrap
 from rcbot.application.messages import DATES_UNKNOWN_LINE, DATES_UNKNOWN_PUSH, MessageComposer
 from rcbot.bootstrap import build_core
@@ -79,13 +77,9 @@ def test_текст_тревоги_с_датами_не_упоминает_не�
     assert DATES_UNKNOWN_LINE not in alert.text and "Свободные даты" in alert.push_text
 
 
-async def test_с_sae_главный_источник_sae_и_запасного_нет(
-    paths: Paths, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("RCBOT_SAE_SOURCE_ENABLED", "true")
-    primary, fallback = await bootstrap.build_sources(build_core(console=False))
+async def test_источник_один_страница_sae(paths: Paths) -> None:
+    source = bootstrap.build_source(build_core(console=False))
     try:
-        assert isinstance(primary, SaeSource) and fallback is None
-        assert primary.kind is SourceKind.SAE
+        assert isinstance(source, SaeSource) and source.kind is SourceKind.SAE
     finally:
-        await primary.close()
+        await source.close()

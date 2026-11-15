@@ -24,10 +24,9 @@ from rcbot.config.settings import CALLMEBOT_HOST, Settings
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
 
-DOC = "SYN-DOC-0000001"
-PASSWORD = "syn-parol-Zx9!qL"
 TOKEN = "123456789:AAH-synthetic-token-abcdefghijklmnopqrstuvwxyz0123"
-SECRETS = (DOC, PASSWORD, TOKEN)
+CALL_USER = "@owner_name"
+SECRETS = (TOKEN, CALL_USER)
 # Одноразовый код владельца подменяется: тест должен знать, что «написать» боту
 CODE = "c0de42"
 
@@ -139,10 +138,8 @@ def fake_bot(monkeypatch: pytest.MonkeyPatch) -> type[FakeBot]:
 
 
 FULL = {
-    SecretKey.DOC_NUMBER: DOC,
-    SecretKey.PASSWORD: PASSWORD,
     SecretKey.TELEGRAM_TOKEN: TOKEN,
-    SecretKey.CALLMEBOT_USER: "@owner_name",
+    SecretKey.CALLMEBOT_USER: CALL_USER,
 }
 
 
@@ -172,18 +169,16 @@ def test_первый_запуск_кладёт_секреты_в_keyring_и_о�
 
     assert code == 0
     store = SecretStore()
-    assert stored(store, SecretKey.DOC_NUMBER) == DOC
-    assert stored(store, SecretKey.PASSWORD) == PASSWORD
     assert stored(store, SecretKey.TELEGRAM_TOKEN) == TOKEN
     assert stored(store, SecretKey.TELEGRAM_CHAT_ID) == "777"
+    # Номер паспорта и пароль gub.uy мастер больше не спрашивает (R13)
+    assert set(wizard.prompts) == {SecretKey.TELEGRAM_TOKEN, SecretKey.CALLMEBOT_USER}
     assert "Владелец определён: Тест Владелец" in out
     assert f"/start {CODE}" in out  # код показан в консоли до ожидания
     assert wizard.confirm_questions == ["Это вы: Тест Владелец? [да/нет] "]
     assert paths.env_file.exists()
     assert "Создан" in out
-    # Все пароли и токены вводятся скрыто, имя для звонка — открыто
-    assert wizard.hidden[SecretKey.DOC_NUMBER] is True
-    assert wizard.hidden[SecretKey.PASSWORD] is True
+    # Токен вводится скрыто, имя для звонка — открыто
     assert wizard.hidden[SecretKey.TELEGRAM_TOKEN] is True
     assert wizard.hidden[SecretKey.CALLMEBOT_USER] is False
     assert fake_bot.instances[0].token == TOKEN
@@ -278,8 +273,6 @@ def test_enter_оставляет_существующее_и_не_спраши�
 
     assert code == 0
     store = SecretStore()
-    assert stored(store, SecretKey.DOC_NUMBER) == DOC
-    assert stored(store, SecretKey.PASSWORD) == PASSWORD
     assert stored(store, SecretKey.TELEGRAM_TOKEN) == TOKEN
     assert stored(store, SecretKey.CALLMEBOT_USER) == "@owner_name"
     assert stored(store, SecretKey.TELEGRAM_CHAT_ID) == "5"
@@ -292,22 +285,22 @@ def test_enter_оставляет_существующее_и_не_спраши�
 def test_подсказка_про_enter_только_у_существующих_секретов(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
 ) -> None:
-    SecretStore().set(SecretKey.PASSWORD, PASSWORD)
+    SecretStore().set(SecretKey.TELEGRAM_TOKEN, TOKEN)
     wizard = Wizard({})
     wizard.install(monkeypatch)
     run_init(capsys)
-    assert "Enter — оставить как есть" in wizard.prompts[SecretKey.PASSWORD]
-    assert "Enter" not in wizard.prompts[SecretKey.DOC_NUMBER]
+    assert "Enter — оставить как есть" in wizard.prompts[SecretKey.TELEGRAM_TOKEN]
+    assert "Enter" not in wizard.prompts[SecretKey.CALLMEBOT_USER]
 
 
 @pytest.mark.usefixtures("env_example")
 def test_новое_значение_заменяет_старое(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_bot: type[FakeBot]
 ) -> None:
-    SecretStore().set(SecretKey.PASSWORD, "старый-пароль-1")
-    Wizard({SecretKey.PASSWORD: "  новый-пароль-2  "}).install(monkeypatch)
+    SecretStore().set(SecretKey.CALLMEBOT_USER, "@старое_имя")
+    Wizard({SecretKey.CALLMEBOT_USER: "  @новое_имя  "}).install(monkeypatch)
     run_init(capsys)
-    assert stored(SecretStore(), SecretKey.PASSWORD) == "новый-пароль-2"
+    assert stored(SecretStore(), SecretKey.CALLMEBOT_USER) == "@новое_имя"
 
 
 @pytest.mark.parametrize(
@@ -340,8 +333,7 @@ def test_пропущенные_обязательные_секреты_назы
 
     code, out = run_init(capsys)
 
-    for key in (SecretKey.DOC_NUMBER, SecretKey.PASSWORD, SecretKey.TELEGRAM_TOKEN):
-        assert f"Пропущено обязательное: {DESCRIPTIONS[key]}" in out
+    assert f"Пропущено обязательное: {DESCRIPTIONS[SecretKey.TELEGRAM_TOKEN]}" in out
     # Токена нет — владельца определить нечем: Telegram не трогаем
     assert fake_bot.instances == []
     assert code == 1
@@ -762,3 +754,23 @@ def test_init_без_флага_тему_не_трогает(
     assert (
         stored(SecretStore(), SecretKey.NTFY_TOPIC) == "rcbot-kept-synthetic-topic-0123456789abcdef"
     )
+
+
+@pytest.mark.usefixtures("env_example")
+def test_мастер_удаляет_старые_секреты_входа_на_gub_uy(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_bot: type[FakeBot],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    """Решение R13: номер паспорта и пароль не нужны и не должны лежать в Credential Manager."""
+    from rcbot.config.secrets import LEGACY_KEYS, SERVICE
+
+    for name in LEGACY_KEYS:
+        memory_keyring.set_password(SERVICE, name, "synthetic-old")
+    Wizard(FULL).install(monkeypatch)
+    fake_bot.batches = [[update(1, 5, "private")]]
+    _, out = run_init(capsys)
+    assert not any((SERVICE, name) in memory_keyring.store for name in LEGACY_KEYS)
+    assert "Удалены ненужные секреты прежнего входа" in out
+    assert "synthetic-old" not in out

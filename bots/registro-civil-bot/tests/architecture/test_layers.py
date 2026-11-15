@@ -96,7 +96,6 @@ def test_пределы_опроса_одни_и_те_же_в_домене_и_н
 
     for name in (
         "MIN_POLL_INTERVAL_SEC",
-        "MIN_DOM_POLL_INTERVAL_SEC",
         "MAX_POLL_INTERVAL_SEC",
         "MIN_MONTHS_AHEAD",
         "MAX_MONTHS_AHEAD",
@@ -131,7 +130,6 @@ FORBIDDEN_THIRD_PARTY = {
     "aiogram",
     "aiogram_dialog",
     "sqlalchemy",
-    "playwright",
     "alembic",
     "keyring",
     "sentry_sdk",

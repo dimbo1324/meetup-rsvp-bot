@@ -9,9 +9,8 @@ from datetime import datetime, timedelta
 
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.incidents import IncidentBook
-from rcbot.application.poll_loop import PollLoop, describe_error
+from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import Clock, EventLog, IncidentRepository, Journal, NullJournal
-from rcbot.application.session_manager import SessionManager
 from rcbot.application.status import PollStatus
 from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, Incident, SourceKind
@@ -34,8 +33,6 @@ class StatusView:
     paused_until: datetime | None
     incident: Incident | None
     repeating: bool
-    logins_last_hour: int
-    quiet_remaining_sec: float
     channels_off: frozenset[Channel]
     folder_bytes: int | None
     journal_bytes: int | None
@@ -57,7 +54,6 @@ class Controller:
         book: IncidentBook,
         incidents: IncidentRepository,
         event_log: EventLog,
-        session: SessionManager,
         clock: Clock,
         cleanup: Callable[[], Awaitable[dict[str, int]]] | None = None,
         folder_size: Callable[[], int] | None = None,
@@ -70,7 +66,6 @@ class Controller:
         self._book = book
         self._incidents = incidents
         self._event_log = event_log
-        self._session = session
         self._clock = clock
         self._cleanup = cleanup
         self._folder_size = folder_size
@@ -90,8 +85,6 @@ class Controller:
             paused_until=runtime.paused_until if runtime.paused(now) else None,
             incident=await self._book.current(),
             repeating=self._alerts.repeating(),
-            logins_last_hour=self._session.logins_last_hour(),
-            quiet_remaining_sec=self._session.quiet_remaining(),
             channels_off=frozenset(runtime.channels_off),
             folder_bytes=self._folder_size() if self._folder_size else None,
             journal_bytes=self._journal_size() if self._journal_size else None,
@@ -145,18 +138,6 @@ class Controller:
 
     async def ack(self) -> bool:
         return await self._alerts.ack()
-
-    def manual_done(self) -> None:
-        self._journal.event("command.manual_done", "владелец прошёл шаг 1")
-        self._loop.manual_done()
-
-    async def relogin(self) -> str:
-        self._journal.event("command.relogin", "повторный вход по команде")
-        try:
-            await self._loop.relogin()
-        except Exception as error:  # отказ входа, нет секрета, сбой keyring: текст, а не падение
-            return describe_error(error)
-        return ""
 
     async def cleanup(self) -> dict[str, int]:
         removed = await self._cleanup() if self._cleanup else {}

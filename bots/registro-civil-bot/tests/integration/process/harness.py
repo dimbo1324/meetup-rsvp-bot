@@ -18,21 +18,19 @@ from typing import Any
 import keyring
 from tests.fakes import (
     AGENDA_URL,
-    FakeAuthenticator,
     FakeNotifier,
     FakeSource,
     ManualClock,
     RecordingJournal,
 )
 
-from rcbot import bootstrap, runner
+from rcbot import runner
 from rcbot.application.alerting import AlertOrchestrator
 from rcbot.application.bus import EventBus
-from rcbot.application.session_manager import SessionManager
 from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, Storage, build_core
 from rcbot.config.secrets import SecretKey, SecretStore
-from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult, SourceKind
+from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult
 
 TOKEN = "123456789:AAH-synthetic-token-abcdefghijklmnopqrstuvwxyz0123"
 CHAT_ID = "777"
@@ -83,27 +81,6 @@ class OrderedSource(FakeSource):
 
     async def close(self) -> None:
         self._rig.order.append("source.close")
-        await super().close()
-
-
-class FakeApi:
-    configured = False
-
-    async def close(self) -> None:
-        return None
-
-
-class ConfiguredApi(FakeSource):
-    """Источник API после разведки: адрес задан, он основной, DomSource — запасной."""
-
-    configured = True
-
-    def __init__(self, rig: Rig, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, kind=SourceKind.API, **kwargs)
-        self._rig = rig
-
-    async def close(self) -> None:
-        self._rig.order.append("api.close")
         await super().close()
 
 
@@ -160,17 +137,14 @@ class Rig:
     journal: OrderedJournal
     order: list[str]
     polling: Polling
-    dom: OrderedSource = field(init=False)
+    source: OrderedSource = field(init=False)
     notifiers: dict[Channel, OrderedNotifier] = field(default_factory=dict)
-    session: SessionManager | None = None
-    auth: FakeAuthenticator = field(default_factory=FakeAuthenticator)
     alerts: AlertOrchestrator | None = None
     storage: Storage | None = None
     bots: list[FakeBot] = field(default_factory=list)
     watchdogs: list[FakeWatchdog] = field(default_factory=list)
     sigint_on_started: bool = False
     task: asyncio.Task[Any] | None = None
-    api: Any = None
     dispatcher_args: list[tuple[Any, ...]] = field(default_factory=list)
 
     async def until(self, condition: Callable[[], bool], what: str, seconds: float = 15.0) -> None:
@@ -200,7 +174,6 @@ def build_rig(
     with_secrets: bool = True,
     script: list[Any] | None = None,
     channels: tuple[Channel, ...] = (Channel.TELEGRAM, Channel.NTFY),
-    api_script: list[Any] | None = None,
 ) -> Rig:
     core = build_core(console=False)
     # Адрес с меткой вместо номера этапа run_app отклоняет: стенду нужен «настроенный» адрес
@@ -215,17 +188,13 @@ def build_rig(
         store.set(SecretKey.TELEGRAM_TOKEN, TOKEN)
         store.set(SecretKey.TELEGRAM_CHAT_ID, CHAT_ID)
     rig = Rig(core, clock, journal, order, Polling())
-    rig.dom = OrderedSource(rig, script if script is not None else [frozenset()], clock=clock)
+    rig.source = OrderedSource(rig, script if script is not None else [frozenset()], clock=clock)
     rig.notifiers = {channel: OrderedNotifier(channel, rig) for channel in channels}
 
     def make_bot(token: str) -> FakeBot:
         bot = FakeBot(rig, token)
         rig.bots.append(bot)
         return bot
-
-    def make_session(_: Core) -> SessionManager:
-        rig.session = SessionManager(rig.auth, clock, 6)
-        return rig.session
 
     class RecordingBus(EventBus):
         async def drain(self, wait_sec: float = 10.0) -> None:
@@ -278,12 +247,7 @@ def build_rig(
     patch(runner, "Bot", make_bot)
     patch(runner, "run_polling", run_polling)
     patch(runner, "_notifiers", lambda core_, bot, chat_id: rig.notifiers)
-    patch(runner, "build_session", make_session)
-    api = ConfiguredApi(rig, api_script, clock=clock) if api_script is not None else FakeApi()
-    rig.api = api
-    # Выбор основного и запасного источника — настоящий bootstrap.build_sources
-    patch(bootstrap, "build_api_source", lambda core_: api)
-    patch(bootstrap, "build_dom_source", lambda core_: rig.dom)
+    patch(runner, "build_source", lambda core_: rig.source)
     patch(runner, "EventBus", RecordingBus)
     patch(runner, "Supervisor", RecordingSupervisor)
     patch(runner, "AlertOrchestrator", RecordingAlerts)

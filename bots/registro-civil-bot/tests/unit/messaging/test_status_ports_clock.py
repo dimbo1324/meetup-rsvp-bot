@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-import logging
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -15,15 +13,11 @@ from rcbot.application.ports import (
     NoopCoordinator,
     NullJournal,
     OpeningRecord,
-    SessionCookie,
 )
 from rcbot.application.status import PollStatus
 from rcbot.domain.models import PollState, SourceKind
 from rcbot.infrastructure.clock import SystemClock
 from tests.fakes import T0, slots
-
-COOKIE_VALUE = "TEST-COOKIE-VALUE-xyz123"
-
 
 # --- PollStatus ---
 
@@ -31,7 +25,7 @@ COOKIE_VALUE = "TEST-COOKIE-VALUE-xyz123"
 def test_статус_по_умолчанию_работает_без_ошибок_и_проверок() -> None:
     status = PollStatus(started_at=T0)
     assert status.state is PollState.RUNNING
-    assert status.source is SourceKind.DOM
+    assert status.source is SourceKind.SAE
     assert (status.checks_total, status.errors_total) == (0, 0)
     assert status.last_check_at is None and status.last_latency_ms is None
     assert status.last_error == "" and status.last_error_at is None
@@ -69,56 +63,16 @@ def test_note_latency_с_малым_лимитом() -> None:
     assert status.recent_latencies == [3.0, 4.0]
 
 
-# --- SessionCookie ---
-
-
-def test_cookie_не_показывает_значение_ни_в_одном_представлении() -> None:
-    cookie = SessionCookie("simple_bpm_session", COOKIE_VALUE, "bpmgob.mec.gub.uy")
-    for text in (
-        repr(cookie),
-        str(cookie),
-        f"{cookie}",
-        f"{cookie!r}",
-        repr([cookie]),
-        repr({"c": cookie}),
-        "%s" % cookie,  # noqa: UP031
-    ):
-        assert COOKIE_VALUE not in text
-    assert "simple_bpm_session" in repr(cookie)
-    assert "bpmgob.mec.gub.uy" in repr(cookie)
-
-
-def test_cookie_значение_не_попадает_в_запись_лога(caplog: pytest.LogCaptureFixture) -> None:
-    cookie = SessionCookie("sid", COOKIE_VALUE, "x.example")
-    with caplog.at_level(logging.INFO):
-        logging.getLogger("rcbot.test").info("вход выполнен: %s", cookie)
-    assert COOKIE_VALUE not in caplog.text
-
-
-def test_cookie_по_умолчанию_путь_корень_и_secure() -> None:
-    cookie = SessionCookie("a", "b", "c")
-    assert (cookie.path, cookie.secure) == ("/", True)
-    assert cookie.value == "b"  # значение доступно коду, который передаёт его в aiohttp
-
-
-def test_cookie_неизменяема_и_сравнивается_по_значению() -> None:
-    cookie = SessionCookie("a", "b", "c")
-    assert cookie == SessionCookie("a", "b", "c")
-    assert cookie != SessionCookie("a", "другое", "c")
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        cookie.value = "x"  # type: ignore[misc]
-
-
 # --- NullJournal, NoopCoordinator ---
 
 
 def test_null_journal_принимает_всё_и_ничего_не_пишет() -> None:
     journal = NullJournal()
-    check = CheckRecord(T0, SourceKind.API, True, slots(23), 5.0, "running", 20.0)
+    check = CheckRecord(T0, SourceKind.SAE, True, slots(23), 5.0, "running", 20.0)
     assert journal.check(check) is None
     assert journal.event("code", "сообщение", "WARNING", a=1, b="x") is None
     assert journal.event("code", "сообщение") is None
-    opening = OpeningRecord(T0, "appeared", slots(23), SourceKind.API, 12.0)
+    opening = OpeningRecord(T0, "appeared", slots(23), SourceKind.SAE, 12.0)
     assert journal.opening(opening) is None
     assert journal.status({"state": "running"}) is None
     assert journal.enforce_quota() == (0, 0)
@@ -132,9 +86,9 @@ async def test_noop_coordinator_всегда_разрешает_тревогу()
 
 
 def test_запись_проверки_по_умолчанию_без_ошибки() -> None:
-    record = CheckRecord(T0, SourceKind.DOM, True, frozenset(), 3.0, "running", 20.0)
+    record = CheckRecord(T0, SourceKind.SAE, True, frozenset(), 3.0, "running", 20.0)
     assert (record.error_kind, record.error) == ("", "")
-    assert OpeningRecord(T0, "gone", frozenset(), SourceKind.DOM).incident_open_sec is None
+    assert OpeningRecord(T0, "gone", frozenset(), SourceKind.SAE).incident_open_sec is None
 
 
 # --- SystemClock ---

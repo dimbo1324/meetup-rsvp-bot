@@ -18,9 +18,9 @@ from rcbot.application.liveness import (
     STATUS_EVERY_SEC,
     LivenessMonitor,
 )
-from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC, LOGIN_TIMEOUT_SEC
+from rcbot.application.poll_loop import FETCH_TIMEOUT_SEC
 from rcbot.application.supervisor import Supervisor
-from rcbot.domain.errors import ManualStepRequired, SiteUnavailable
+from rcbot.domain.errors import RateLimited, SiteUnavailable
 
 EMPTY: frozenset = frozenset()  # type: ignore[type-arg]
 
@@ -74,11 +74,10 @@ class Harness:
 # --- diagnose ---
 
 
-def test_пороги_заданы_от_таймаутов_проверки_и_входа() -> None:
-    # Проверка включает повторный вход: порог выше запроса и входа вместе взятых (COL-7)
-    assert HUNG_CHECK_SEC == FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC + HUNG_MARGIN_SEC
-    assert HUNG_CHECK_SEC > FETCH_TIMEOUT_SEC + LOGIN_TIMEOUT_SEC
-    assert LOGIN_TIMEOUT_SEC > (30 + 60 + 45)  # шаги входа в auth.py укладываются
+def test_порог_зависания_выше_таймаута_проверки() -> None:
+    # Проверка прерывается сама через FETCH_TIMEOUT_SEC: монитор не должен опережать её
+    assert HUNG_CHECK_SEC == FETCH_TIMEOUT_SEC + HUNG_MARGIN_SEC
+    assert HUNG_CHECK_SEC > FETCH_TIMEOUT_SEC
     assert HUNG_LATE_SEC == 180.0 and STATUS_EVERY_SEC == 30.0
 
 
@@ -120,10 +119,10 @@ def test_цикл_ещё_не_запускался_next_due_ноль_не_зав
 
 async def test_пауза_и_долгие_отступления_не_дают_ложной_тревоги() -> None:
     # Каждые 30 с (как работает монитор) диагноз пуст при бессрочной паузе, 15-минутных паузах
-    # после 429 и ожидании шага 1
+    # после 429 и долгом отступлении
     for script, paused in (
         ([SiteUnavailable("503")], None),
-        ([ManualStepRequired("шаг 1")], None),
+        ([RateLimited("429")], None),
         ([EMPTY], T0 + timedelta(days=3650)),
     ):
         rig = make_rig(script, paused_until=paused)

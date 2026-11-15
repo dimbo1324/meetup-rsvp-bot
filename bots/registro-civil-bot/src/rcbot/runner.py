@@ -1,7 +1,7 @@
 """Сборка и запуск бота целиком: `rcbot run` и `rcbot simulate`.
 
 Порядок остановки (SPEC 3.4): опрос → сообщение «остановлен» → фоновые задачи → подписчики
-событий → рассылка → источники и браузер → сторож и каналы → Telegram → БД.
+событий → рассылка → источник → сторож и каналы → Telegram → БД.
 """
 
 from __future__ import annotations
@@ -29,27 +29,13 @@ from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import NoopCoordinator, Notifier
 from rcbot.application.runtime import RuntimeStore
 from rcbot.application.supervisor import Supervisor
-from rcbot.bootstrap import (
-    Core,
-    build_session,
-    build_sources,
-    ensure_target,
-    open_storage,
-)
+from rcbot.bootstrap import Core, build_source, ensure_target, open_storage
 from rcbot.bot import texts
 from rcbot.bot.app import build_dispatcher, run_polling
 from rcbot.config.secrets import SecretKey
 from rcbot.config.settings import CALLMEBOT_HOST
 from rcbot.domain.detector import Detector
-from rcbot.domain.events import (
-    ManualActionRequired,
-    PollerStateChanged,
-    SlotsAppeared,
-    SlotsChanged,
-    SlotsGone,
-    SourceSwitched,
-    UnconfirmedSlotsSeen,
-)
+from rcbot.domain.events import PollerStateChanged, SlotsAppeared, SlotsChanged, SlotsGone
 from rcbot.domain.models import Channel, DeliveryResult
 from rcbot.infrastructure.files import FileJanitor
 from rcbot.infrastructure.http.client import SafeHttp
@@ -138,7 +124,7 @@ async def run_app(
 ) -> int:
     s = core.settings
     if not s.agenda_configured:
-        # Без номера этапа опрос шёл бы на адрес-метку и бесконечно отступал: это ошибка настроек
+        # Без номера этапа ссылка в тревоге вела бы на адрес-метку: это ошибка настроек
         logger.error(AGENDA_NOT_CONFIGURED)
         return EXIT_SETTINGS
     clock = core.clock
@@ -166,12 +152,8 @@ async def run_app(
             http = SafeHttp([_host(s.watchdog_url)], timeout_sec=WATCHDOG_TIMEOUT_SEC)
             watchdog = HttpWatchdog(http, s.watchdog_url)
             closers.add(watchdog.close)
-        session = build_session(core)
-        primary, fallback = await build_sources(core)
-        sources = [src for src in (primary, fallback) if src is not None]
-        for source in sources:
-            closers.add(source.close)
-            session.subscribe(source.use_cookies)
+        source = build_source(core)
+        closers.add(source.close)
 
         book = IncidentBook(storage.incidents, clock, target.id)
         detector = Detector()
@@ -186,7 +168,6 @@ async def run_app(
             _policies(core),
             composer,
             book,
-            session,
             runtime,
             clock,
             NoopCoordinator(),
@@ -198,9 +179,7 @@ async def run_app(
         if on_delivery is not None:
             alerts.delivery_listeners.append(on_delivery)
         loop = PollLoop(
-            primary=primary,
-            fallback=fallback,
-            session=session,
+            source=source,
             detector=detector,
             bus=bus,
             clock=clock,
@@ -221,7 +200,7 @@ async def run_app(
         )
 
         async def restart_poll() -> None:
-            # Закрытый браузер прерывает зависшую проверку, затем цикл запускается заново
+            # Закрытое соединение прерывает зависшую проверку, затем цикл запускается заново
             await poll.reset_source()
             await supervisor.restart("poll")
 
@@ -232,7 +211,6 @@ async def run_app(
                 "incident_open": incident is not None,
                 "incident_days": days,
                 "alert_repeating": alerts.repeating() if alerts else False,
-                "logins_last_hour": session.logins_last_hour(),
             }
 
         liveness = LivenessMonitor(
@@ -244,7 +222,6 @@ async def run_app(
             book,
             storage.incidents,
             storage.events,
-            session,
             clock,
             cleanup=housekeeping.run_once,
             folder_size=housekeeping.folder_size,
@@ -284,10 +261,10 @@ async def run_app(
         announce_stop = True
         interval = loop.current_interval(clock.now())
         core.journal.event(
-            "bot.start", f"бот запущен: источник {primary.kind}, интервал ≈ {interval:.0f} с"
+            "bot.start", f"бот запущен: источник {source.kind}, интервал ≈ {interval:.0f} с"
         )
         await alerts.service(
-            texts.STARTED.format(source=primary.kind.value.upper(), interval=interval)
+            texts.STARTED.format(source=source.kind.value.upper(), interval=interval)
         )
         # Работает до остановки процесса (Ctrl+C или Планировщик); упавшие задачи перезапускает
         # супервизор, зависший цикл опроса — монитор живости
@@ -310,10 +287,7 @@ def _wire(bus: EventBus, alerts: AlertOrchestrator, book: IncidentBook) -> None:
     bus.subscribe(SlotsChanged, book.on_changed)
     bus.subscribe(SlotsGone, alerts.on_gone)
     bus.subscribe(SlotsGone, book.on_gone)
-    bus.subscribe(ManualActionRequired, alerts.on_manual)
-    bus.subscribe(SourceSwitched, alerts.on_source_switched)
     bus.subscribe(PollerStateChanged, alerts.on_state_changed)
-    bus.subscribe(UnconfirmedSlotsSeen, alerts.on_unconfirmed)
 
 
 async def _simulate(

@@ -13,7 +13,7 @@ FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 MAX_BYTES = 2 * 1024 * 1024
 BACKUPS = 5
 # Внешние библиотеки многословны и могут печатать заголовки: только предупреждения
-_QUIET = ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "asyncio", "playwright")
+_QUIET = ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "asyncio")
 
 
 def setup_logging(log_file: Path, level: str = "INFO", console: bool = True) -> None:

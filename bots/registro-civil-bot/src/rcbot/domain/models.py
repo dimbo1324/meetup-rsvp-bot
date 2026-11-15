@@ -10,8 +10,8 @@ from functools import total_ordering
 
 
 class SourceKind(StrEnum):
-    API = "api"
-    DOM = "dom"
+    """Откуда снимок. Источник один — публичная страница записи SAE (решения R12, R13)."""
+
     SAE = "sae"
 
 
@@ -23,9 +23,7 @@ class Channel(StrEnum):
 
 class PollState(StrEnum):
     RUNNING = "running"
-    REAUTH = "reauth"
     BACKOFF = "backoff"
-    NEEDS_MANUAL = "needs_manual"
     PAUSED = "paused"
 
 
@@ -33,7 +31,6 @@ class AlertKind(StrEnum):
     APPEARED = "appeared"
     CHANGED = "changed"
     SERVICE = "service"
-    UNCONFIRMED = "unconfirmed"
     TEST = "test"
 
 
@@ -148,7 +145,6 @@ class AlertAction(StrEnum):
 
     NONE = "none"
     ACK = "ack"
-    MANUAL_DONE = "manual_done"
 
 
 @dataclass(frozen=True)
@@ -162,7 +158,7 @@ class Alert:
     push_text: str = ""
     action: AlertAction = AlertAction.NONE
     incident_id: int | None = None
-    # Сервисные и неподтверждённые сообщения идут только в Telegram, без звонка (SPEC 2.3–2.4)
+    # Сервисные сообщения идут только в Telegram, без звонка (SPEC 2.3–2.4)
     channels: frozenset[Channel] = frozenset(Channel)
 
 
@@ -181,7 +177,6 @@ class PollStatsHour:
     hour: datetime
     checks: int = 0
     errors: int = 0
-    relogins: int = 0
     latencies_ms: list[float] = field(default_factory=list)
 
     def percentile(self, q: float) -> float:

@@ -19,7 +19,6 @@ from rcbot.application.liveness import HUNG_CHECK_SEC
 from rcbot.application.poll_loop import PollLoop
 from rcbot.bot import texts
 from rcbot.config.secrets import SecretKey, SecretMissing, SecretStore
-from rcbot.domain.errors import SessionExpired
 from rcbot.domain.models import AlertKind, Channel, SourceKind
 from rcbot.infrastructure.notify.callmebot import CallMeBotNotifier
 from rcbot.infrastructure.notify.ntfy import NtfyNotifier
@@ -72,7 +71,7 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> Rig:
 async def test_задачи_запускаются_в_документированном_порядке_квота_до_опроса(rig: Rig) -> None:
     async with running(rig):
         await rig.started()
-        await rig.until(lambda: rig.dom.calls != [], "первая проверка")
+        await rig.until(lambda: rig.source.calls != [], "первая проверка")
 
         order = rig.order
         starts = [item for item in order if item.startswith("start:") or item == "journal.quota"]
@@ -91,8 +90,8 @@ async def test_о_запуске_пишется_событие_и_приходи
 
         [(code, message, level, _)] = [e for e in rig.journal.events if e[0] == "bot.start"]
         assert level == "INFO"
-        assert message == "бот запущен: источник dom, интервал ≈ 60 с"
-        started = texts.STARTED.format(source="DOM", interval=60)
+        assert message == "бот запущен: источник sae, интервал ≈ 60 с"
+        started = texts.STARTED.format(source="SAE", interval=60)
         assert rig.sent_texts(Channel.TELEGRAM) == [started]
         # служебные сообщения идут только в Telegram: в ntfy и звонок — только даты и места
         assert rig.notifiers[Channel.NTFY].sent == []
@@ -107,22 +106,6 @@ async def test_telegram_получает_токен_и_только_владел
         assert owner == int(CHAT_ID)  # фильтр middleware строится по chat_id владельца
         assert str(tz) == "America/Montevideo"
         assert controller is not None
-
-
-async def test_цикл_опроса_работает_и_при_истекшей_сессии_входит_заново(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rig = build_rig(monkeypatch.setattr, script=[SessionExpired("нет входа"), frozenset()])
-    async with running(rig):
-        await rig.started()
-        await rig.until(lambda: rig.auth.logins == 1, "вход")
-        # DomSource не чаще раза в 60 с (SPEC 2.3): проверка после входа ждёт минимум
-        await rig.clock.advance(61)
-        await rig.until(lambda: len(rig.dom.calls) >= 2, "повторный опрос после входа")
-        # cookies нового входа переданы источнику: подписка источника на сессию собрана
-        assert rig.dom.cookie_history == [rig.auth.cookies]
-        assert rig.dom.calls[0].name == "registro-civil"
-        assert rig.dom.calls[0].id > 0  # цель сохранена в базе, а не разовая
 
 
 async def test_появление_мест_доходит_до_всех_каналов_через_шину(
@@ -145,7 +128,7 @@ async def test_появление_мест_доходит_до_всех_кана
         assert "slots.appeared" in rig.journal.codes()
 
 
-async def test_монитор_живости_пишет_состояние_с_данными_инцидента_и_входов(rig: Rig) -> None:
+async def test_монитор_живости_пишет_состояние_с_данными_инцидента(rig: Rig) -> None:
     async with running(rig):
         await rig.started()
         await rig.until(lambda: rig.journal.statuses != [], "status.json")
@@ -154,28 +137,18 @@ async def test_монитор_живости_пишет_состояние_с_д
         assert status["incident_days"] == []
         assert status["alert_repeating"] is False
         assert status["hung"] is False
-        assert "logins_last_hour" in status
+        assert "logins_last_hour" not in status  # бот на сайт не входит (R13)
         assert "alive_at" in status
 
 
-async def test_источник_выбирается_dom_если_api_не_настроен_и_всё_закрывается(rig: Rig) -> None:
+async def test_источник_страница_sae_опрашивается_и_закрывается(rig: Rig) -> None:
     async with running(rig):
         await rig.started()
-        assert rig.dom.kind is SourceKind.DOM
-    assert rig.dom.closed == 1
-
-
-async def test_с_настроенным_api_он_основной_а_dom_запасной_и_оба_закрываются(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rig = build_rig(monkeypatch.setattr, script=[frozenset()], api_script=[frozenset()])
-    async with running(rig):
-        await rig.started()
-        await rig.until(lambda: len(rig.api.calls) >= 1, "проверка через API")
-        assert rig.dom.calls == []
-        assert rig.sent_texts() == [texts.STARTED.format(source="API", interval=60)]
-    # Источники закрываются в порядке, обратном созданию: запасной DomSource, затем API
-    assert is_subsequence(["source.close", "api.close"], rig.order)
+        await rig.until(lambda: rig.source.calls != [], "первая проверка")
+        assert rig.source.kind is SourceKind.SAE
+        assert rig.source.calls[0].name == "registro-civil"
+        assert rig.source.calls[0].id > 0  # цель сохранена в базе, а не разовая
+    assert rig.source.closed == 1
 
 
 async def test_после_перезапуска_открытый_инцидент_продолжается_без_повторной_тревоги(
@@ -192,9 +165,9 @@ async def test_после_перезапуска_открытый_инциден
     second = build_rig(monkeypatch.setattr, script=[slots(23)])
     async with running(second):
         await second.started()
-        await second.until(lambda: len(second.dom.calls) >= 1, "проверка после перезапуска")
+        await second.until(lambda: len(second.source.calls) >= 1, "проверка после перезапуска")
         await second.clock.advance(70)
-        await second.until(lambda: len(second.dom.calls) >= 2, "вторая проверка")
+        await second.until(lambda: len(second.source.calls) >= 2, "вторая проверка")
         await asyncio.sleep(0.1)  # события второй проверки успели дойти до рассылки
         alerts = [a for a, _ in second.notifiers[Channel.TELEGRAM].sent]
         assert [a.kind for a in alerts] == [AlertKind.SERVICE]  # только «запущен»
@@ -220,7 +193,7 @@ async def test_остановка_закрывает_ресурсы_в_доку�
         "telegram.cancelled",  # фоновые задачи остановлены до закрытия ресурсов
         "bus.drain",  # подписчики событий: последние события доходят до открытой рассылки
         "alerts.close",  # рассылка
-        "source.close",  # источник/браузер
+        "source.close",  # источник (соединение со страницей SAE)
         "watchdog.close",  # сторож
         "notifier.close:ntfy",  # каналы — в порядке, обратном созданию
         "notifier.close:telegram",
@@ -252,7 +225,7 @@ async def test_после_остановки_не_остаётся_фоновы�
         await asyncio.gather(task, return_exceptions=True)
     await asyncio.sleep(0.05)
     assert supervised & rig.tasks() == set()
-    assert rig.dom.closed == 1
+    assert rig.source.closed == 1
 
 
 async def test_сбой_одного_ресурса_при_закрытии_не_мешает_остальным(rig: Rig) -> None:
@@ -329,7 +302,7 @@ def test_код_ошибки_настроек_runner_совпадает_с_cli()
 async def test_сбой_сборки_после_создания_ресурсов_закрывает_уже_открытые(
     monkeypatch: pytest.MonkeyPatch, rig: Rig
 ) -> None:
-    """Закрытие регистрируется сразу после создания: сбой дальше не оставит браузер и каналы."""
+    """Закрытие регистрируется сразу после создания: сбой дальше не оставит соединения и каналы."""
 
     def explode(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("сбой сборки")
@@ -396,7 +369,7 @@ async def test_без_секретов_telegram_run_app_требует_их_и_�
     assert "storage.close" in rig.order
     assert rig.bots == []
     assert not [item for item in rig.order if item.startswith("start:")]
-    assert rig.dom.closed == 0 and rig.dom.calls == []
+    assert rig.source.closed == 0 and rig.source.calls == []
 
 
 async def test_без_chat_id_владельца_бот_не_стартует(rig: Rig) -> None:
@@ -423,7 +396,7 @@ async def test_сбой_при_инициализации_закрывает_б�
     assert "storage.close" in rig.order
     assert rig.sent_texts() == []
     assert not [item for item in rig.order if item.startswith("start:")]
-    assert rig.dom.calls == []
+    assert rig.source.calls == []
 
 
 # --- падение задач: бот не должен молча жить без опроса или без Telegram ---
@@ -473,9 +446,9 @@ async def test_упавший_цикл_опроса_перезапускаетс
         await rig.started()
         await rig.until(lambda: starts == [1], "первый запуск цикла")
         await asyncio.sleep(0.05)
-        assert rig.dom.calls == []  # цикл мёртв, опроса нет — это и нужно починить
+        assert rig.source.calls == []  # цикл мёртв, опроса нет — это и нужно починить
         await rig.clock.advance(5.1)
-        await rig.until(lambda: len(rig.dom.calls) >= 1, "опрос после перезапуска")
+        await rig.until(lambda: len(rig.source.calls) >= 1, "опрос после перезапуска")
         assert starts == [1, 1]
 
 
@@ -489,13 +462,13 @@ async def test_зависший_опрос_перезапускается_мон
     rig = build_rig(monkeypatch.setattr, script=[hang, slots(23)])
     async with running(rig):
         await rig.started()
-        await rig.until(lambda: len(rig.dom.calls) == 1, "зависшая проверка")
-        assert rig.dom.closed == 0
+        await rig.until(lambda: len(rig.source.calls) == 1, "зависшая проверка")
+        assert rig.source.closed == 0
 
         await rig.clock.advance(HUNG_CHECK_SEC + 60)  # монитор: проверка идёт дольше порога
-        await rig.until(lambda: len(rig.dom.calls) >= 2, "перезапущенная проверка")
+        await rig.until(lambda: len(rig.source.calls) >= 2, "перезапущенная проверка")
 
-        assert rig.dom.closed >= 1  # браузер закрыт: зависшая проверка прервана
+        assert rig.source.closed >= 1  # соединение закрыто: зависшая проверка прервана
         assert any(m.startswith("⚠️ Цикл опроса завис") for m in rig.sent_texts())
         assert "liveness.hung" in rig.journal.codes()
 
@@ -559,7 +532,7 @@ async def test_simulate_не_запускает_опрос_отчёты_и_со�
     assert starts == ["start:telegram", "start:warmup"]
     assert "journal.quota" not in rig.order
     assert "journal:bot.start" not in rig.order
-    assert rig.dom.calls == []
+    assert rig.source.calls == []
     assert not any(t.startswith("▶️") for t in rig.sent_texts())
 
 

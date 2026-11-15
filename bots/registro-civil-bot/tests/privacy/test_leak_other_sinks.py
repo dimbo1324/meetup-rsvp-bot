@@ -1,4 +1,4 @@
-"""Остальные пути утечки: Sentry, разведка, карантин, исключения наружу, cookies между каналами."""
+"""Остальные пути утечки: Sentry, снимки страницы SAE, исключения наружу, cookies между каналами."""
 
 from __future__ import annotations
 
@@ -11,16 +11,13 @@ import pytest
 from aiogram import Bot
 from aiohttp import web
 
-from rcbot.application.ports import SessionCookie
-from rcbot.bootstrap import build_core
+from rcbot.bootstrap import build_core, build_source
 from rcbot.cli import main
 from rcbot.domain.errors import HostNotAllowed, UnexpectedResponse
 from rcbot.infrastructure import sentry
-from rcbot.infrastructure.gubuy.api_source import ApiSource
-from rcbot.infrastructure.gubuy.browser import session_cookies
-from rcbot.infrastructure.gubuy.discovery import _clean_headers, clean_body
+from rcbot.infrastructure.gubuy.sae_source import SaeSource
 from rcbot.infrastructure.http.client import SafeHttp
-from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
+from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.runner import _notifiers
 from tests.fakes import TARGET, FakeClock, LocalTlsServer
 from tests.privacy.helpers import Canaries
@@ -46,9 +43,9 @@ def primed() -> None:
 
 def _event() -> dict[str, Any]:
     return {
-        "message": f"сбой входа для {C.doc_number}, пароль {C.password}",
+        "message": f"сбой входа для {C.ntfy_topic}, пароль {C.call_user}",
         "logentry": {"message": "вход %s", "params": [C.telegram_token]},
-        "extra": {"doc": C.doc_number, "url": f"/etapas/ejecutar/{C.etapa}/1", "u": UNICODE_SECRET},
+        "extra": {"doc": C.ntfy_topic, "url": f"/etapas/ejecutar/{C.etapa}/1", "u": UNICODE_SECRET},
         "exception": {
             "values": [{"type": "LoginFailed", "value": f"{C.telegram_token} {UNICODE_SECRET}"}]
         },
@@ -113,55 +110,7 @@ def test_sentry_событие_которое_нельзя_сериализов�
     assert sentry._before_send({"extra": {"x": Weird()}}, {}) is None
 
 
-# --- разведка (SPEC 6.2) ---
-
-
-def test_разведка_очищает_тела_и_заголовки_от_известных_секретов(primed: None) -> None:
-    body = json.dumps(
-        {
-            "usuario": {"nombre": "Иван", "documento": C.doc_number},
-            "note": f"Cookie: simple_bpm_session={C.cookie_value} и {C.password}",
-            "dias": [1, 2, 3],
-        }
-    )
-    cleaned = json.dumps(clean_body("application/json", body), ensure_ascii=False)
-    assert [v for v in C.all_values() if v in cleaned] == []
-    assert "Иван" not in cleaned
-    assert '"dias": [1, 2, 3]' in cleaned
-    html = clean_body("text/html", f"<p>{C.doc_number} {C.telegram_token}</p>")
-    assert C.doc_number not in html
-    assert C.telegram_token not in html
-
-
-def test_разведка_выбрасывает_cookie_и_authorization_из_заголовков(primed: None) -> None:
-    headers = {
-        "Cookie": "a=b",
-        "SET-COOKIE": "c=d",
-        "Authorization": "Bearer q",
-        "Proxy-Authorization": "x",
-        "Referer": f"https://bpmgob.mec.gub.uy/etapas/ejecutar/{C.etapa}/1",
-        "Accept": "*/*",
-    }
-    cleaned = _clean_headers(headers)
-    assert set(cleaned) == {"Referer", "Accept"}
-    assert C.etapa not in cleaned["Referer"]
-    assert MASK in cleaned["Referer"]
-
-
-def test_разведка_маскирует_csrf_и_токены_в_json_теле() -> None:
-    body = '{"csrf_token": "aB3dE5fG7hJ9kL1m", "api_key": "zY8xW6vU4tS2rQ0p", "dias": [1]}'
-    cleaned = json.dumps(clean_body("application/json", body))
-    assert "aB3dE5fG7hJ9kL1m" not in cleaned
-    assert "zY8xW6vU4tS2rQ0p" not in cleaned
-
-
-def test_разведка_отбрасывает_csrf_заголовки() -> None:
-    cleaned = _clean_headers({"X-CSRF-Token": "aB3dE5fG7hJ9kL1m", "X-API-Key": "zY8xW6vU4tS2rQ0p"})
-    assert "aB3dE5fG7hJ9kL1m" not in json.dumps(cleaned)
-    assert "zY8xW6vU4tS2rQ0p" not in json.dumps(cleaned)
-
-
-# --- ApiSource и карантин на настоящем сокете ---
+# --- страница SAE на настоящем сокете ---
 
 
 async def _fetch_hostile(
@@ -169,24 +118,22 @@ async def _fetch_hostile(
 ) -> tuple[UnexpectedResponse, Path]:
     body = (
         f"<html>Set-Cookie: simple_bpm_session={C.cookie_value}\n"
-        f"{C.doc_number} {C.password} token={C.telegram_token}</html>"
+        f"{C.ntfy_topic} {C.call_user} token={C.telegram_token}</html>"
     )
 
     async def handler(_: web.Request) -> web.StreamResponse:
         return web.Response(text=body, headers=headers or {"Content-Type": "text/html"})
 
-    server.route("GET", "/api", handler)
+    server.route("GET", "/sae", handler)
     http = SafeHttp({"127.0.0.1"}, 5, ssl_context=server.client_ssl)
-    quarantine = tmp_path / "q"
-    api = ApiSource(
-        http, server.url("/api"), "https://bpmgob.mec.gub.uy/x", quarantine, FakeClock()
-    )
+    shots = tmp_path / "shots"
+    source = SaeSource(http, server.url("/sae"), shots, FakeClock())
     try:
         with pytest.raises(UnexpectedResponse) as info:
-            await api.fetch(TARGET)
+            await source.fetch(TARGET)
     finally:
-        await api.close()
-    return info.value, quarantine
+        await source.close()
+    return info.value, shots
 
 
 async def test_исключение_и_трассировка_источника_не_содержат_тела_ответа(
@@ -195,53 +142,20 @@ async def test_исключение_и_трассировка_источника
     error, _ = await _fetch_hostile(tls_server, tmp_path)
     text = str(error) + repr(error) + "".join(traceback.format_exception(error))
     assert [v for v in C.all_values() if v in text] == []
-    assert "карантин" in str(error)
+    assert "не распознана" in str(error)
 
 
-async def test_карантин_хранит_очищенное_тело_без_заголовков(
+async def test_снимок_чужой_страницы_очищен_от_секретов(
     primed: None, tls_server: LocalTlsServer, tmp_path: Path
 ) -> None:
-    _, quarantine = await _fetch_hostile(tls_server, tmp_path)
-    (file,) = quarantine.glob("*.json")
-    record = json.loads(file.read_text(encoding="utf-8"))
-    assert [v for v in C.all_values() if v in json.dumps(record, ensure_ascii=False)] == []
-    # Страница не сохраняется вовсе (аудит SEC-3): вместо тела — длина, хеш и вид страницы
-    body = record["body"]
-    assert isinstance(body, dict)
-    assert body["omitted"] is True
-    assert body["chars"] > 0
-    assert len(body["sha256"]) == 64
-    assert "Error" not in json.dumps(record, ensure_ascii=False)
+    _, shots = await _fetch_hostile(tls_server, tmp_path)
+    (file,) = shots.glob("sae-*-unknown.html")
+    text = file.read_text(encoding="utf-8")
+    assert [v for v in C.all_values() if v in text] == []
+    assert "<html>" in text  # снимок нужен для разбора: разметка остаётся
 
 
-async def test_карантин_не_пишет_секрет_из_content_type(
-    primed: None, tls_server: LocalTlsServer, tmp_path: Path
-) -> None:
-    _, quarantine = await _fetch_hostile(
-        tls_server, tmp_path, headers={"Content-Type": f"text/html; note={C.password}"}
-    )
-    (file,) = quarantine.glob("*.json")
-    assert C.password not in file.read_text(encoding="utf-8")
-
-
-# --- cookies: регистрация и изоляция ---
-
-
-class _FakeContext:
-    def __init__(self, cookies: list[dict[str, Any]]) -> None:
-        self._cookies = cookies
-
-    async def cookies(self, urls: list[str]) -> list[dict[str, Any]]:
-        return self._cookies
-
-
-async def test_значения_cookies_из_браузера_регистрируются_в_фильтре() -> None:
-    context = _FakeContext(
-        [{"name": "simple_bpm_session", "value": C.cookie_value, "domain": "bpmgob.mec.gub.uy"}]
-    )
-    cookies = await session_cookies(context, ["bpmgob.mec.gub.uy"])  # type: ignore[arg-type]
-    assert cookies[0].value == C.cookie_value
-    assert REDACTOR.redact(f'{{"sid": "{C.cookie_value}"}}') == f'{{"sid": "{MASK}"}}'
+# --- cookies: изоляция ---
 
 
 async def test_cookies_сайта_не_утекают_в_сессии_каналов_ntfy_и_callmebot(
@@ -253,13 +167,10 @@ async def test_cookies_сайта_не_утекают_в_сессии_канал
         core.secrets.set(key, value)
     bot = Bot(C.telegram_token)
     notifiers = _notifiers(core, bot, int(C.chat_id))
-    from rcbot.bootstrap import build_api_source
-
-    api = build_api_source(core)
-    api.use_cookies([SessionCookie("simple_bpm_session", C.cookie_value, "bpmgob.mec.gub.uy")])
+    source = build_source(core)
     jars = [n._http.cookie_jar for n in notifiers.values() if hasattr(n, "_http")]  # type: ignore[attr-defined]
     assert len(jars) == 2
-    assert api._http.cookie_jar not in jars
+    assert source._http.cookie_jar not in jars  # type: ignore[attr-defined]
     assert jars[0] is not jars[1]
     assert all(len(list(jar)) == 0 for jar in jars)
     core.close()
@@ -269,7 +180,7 @@ async def test_cookies_сайта_не_утекают_в_сессии_канал
 
 
 def test_отказ_safehttp_не_содержит_пароля_из_адреса() -> None:
-    http = SafeHttp({"bpmgob.mec.gub.uy"}, 5)
+    http = SafeHttp({"sae.mec.gub.uy"}, 5)
     with pytest.raises(HostNotAllowed) as info:
         http.check(f"https://user:SuperSecretPw1@evil.example/?token={C.telegram_token}")
     text = str(info.value)

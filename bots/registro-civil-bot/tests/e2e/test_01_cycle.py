@@ -22,20 +22,19 @@ async def open_incident(stand: Stand, site: FakeSite) -> float:
     return stand.elapsed
 
 
-async def test_первая_проверка_входит_на_сайт_и_видит_пустой_календарь(
+async def test_первая_проверка_без_входа_видит_страницу_без_мест(
     make_stand, site: FakeSite
 ) -> None:
     stand = await make_stand(site=site)
-    # нет cookies → 302 → вход → немедленная повторная проверка уже с cookies
-    assert [c.cookie == "" for c in site.calls] == [True, False]
-    assert stand.session.logins == 1
+    # Публичная страница SAE: один GET сразу, без входа и без повторов (R12, R13)
+    assert len(site.calls) == 1
     assert stand.loop.status.state is PollState.RUNNING
     assert stand.loop.status.checks_total == 1
     assert await stand.incidents() == []
     assert all(not stand.sent(c) for c in Channel)
     codes = stand.journal.codes()
-    assert codes.count("state.changed") == 2  # running → reauth → running
-    assert "login.start" in codes and "login.ok" in codes
+    assert "state.changed" not in codes and not any(c.startswith("login") for c in codes)
+    assert [p.name.endswith("-empty.html") for p in stand.paths.shots.iterdir()] == [True]
 
 
 async def test_появление_мест_одна_первая_волна_во_все_три_канала_параллельно(
@@ -143,7 +142,7 @@ async def test_три_пустые_проверки_подряд_закрыва�
 
     rows = stand.journal.read_openings()
     assert [r["событие"] for r in rows] == ["появились", "пропали"]
-    assert rows[0]["даты"] == "2027-02-23" and rows[0]["источник"] == "api"
+    assert rows[0]["даты"] == "2027-02-23" and rows[0]["источник"] == "sae"
     assert float(rows[1]["окно_открыто_мин"]) == pytest.approx((t_gone - t_seen) / 60, abs=0.05)
 
 
@@ -172,11 +171,10 @@ async def test_каждая_проверка_записана_в_журнал_п
 
     checks = stand.journal.read_checks()
     assert len(checks) == len(site.calls), "строка журнала на каждый запрос к сайту"
-    assert checks[0]["ok"] is False and checks[0]["error_kind"] == "SessionExpired"
-    assert all(c["ok"] for c in checks[1:])
-    assert all(c["source"] == "api" for c in checks)
-    assert [c["slots_count"] for c in checks[1:]] == [0, 3, 0, 0, 0]
-    assert checks[2]["slots"] == ["2027-02-23 10:30", "2027-02-23 10:45", "2027-02-23 11:00"]
+    assert all(c["ok"] for c in checks)
+    assert all(c["source"] == "sae" for c in checks)
+    assert [c["slots_count"] for c in checks] == [0, 3, 0, 0, 0]
+    assert checks[1]["slots"] == ["2027-02-23 10:30", "2027-02-23 10:45", "2027-02-23 11:00"]
     assert all(c["at"].endswith("-03:00") for c in checks), "время — в часовом поясе настроек"
 
 

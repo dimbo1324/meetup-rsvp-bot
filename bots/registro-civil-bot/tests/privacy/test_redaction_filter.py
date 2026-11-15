@@ -148,7 +148,7 @@ def test_setup_logging_фильтр_стоит_на_каждом_обработ�
 def test_шумные_библиотеки_не_имеют_своих_обработчиков_и_идут_через_корень(tmp_path: Path) -> None:
     """Обработчик на логгере библиотеки обошёл бы фильтр корневых обработчиков."""
     setup_logging(tmp_path / "x.log", level="DEBUG", console=False)
-    for name in ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "playwright"):
+    for name in ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic"):
         lib = logging.getLogger(name)
         # NullHandler библиотеки (хорошая практика) ничего не выводит; настоящих обработчиков нет
         assert [h for h in lib.handlers if not isinstance(h, logging.NullHandler)] == []

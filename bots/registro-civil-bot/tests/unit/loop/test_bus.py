@@ -11,7 +11,6 @@ from tests.fakes import T0, settle, slots, snapshot
 from rcbot.application.bus import EventBus
 from rcbot.domain.events import (
     DomainEvent,
-    ManualActionRequired,
     PollerStateChanged,
     SlotsAppeared,
     SlotsGone,
@@ -46,7 +45,7 @@ async def test_чужие_типы_событий_не_доходят() -> None:
 
     bus.subscribe(SlotsGone, handler)
     bus.publish(appeared())
-    bus.publish(ManualActionRequired(T0, "шаг 1"))
+    bus.publish(PollerStateChanged(T0, PollState.RUNNING, PollState.BACKOFF, "503"))
     await settle()
     assert got == []
 

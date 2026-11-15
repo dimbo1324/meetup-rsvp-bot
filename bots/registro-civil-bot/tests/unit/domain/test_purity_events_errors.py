@@ -12,7 +12,7 @@ import pytest
 
 import rcbot.domain
 from rcbot.domain import errors, events
-from rcbot.domain.models import PollState, SourceKind
+from rcbot.domain.models import PollState
 from tests.fakes import T0, slots, snapshot
 
 DOMAIN_DIR = Path(rcbot.domain.__file__).parent
@@ -63,17 +63,14 @@ def test_события_неизменяемы_и_несут_момент() -> N
     assert changed.added == slots(23)
 
 
-def test_события_состояния_и_источника_хранят_причину() -> None:
-    switched = events.SourceSwitched(T0, SourceKind.API, SourceKind.DOM, "3 неожиданных ответа")
+def test_событие_состояния_хранит_причину() -> None:
     changed = events.PollerStateChanged(T0, PollState.RUNNING, PollState.BACKOFF, "429")
-    assert (switched.old, switched.new, switched.reason) == (
-        SourceKind.API,
-        SourceKind.DOM,
-        "3 неожиданных ответа",
+    assert (changed.old, changed.new, changed.reason) == (
+        PollState.RUNNING,
+        PollState.BACKOFF,
+        "429",
     )
-    assert (changed.old, changed.new) == (PollState.RUNNING, PollState.BACKOFF)
-    assert events.ManualActionRequired(T0, "шаг 1").reason == "шаг 1"
-    assert events.UnconfirmedSlotsSeen(T0, snapshot(slots(23))).snapshot.has_slots
+    assert events.SlotsAppeared(T0, snapshot(slots(23))).snapshot.has_slots
 
 
 def test_все_события_наследуют_domain_event() -> None:
@@ -81,10 +78,7 @@ def test_все_события_наследуют_domain_event() -> None:
         "SlotsAppeared",
         "SlotsChanged",
         "SlotsGone",
-        "ManualActionRequired",
-        "SourceSwitched",
         "PollerStateChanged",
-        "UnconfirmedSlotsSeen",
     ]
     for name in names:
         assert issubclass(getattr(events, name), events.DomainEvent)
@@ -92,15 +86,9 @@ def test_все_события_наследуют_domain_event() -> None:
 
 def test_все_исключения_домена_наследуют_rcbot_error_и_различимы() -> None:
     classes = [
-        errors.SessionExpired,
-        errors.ManualStepRequired,
         errors.RateLimited,
         errors.UnexpectedResponse,
         errors.SiteUnavailable,
-        errors.ReloginBudgetExceeded,
-        errors.ReloginDeferred,
-        errors.LoginFailed,
-        errors.SourceNotConfigured,
         errors.HostNotAllowed,
     ]
     for cls in classes:

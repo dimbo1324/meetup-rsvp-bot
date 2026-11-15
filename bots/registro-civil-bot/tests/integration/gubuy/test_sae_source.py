@@ -13,10 +13,9 @@ import pytest
 from aiohttp import web
 from tests.fakes import TARGET, FakeClock, LocalTlsServer
 
-from rcbot.application.ports import SessionCookie
 from rcbot.domain.errors import RateLimited, SiteUnavailable, UnexpectedResponse
 from rcbot.domain.models import SourceKind
-from rcbot.infrastructure.gubuy import MAX_STORED_FILES, api_source
+from rcbot.infrastructure.gubuy import MAX_STORED_FILES, sae_source
 from rcbot.infrastructure.gubuy.sae_source import SaeSource, seats_open, visible_text
 from rcbot.infrastructure.http.client import SafeHttp
 
@@ -141,12 +140,11 @@ async def test_запрос_только_get_без_cookies_и_без_тела(
 ) -> None:
     tls_server.respond("GET", PAGE_PATH, text=EMPTY_PAGE, content_type="text/html")
     source = make()
-    source.use_cookies([SessionCookie("simple_bpm_session", "TEST", "bpmgob.mec.gub.uy")])
     await source.fetch(TARGET)
     await source.close()
     [request] = tls_server.requests
     assert request.method == "GET" and request.body == b""
-    assert "Cookie" not in request.headers  # вход в аккаунт SAE не нужен (R12)
+    assert "Cookie" not in request.headers  # вход не нужен, своих cookies бот не шлёт (R12)
 
 
 @pytest.mark.parametrize("status", [403, 429])
@@ -197,7 +195,7 @@ async def test_чужая_страница_неожиданный_ответ_и_
 async def test_слишком_большой_ответ_не_читается(
     make: MakeSource, tls_server: LocalTlsServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(api_source, "MAX_RESPONSE_BYTES", 100)
+    monkeypatch.setattr(sae_source, "MAX_RESPONSE_BYTES", 100)
     tls_server.respond("GET", PAGE_PATH, text=EMPTY_PAGE, content_type="text/html")
     source = make()
     with pytest.raises(UnexpectedResponse):

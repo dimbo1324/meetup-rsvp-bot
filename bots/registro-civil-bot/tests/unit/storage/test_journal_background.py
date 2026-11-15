@@ -45,8 +45,8 @@ def test_запись_доходит_до_диска_после_flush(tmp_path: 
 def test_все_виды_записей_идут_через_очередь(tmp_path: Path) -> None:
     journal = make(tmp_path / "j")
     try:
-        journal.check(CheckRecord(T0, SourceKind.DOM, True, slots(23), 5.0, "running", 60.0))
-        journal.opening(OpeningRecord(T0, "появились", slots(23), SourceKind.DOM))
+        journal.check(CheckRecord(T0, SourceKind.SAE, True, slots(23), 5.0, "running", 60.0))
+        journal.opening(OpeningRecord(T0, "появились", slots(23), SourceKind.SAE))
         journal.status({"alive_at": "x", "state": "running"})
         journal.flush()
         root = tmp_path / "j"

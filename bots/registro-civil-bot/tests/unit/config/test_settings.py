@@ -14,10 +14,7 @@ from pydantic import ValidationError
 from rcbot.config.settings import (
     AGENDA_URL_TEMPLATE,
     BPMGOB_HOST,
-    GUBUY_HOSTS,
-    IDURUGUAY_HOST,
     MAX_POLL_INTERVAL_SEC,
-    MIN_DOM_POLL_INTERVAL_SEC,
     MIN_POLL_INTERVAL_SEC,
     STAGE_PLACEHOLDER,
     Settings,
@@ -30,7 +27,6 @@ from tests.fakes import T0
 
 def test_константы_интервала_соответствуют_spec() -> None:
     assert MIN_POLL_INTERVAL_SEC == 10.0
-    assert MIN_DOM_POLL_INTERVAL_SEC == 60.0
     assert MAX_POLL_INTERVAL_SEC == 3600.0
 
 
@@ -90,7 +86,7 @@ def test_свойство_любой_принятый_интервал_в_доп
 # --- https ---
 
 
-@pytest.mark.parametrize("field", ["agenda_url", "login_url", "ntfy_server", "sae_url"])
+@pytest.mark.parametrize("field", ["agenda_url", "ntfy_server", "sae_url"])
 @pytest.mark.parametrize(
     "value",
     ["http://bpmgob.mec.gub.uy/x", "ftp://x.example/a", "file:///etc/passwd", "//x.example", ""],
@@ -100,31 +96,29 @@ def test_обязательные_адреса_только_https(field: str, va
         Settings(**{field: value})
 
 
-@pytest.mark.parametrize("field", ["api_url", "watchdog_url"])
+@pytest.mark.parametrize("field", ["watchdog_url"])
 @pytest.mark.parametrize("value", ["http://x.example/a", "ftp://x.example", "ws://x.example"])
 def test_необязательные_адреса_http_отклоняются(field: str, value: str) -> None:
     with pytest.raises(ValidationError, match="https"):
         Settings(**{field: value})
 
 
-@pytest.mark.parametrize("field", ["api_url", "watchdog_url"])
+@pytest.mark.parametrize("field", ["watchdog_url"])
 def test_необязательные_адреса_могут_быть_пустыми(field: str) -> None:
     assert getattr(Settings(**{field: ""}), field) == ""
     assert getattr(Settings(), field) == ""
 
 
-@pytest.mark.parametrize(
-    "field", ["agenda_url", "login_url", "ntfy_server", "sae_url", "api_url", "watchdog_url"]
-)
+@pytest.mark.parametrize("field", ["agenda_url", "ntfy_server", "sae_url", "watchdog_url"])
 def test_схема_https_в_любом_регистре_допустима(field: str) -> None:
-    # API календаря и адрес этапа допустимы только на bpmgob (SPEC 2.6)
-    hosts = {"api_url": "bpmgob.mec.gub.uy", "agenda_url": "bpmgob.mec.gub.uy"}
+    # Адрес этапа (ссылка в тревоге) допустим только на bpmgob (SPEC 2.6)
+    hosts = {"agenda_url": "bpmgob.mec.gub.uy"}
     hosts["sae_url"] = "sae.mec.gub.uy"  # страница SAE только на своём хосте (R12)
     host = hosts.get(field, "host.example")
     assert getattr(Settings(**{field: f"HTTPS://{host}/a"}), field)
 
 
-@pytest.mark.parametrize("field", ["agenda_url", "login_url", "ntfy_server", "sae_url", "api_url"])
+@pytest.mark.parametrize("field", ["agenda_url", "ntfy_server", "sae_url"])
 @pytest.mark.parametrize("value", ["https://", "https:///path", "https://:443/x"])
 def test_https_без_хоста_отклоняется(field: str, value: str) -> None:
     # Пустой хост попал бы в список разрешённых адресов как «» (SPEC 2.6)
@@ -174,7 +168,6 @@ BOUNDS: list[tuple[str, Any, Any, Any, Any]] = [
     ("months_ahead", 0, 1, 12, 13),
     ("poll_jitter", -0.01, 0.0, 0.5, 0.51),
     ("request_timeout_sec", 0, 0.001, 60, 60.01),
-    ("relogin_max_per_hour", 0, 1, 6, 7),
     ("tg_repeat_sec", 29.99, 30, 1e6, None),
     ("tg_repeat_max", -1, 0, 100, 101),
     ("ntfy_repeat_sec", 59.99, 60, 1e6, None),
@@ -199,14 +192,13 @@ def test_границы_полей(field: str, below: Any, low: Any, high: Any, 
 def test_значения_по_умолчанию_совпадают_с_env_example_spec() -> None:
     s = Settings()
     assert (s.months_ahead, s.poll_jitter, s.request_timeout_sec) == (6, 0.10, 8.0)
-    assert s.relogin_max_per_hour == 6
     assert (s.tg_repeat_sec, s.tg_repeat_max) == (60.0, 30)
     assert (s.ntfy_server, s.ntfy_repeat_sec, s.ntfy_repeat_max) == ("https://ntfy.sh", 120.0, 10)
     assert (s.call_repeat_sec, s.call_repeat_max, s.call_lang) == (180.0, 5, "ru-RU-Standard-A")
     assert (s.daily_report_hour, s.timezone) == (9, "America/Montevideo")
-    assert (s.sentry_enabled, s.headless) == (False, True)
-    assert s.watchdog_url == "" and s.api_url == ""
-    assert (s.doc_country, s.doc_type) == ("Rusia", "Pasaporte")
+    assert s.sentry_enabled is False
+    assert s.watchdog_url == ""
+    assert s.sae_url == "https://sae.mec.gub.uy/sae/agendarReserva/Paso1.xhtml?e=9&a=82"
     assert s.location_text == "Oficina Tramite Extranjeros"
 
 
@@ -265,10 +257,10 @@ def test_любая_угловая_скобка_в_адресе_означает
 
 
 def test_список_хостов_по_умолчанию_точно_по_spec_2_6() -> None:
+    # Решение R13: на bpmgob и ID Uruguay бот не ходит, их в списке нет
     assert Settings().allowed_hosts() == frozenset(
         {
-            "bpmgob.mec.gub.uy",
-            "mi.iduruguay.gub.uy",
+            "sae.mec.gub.uy",
             "api.telegram.org",
             "ntfy.sh",
             "api.callmebot.com",
@@ -279,34 +271,8 @@ def test_список_хостов_по_умолчанию_точно_по_spec_
 def test_хост_сторожа_добавляется_только_когда_задан() -> None:
     hosts = Settings(watchdog_url="https://Hc.Example.org:8443/ping/abc").allowed_hosts()
     assert "hc.example.org" in hosts
-    assert len(hosts) == 6
+    assert len(hosts) == 5
     assert not any(":" in h or "/" in h for h in hosts)
-
-
-def test_api_живёт_на_bpmgob_и_список_хостов_не_растёт() -> None:
-    hosts = Settings(api_url="https://BPMGOB.mec.gub.uy/disp").allowed_hosts()
-    assert hosts == Settings().allowed_hosts() and len(hosts) == 5
-
-
-@pytest.mark.parametrize(
-    "url",
-    ["https://api.example.org/disp", "https://bpmgob.mec.gub.uy.evil.example/x"],
-)
-def test_api_на_чужом_хосте_отклоняется(url: str) -> None:
-    with pytest.raises(ValidationError, match=r"bpmgob\.mec\.gub\.uy"):
-        Settings(api_url=url)
-
-
-def test_sae_главный_источник_по_умолчанию(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Решение R12: в работе по умолчанию SAE включён (тесты выключают его в conftest)
-    monkeypatch.delenv("RCBOT_SAE_SOURCE_ENABLED", raising=False)
-    assert Settings().sae_source_enabled is True
-    assert "sae.mec.gub.uy" in Settings().allowed_hosts()
-
-
-def test_хост_sae_в_списке_только_когда_источник_включён() -> None:
-    assert "sae.mec.gub.uy" not in Settings(sae_source_enabled=False).allowed_hosts()
-    assert "sae.mec.gub.uy" in Settings(sae_source_enabled=True).allowed_hosts()
 
 
 @pytest.mark.parametrize(
@@ -340,23 +306,6 @@ def test_свой_сервер_ntfy_заменяет_ntfy_sh_в_списке() -
     assert "ntfy.sh" not in hosts
 
 
-def test_все_необязательные_источники_вместе() -> None:
-    hosts = Settings(
-        watchdog_url="https://w.example.org/p",
-        api_url="https://bpmgob.mec.gub.uy/x",
-        sae_source_enabled=True,
-    ).allowed_hosts()
-    assert len(hosts) == 7
-    assert {"w.example.org", "sae.mec.gub.uy"} <= hosts
-
-
-def test_хосты_не_зависят_от_адреса_входа() -> None:
-    # Хост входа — из фиксированного списка gub.uy, а не из `.env`: подмена адреса
-    # в настройках не расширяет список разрешённых хостов.
-    hosts = Settings(login_url="https://evil.example/login").allowed_hosts()
-    assert "evil.example" not in hosts
-
-
 @pytest.mark.parametrize(
     "url",
     [
@@ -378,15 +327,10 @@ def test_адрес_этапа_только_https(value: str) -> None:
 
 def test_адрес_этапа_с_меткой_допустим_и_собран_из_шаблона() -> None:
     expected = AGENDA_URL_TEMPLATE.format(stage=STAGE_PLACEHOLDER)
+    assert AGENDA_URL_TEMPLATE.startswith(f"https://{BPMGOB_HOST}/")
     assert Settings().agenda_url == expected
     assert expected == "https://bpmgob.mec.gub.uy/etapas/ejecutar/<НОМЕР_ЭТАПА>/1"
     assert Settings(agenda_url=AGENDA_URL_TEMPLATE.format(stage="TEST-ETAPA")).agenda_configured
-
-
-def test_хосты_gub_uy_собраны_из_констант() -> None:
-    assert GUBUY_HOSTS == (BPMGOB_HOST, IDURUGUAY_HOST)
-    assert IDURUGUAY_HOST == "mi.iduruguay.gub.uy"
-    assert AGENDA_URL_TEMPLATE.startswith(f"https://{BPMGOB_HOST}/")
 
 
 # --- загрузка из .env и окружения ---

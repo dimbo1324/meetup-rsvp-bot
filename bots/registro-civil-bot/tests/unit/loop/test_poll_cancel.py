@@ -6,8 +6,6 @@ import asyncio
 
 from tests.unit.loop.harness import make_rig
 
-from rcbot.domain.errors import SessionExpired
-
 EMPTY: frozenset = frozenset()  # type: ignore[type-arg]
 
 
@@ -56,29 +54,6 @@ async def test_отмена_во_время_паузы_ничего_не_ост�
     await rig.kill()
     assert rig.clock.sleeping == 0
     assert pending_tasks() == baseline
-
-
-async def test_отмена_во_время_входа_освобождает_блокировку_и_не_ломает_повторный_вход() -> None:
-    calls = 0
-
-    async def first_hangs() -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            await rig.clock.sleep(10_000)
-
-    rig = make_rig([SessionExpired("x"), EMPTY], auth_delay=first_hangs)
-    baseline = pending_tasks()
-    await rig.start()
-    assert rig.auth.concurrent == 1  # вход идёт
-    await rig.kill()
-    assert rig.auth.concurrent == 0
-    assert rig.session.has_session is False
-    assert rig.clock.sleeping == 0
-    assert pending_tasks() == baseline
-    # блокировка свободна: следующий вход проходит, а не виснет
-    await asyncio.wait_for(rig.session.relogin("после отмены"), 1)
-    assert rig.session.has_session
 
 
 async def test_stop_во_время_проверки_дожидается_её_и_завершает_run() -> None:

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from aiohttp import web
 
 from rcbot.application.messages import MessageComposer
-from rcbot.domain.models import Alert
+from rcbot.domain.models import Alert, AvailabilitySnapshot, SourceKind
 from rcbot.infrastructure.http.client import SafeHttp
 from tests.fakes import AGENDA_URL, T0, LocalTlsServer, slots, snapshot
 
@@ -30,13 +30,13 @@ def all_alerts() -> dict[str, Alert]:
     """Все виды тревог, которые бот способен собрать (application/messages.py)."""
     c = composer()
     snap = snapshot(slots(23, 24))
+    no_dates = AvailabilitySnapshot(1, T0, frozenset(), SourceKind.SAE, 5.0, dates_unknown=True)
     return {
         "slots_alert": c.slots_alert(snap, T0 + timedelta(seconds=1)),
         "slots_changed": c.slots_alert(snap, T0 + timedelta(seconds=1), added=slots(24)),
-        "unconfirmed": c.unconfirmed_alert(snap),
+        "slots_dates_unknown": c.slots_alert(no_dates, T0 + timedelta(seconds=1)),
         "gone": c.gone(T0),
-        "manual_step": c.manual_step("контрольный вопрос"),
-        "service": c.service("🔀 Источник данных: api → dom. Причина: тест."),
+        "service": c.service("⏸ Бот замедлился: тест."),
         "test": c.test(T0),
     }
 

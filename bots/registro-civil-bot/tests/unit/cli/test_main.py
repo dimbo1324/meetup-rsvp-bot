@@ -19,8 +19,6 @@ from rcbot.config.secrets import SecretMissing
 COMMANDS = {
     "init",
     "doctor",
-    "discover",
-    "login",
     "check",
     "run",
     "simulate",
@@ -58,6 +56,14 @@ def test_version_печатает_версию_и_выходит_кодом_0(ca
     assert capsys.readouterr().out.strip() == f"rcbot {__version__}"
 
 
+@pytest.mark.parametrize("removed", ["login", "discover"])
+def test_команд_входа_и_разведки_больше_нет(removed: str) -> None:
+    # Решение R13: бот не входит на сайт и не ведёт разведку bpmgob
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main([removed])
+    assert exit_info.value.code == 2
+
+
 def test_неизвестная_опция_отклоняется() -> None:
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["doctor", "--nonsense"])
@@ -69,8 +75,6 @@ def test_неизвестная_опция_отклоняется() -> None:
     [
         (["doctor"], ("full", "offline"), (False, False)),
         (["doctor", "--full", "--offline"], ("full", "offline"), (True, True)),
-        (["login"], ("check",), (False,)),
-        (["login", "--check"], ("check",), (True,)),
         (["check", "--once"], ("once",), (True,)),
         (["simulate"], ("wait",), (600,)),
         (["simulate", "--wait", "45"], ("wait",), (45,)),
@@ -106,10 +110,10 @@ def test_нет_секрета_даёт_код_2_и_подсказку(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def handler(_: argparse.Namespace) -> int:
-        raise SecretMissing("нет секрета «пароль gub.uy»: выполните `rcbot init`")
+        raise SecretMissing("нет секрета «токен Telegram-бота»: выполните `rcbot init`")
 
     monkeypatch.setattr(cli, "_handlers", _only(handler))
-    assert cli.main(["login"]) == 2
+    assert cli.main(["run"]) == 2
     err = capsys.readouterr().err
     assert "Ошибка:" in err
     assert "rcbot init" in err

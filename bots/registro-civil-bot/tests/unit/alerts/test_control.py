@@ -8,13 +8,12 @@ from datetime import timedelta
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from tests.fakes import T0, FakeAuthenticator, settle, slots
+from tests.fakes import T0, settle, slots
 from tests.unit.alerts.helpers import appeared, gone, make_control
 
 from rcbot.application.control import FOREVER, MAX_PAUSE_MINUTES, IntervalTooSmall
 from rcbot.application.runtime import K_CHANNELS_OFF, K_INTERVAL, K_MONTHS, K_PAUSED_UNTIL
 from rcbot.config.settings import MAX_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
-from rcbot.domain.errors import LoginFailed, ReloginBudgetExceeded
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, PollState, SourceKind
 
 # --- интервал: жёсткий минимум 10 с ---
@@ -176,33 +175,13 @@ async def test_ack_делегируется_рассылке() -> None:
     assert ctl.rig.repo.incidents[1].acked_at is not None
 
 
-async def test_готово_пишет_в_журнал_и_будит_цикл_опроса() -> None:
-    ctl = make_control()
-    task = asyncio.create_task(ctl.loop.run())
-    await settle()
-    assert len(ctl.source.calls) == 1  # первая проверка; следующая — через минуту
-    ctl.controller.manual_done()
-    await settle()
-    # Владелец прошёл шаг 1: цикл просыпается, но минимум между проверками для DomSource — 60 с
-    # (SPEC 0.3, правило 3; решение T2): раньше проверка не пойдёт
-    assert len(ctl.source.calls) == 1
-    await ctl.rig.clock.advance(59)
-    assert len(ctl.source.calls) == 1
-    await ctl.rig.clock.advance(1)
-    assert len(ctl.source.calls) == 2  # и сразу по истечении минимума, а не через обычный период
-    assert "command.manual_done" in ctl.rig.journal.codes()
-    ctl.loop.stop()
-    await ctl.rig.clock.advance(1)
-    await task
-
-
 async def test_смена_интервала_будит_цикл_опроса() -> None:
     ctl = make_control()
     task = asyncio.create_task(ctl.loop.run())
     await settle()
     await ctl.controller.set_interval(30.0)
     await settle()
-    # Команда будит цикл, но интервал между проверками не сокращается ниже минимума DomSource
+    # Команда будит цикл, но проверка не идёт раньше минимума между проверками
     assert len(ctl.source.calls) == 1
     await ctl.rig.clock.advance(60)
     assert len(ctl.source.calls) == 2
@@ -212,49 +191,6 @@ async def test_смена_интервала_будит_цикл_опроса() 
 
 
 # --- повторный вход ---
-
-
-async def test_relogin_успешный_возвращает_пустую_строку_и_идёт_принудительно() -> None:
-    ctl = make_control()
-    await ctl.rig.session.relogin("первый вход")
-    assert ctl.rig.session.has_session
-    assert await ctl.controller.relogin() == ""
-    assert ctl.rig.session.logins == 2  # сессия была, но вход по команде выполнен всё равно
-    assert "command.relogin" in ctl.rig.journal.codes()
-
-
-@pytest.mark.parametrize(
-    "error", [LoginFailed("неверная страница входа"), ReloginBudgetExceeded("6 входов за час")]
-)
-async def test_relogin_ошибка_бота_возвращается_строкой(error: Exception) -> None:
-    ctl = make_control()
-    ctl.rig.session._auth = FakeAuthenticator(failures=[error])
-    assert await ctl.controller.relogin() == str(error)
-
-
-async def test_relogin_отложен_после_тревоги_и_сообщает_об_этом_строкой() -> None:
-    ctl = make_control()
-    ctl.rig.session.quiet_after_alert()
-    text = await ctl.controller.relogin()
-    assert "отложен" in text and "после тревоги" in text
-    assert ctl.rig.session.logins == 0
-
-
-async def test_relogin_любая_ошибка_возвращается_текстом_а_не_исключением() -> None:
-    # Раньше чужое исключение (нет секрета, сбой keyring) уходило в обработчик Telegram
-    ctl = make_control()
-    ctl.rig.session._auth = FakeAuthenticator(failures=[RuntimeError("секретный текст")])
-    text = await ctl.controller.relogin()
-    assert text == "RuntimeError"  # у чужих исключений — только имя типа, без текста
-    assert "секретный" not in text
-
-
-async def test_relogin_нет_секрета_возвращается_текстом() -> None:
-    from rcbot.config.secrets import SecretMissing
-
-    ctl = make_control()
-    ctl.rig.session._auth = FakeAuthenticator(failures=[SecretMissing("нет секрета")])
-    assert await ctl.controller.relogin() == "SecretMissing"
 
 
 # --- очистка, инциденты, ошибки ---
@@ -301,22 +237,19 @@ async def test_статус_содержит_всё_нужное_для_telegram
     ctl = make_control(folder_bytes=7 * 2**20, journal_bytes=2**20)
     ctl.liveness_text = "проверка идёт 200 с"
     await ctl.controller.toggle_channel(Channel.CALL)
-    await ctl.rig.session.relogin("тест")
     await ctl.rig.book.on_appeared(appeared(23, 24))
     await ctl.rig.alerts.on_appeared(appeared(23, 24))
     view = await ctl.controller.status()
     assert view.now == T0
     assert view.status is ctl.loop.status
     assert view.status.state is PollState.RUNNING
-    assert view.source is SourceKind.DOM
+    assert view.source is SourceKind.SAE
     assert view.base_interval_sec == 20.0
-    assert view.interval_sec == 60.0  # лестница D4: первые 6 часов — 60 с, DOM — не реже 60 с
+    assert view.interval_sec == 60.0  # лестница D4: первые 6 часов — 60 с
     assert view.months_ahead == 6
     assert view.paused_until is None
     assert view.incident is not None and view.incident.slots == slots(23, 24)
     assert view.repeating is True
-    assert view.logins_last_hour == 1
-    assert view.quiet_remaining_sec == 600.0
     assert view.channels_off == frozenset({Channel.CALL})
     assert view.folder_bytes == 7 * 2**20
     assert view.journal_bytes == 2**20
@@ -330,7 +263,6 @@ async def test_статус_без_необязательных_источник
     assert view.folder_bytes is None and view.journal_bytes is None
     assert view.hung_reason == ""
     assert view.incident is None and not view.repeating
-    assert view.quiet_remaining_sec == 0.0
 
 
 async def test_статус_отражает_смену_интервала_и_месяцев() -> None:

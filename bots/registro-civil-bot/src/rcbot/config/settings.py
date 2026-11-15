@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -15,13 +14,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Пределы живут в домене; здесь — реэкспорт под прежними именами для остальных слоёв
 from rcbot.domain.limits import MAX_MONTHS_AHEAD as MAX_MONTHS_AHEAD
 from rcbot.domain.limits import MAX_POLL_INTERVAL_SEC as MAX_POLL_INTERVAL_SEC
-from rcbot.domain.limits import MIN_DOM_POLL_INTERVAL_SEC as MIN_DOM_POLL_INTERVAL_SEC
 from rcbot.domain.limits import MIN_MONTHS_AHEAD as MIN_MONTHS_AHEAD
 from rcbot.domain.limits import MIN_POLL_INTERVAL_SEC as MIN_POLL_INTERVAL_SEC
 
+# Хост заявки: адрес этапа — только ссылка в тревоге, бот на этот хост не ходит (R13)
 BPMGOB_HOST = "bpmgob.mec.gub.uy"
-IDURUGUAY_HOST = "mi.iduruguay.gub.uy"
-GUBUY_HOSTS = (BPMGOB_HOST, IDURUGUAY_HOST)
 TELEGRAM_HOST = "api.telegram.org"
 CALLMEBOT_HOST = "api.callmebot.com"
 SAE_HOST = "sae.mec.gub.uy"
@@ -38,20 +35,11 @@ class Settings(BaseSettings):
     agenda_url: str = AGENDA_URL_TEMPLATE.format(stage=STAGE_PLACEHOLDER)
     tramite_id: str = ""
     location_text: str = "Oficina Tramite Extranjeros"
-    doc_country: str = "Rusia"
-    doc_type: str = "Pasaporte"
     months_ahead: int = Field(default=6, ge=MIN_MONTHS_AHEAD, le=MAX_MONTHS_AHEAD)
-    login_url: str = (
-        "https://bpmgob.mec.gub.uy/autenticacion/login"
-        "?redirect=https://bpmgob.mec.gub.uy/tramites/iniciar/8942"
-    )
-    # Адрес API календаря станет известен после разведки (этап 3); пусто — ApiSource выключен
-    api_url: str = ""
 
     poll_interval_sec: float = 20.0
     poll_jitter: float = Field(default=0.10, ge=0.0, le=0.5)
     request_timeout_sec: float = Field(default=8.0, gt=0, le=60)
-    relogin_max_per_hour: int = Field(default=6, ge=1, le=6)
 
     tg_repeat_sec: float = Field(default=60.0, ge=30)
     tg_repeat_max: int = Field(default=30, ge=0, le=100)
@@ -67,12 +55,8 @@ class Settings(BaseSettings):
     sentry_enabled: bool = False
     sentry_dsn: str = ""
     watchdog_url: str = ""
-    # Главный источник — публичная страница записи SAE (решение R12): вход в bpmgob не нужен
-    sae_source_enabled: bool = True
+    # Источник — публичная страница записи SAE (решения R12, R13): вход на сайт не нужен
     sae_url: str = "https://sae.mec.gub.uy/sae/agendarReserva/Paso1.xhtml?e=9&a=82"
-    headless: bool = True
-    # Браузер (решение R8): auto — Chrome, затем Edge, затем встроенный Chromium Playwright
-    browser: Literal["auto", "chrome", "msedge", "chromium"] = "auto"
 
     # Журнал наблюдения (решение R6): пусто — папка rcbot-journal на рабочем столе
     journal_enabled: bool = True
@@ -106,7 +90,7 @@ class Settings(BaseSettings):
             raise ValueError(f"неизвестный часовой пояс: {value!r}") from error
         return value
 
-    @field_validator("login_url", "ntfy_server")
+    @field_validator("ntfy_server")
     @classmethod
     def _https_only(cls, value: str) -> str:
         return _require_https(value)
@@ -125,12 +109,6 @@ class Settings(BaseSettings):
     def _optional_https(cls, value: str) -> str:
         return _require_https(value) if value else value
 
-    @field_validator("api_url")
-    @classmethod
-    def _api_on_bpmgob(cls, value: str) -> str:
-        """API календаря живёт на bpmgob: чужой хост получил бы cookies сессии и права запроса."""
-        return _require_bpmgob(value, "адрес API календаря") if value else value
-
     @field_validator("tramite_id")
     @classmethod
     def _tramite_maskable(cls, value: str) -> str:
@@ -142,7 +120,7 @@ class Settings(BaseSettings):
     @field_validator("agenda_url")
     @classmethod
     def _agenda_on_bpmgob(cls, value: str) -> str:
-        # Этот адрес открывает браузер с сессией владельца: чужой хост получил бы её cookies
+        # Ссылка из тревоги ведёт владельца на заявку: чужой хост здесь — подмена ссылки
         return _require_bpmgob(value, "адрес этапа")
 
     @property
@@ -155,11 +133,9 @@ class Settings(BaseSettings):
 
     def allowed_hosts(self) -> frozenset[str]:
         """Список хостов SPEC 2.6: HTTP-обёртка отказывает всем остальным."""
-        hosts = {*GUBUY_HOSTS, TELEGRAM_HOST, CALLMEBOT_HOST, _host(self.ntfy_server)}
+        hosts = {SAE_HOST, TELEGRAM_HOST, CALLMEBOT_HOST, _host(self.ntfy_server)}
         if self.watchdog_url:
             hosts.add(_host(self.watchdog_url))
-        if self.sae_source_enabled:
-            hosts.add(SAE_HOST)
         return frozenset(hosts)
 
 

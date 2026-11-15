@@ -22,8 +22,6 @@ NUM_STAGE = "912" + "0786"
 
 @dataclass(frozen=True)
 class Canaries:
-    doc_number: str = "KQ7418239650"
-    password: str = "Hx9!bR4qLm2#Canary"
     telegram_token: str = "246813579" + ":" + "CanaryTok_ABCdefGHIjklMNOpqrSTUvwx-12"
     chat_id: str = "5550142398"
     ntfy_topic: str = "rcbot-canaryTopicQ8w3Zk1Lp7Vn4Xc2Bm6Yt9Rd5Hs0Jf"
@@ -34,8 +32,6 @@ class Canaries:
 
     def secrets(self) -> dict[SecretKey, str]:
         return {
-            SecretKey.DOC_NUMBER: self.doc_number,
-            SecretKey.PASSWORD: self.password,
             SecretKey.TELEGRAM_TOKEN: self.telegram_token,
             SecretKey.TELEGRAM_CHAT_ID: self.chat_id,
             SecretKey.NTFY_TOPIC: self.ntfy_topic,

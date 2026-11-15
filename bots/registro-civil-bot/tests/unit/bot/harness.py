@@ -33,14 +33,12 @@ from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import NoopCoordinator
 from rcbot.application.runtime import RuntimeSettings, RuntimeStore
-from rcbot.application.session_manager import SessionManager
 from rcbot.bot.app import build_dispatcher
 from rcbot.domain.detector import Detector
 from rcbot.domain.models import Channel
 from tests.fakes import (
     AGENDA_URL,
     TARGET,
-    FakeAuthenticator,
     FakeNotifier,
     FakeSource,
     ManualClock,
@@ -178,12 +176,10 @@ class Rig:
     kv: MemoryKV
     clock: ManualClock
     source: FakeSource
-    auth: FakeAuthenticator
     notifiers: dict[Channel, FakeNotifier]
     incidents: MemoryIncidentRepository
     event_log: MemoryEventLog
     journal: RecordingJournal
-    session: SessionManager
     cleanup_calls: list[int]
     liveness: list[str]
 
@@ -193,22 +189,17 @@ async def make_rig(
     cleanup: dict[str, int] | None = None,
     folder_bytes: int | None = 5 * 1024 * 1024,
     journal_bytes: int | None = 2048,
-    relogin_failures: tuple[BaseException, ...] = (),
 ) -> Rig:
     clock = ManualClock()
     kv = MemoryKV()
     store = RuntimeStore(kv)
     runtime = await store.load(20.0, 6, clock.now())
     source = FakeSource([frozenset()], clock=clock)
-    auth = FakeAuthenticator(failures=relogin_failures)
-    session = SessionManager(auth, clock, 6)
     journal = RecordingJournal()
     incidents = MemoryIncidentRepository()
     event_log = MemoryEventLog()
     loop = PollLoop(
-        primary=source,
-        fallback=None,
-        session=session,
+        source=source,
         detector=Detector(),
         bus=EventBus(),
         clock=clock,
@@ -227,7 +218,6 @@ async def make_rig(
         {c: RepeatPolicy(60.0, 3) for c in Channel},
         MessageComposer(TZ, AGENDA_URL, "TEST-TRAMITE"),
         book,
-        session,
         runtime,
         clock,
         NoopCoordinator(),
@@ -246,7 +236,6 @@ async def make_rig(
         book,
         incidents,
         event_log,
-        session,
         clock,
         cleanup=do_cleanup,
         folder_size=(lambda: folder_bytes) if folder_bytes is not None else None,
@@ -263,12 +252,10 @@ async def make_rig(
         kv=kv,
         clock=clock,
         source=source,
-        auth=auth,
         notifiers=notifiers,
         incidents=incidents,
         event_log=event_log,
         journal=journal,
-        session=session,
         cleanup_calls=cleanup_calls,
         liveness=liveness,
     )
@@ -284,7 +271,6 @@ def snapshot_of_state(rig: Rig) -> dict[str, object]:
         "paused_until": runtime.paused_until,
         "channels_off": set(runtime.channels_off),
         "journal": list(rig.journal.events),
-        "logins": rig.auth.logins,
         "cleanup": list(rig.cleanup_calls),
         "sent": {c: list(n.sent) for c, n in rig.notifiers.items()},
         "wake": rig.loop._wake.is_set(),

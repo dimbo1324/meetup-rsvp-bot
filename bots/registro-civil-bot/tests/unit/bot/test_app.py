@@ -28,7 +28,6 @@ SPEC_COMMANDS = [
     "test",
     "last",
     "interval",
-    "relogin",
     "cleanup",
     "menu",
 ]

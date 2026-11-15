@@ -9,17 +9,27 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.conftest import MemoryKeyring
 
 from rcbot import cli
 from rcbot.cli import maintenance
 from rcbot.config.paths import Paths
-from rcbot.config.secrets import SecretKey, SecretStore
+from rcbot.config.secrets import LEGACY_KEYS, SERVICE, SecretKey, SecretStore
 from rcbot.infrastructure.win.single_instance import SingleInstance
 
 # --- purge ---
 
-CLEARED = ("logs", "data/tmp", "data/quarantine", "data/shots", "data/discovery", ".cache")
-KEPT = ("data/rcbot.sqlite3", ".env", ".browsers/chromium/chrome.exe", "alembic.ini")
+# Карантин, дампы разведки и Chromium — остатки пути bpmgob (R13): purge удаляет и их
+CLEARED = (
+    "logs",
+    "data/tmp",
+    "data/quarantine",
+    "data/shots",
+    "data/discovery",
+    ".cache",
+    ".browsers",
+)
+KEPT = ("data/rcbot.sqlite3", ".env", "alembic.ini")
 
 
 def populate(home: Path) -> None:
@@ -34,7 +44,7 @@ def populate(home: Path) -> None:
         target.write_text("важное", encoding="utf-8")
 
 
-def test_purge_удаляет_временное_и_не_трогает_базу_env_и_браузер(
+def test_purge_удаляет_временное_и_остатки_пути_bpmgob_и_не_трогает_базу_и_env(
     bot_home: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     populate(bot_home)
@@ -47,7 +57,7 @@ def test_purge_удаляет_временное_и_не_трогает_базу
         assert f"Удалено: {bot_home / name}" in out
     for name in KEPT:
         assert (bot_home / name).read_text(encoding="utf-8") == "важное", name
-    assert "База данных, .env и Chromium не тронуты." in out
+    assert "База данных и .env не тронуты." in out
 
 
 def test_purge_частично_заполненного_каталога_называет_только_удалённое(
@@ -227,12 +237,29 @@ def test_uninstall_если_задание_не_удалилось_это_вид
 def test_uninstall_удаляет_только_существующие_секреты(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], schtasks: FakeSchtasks
 ) -> None:
-    SecretStore().set(SecretKey.PASSWORD, "synthetic-pass")
+    SecretStore().set(SecretKey.TELEGRAM_TOKEN, "synthetic-token")
     answer(monkeypatch, "да")
     assert cli.main(["uninstall"]) == 0
     out = capsys.readouterr().out
     assert out.count("Секрет удалён:") == 1
-    assert f"Секрет удалён: {SecretKey.PASSWORD.value}" in out
+    assert f"Секрет удалён: {SecretKey.TELEGRAM_TOKEN.value}" in out
+
+
+def test_uninstall_удаляет_и_старые_секреты_входа_на_gub_uy(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    schtasks: FakeSchtasks,
+    memory_keyring: MemoryKeyring,
+) -> None:
+    # Номер паспорта и пароль прежнего входа (до R13) не должны остаться в Credential Manager
+    for name in LEGACY_KEYS:
+        memory_keyring.set_password(SERVICE, name, "synthetic-old")
+    answer(monkeypatch, "да")
+    assert cli.main(["uninstall"]) == 0
+    out = capsys.readouterr().out
+    for name in LEGACY_KEYS:
+        assert f"Секрет удалён: {name}" in out
+    assert memory_keyring.store == {}
 
 
 def test_uninstall_на_не_windows_планировщик_не_трогает(

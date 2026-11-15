@@ -12,7 +12,7 @@ import pytest
 from tests.fakes import T0, slots
 from tests.unit.loop.harness import make_rig, spans
 
-from rcbot.config.settings import MAX_POLL_INTERVAL_SEC, MIN_DOM_POLL_INTERVAL_SEC
+from rcbot.config.settings import MAX_POLL_INTERVAL_SEC
 from rcbot.domain.models import PollState, SourceKind
 
 EMPTY: frozenset = frozenset()  # type: ignore[type-arg]
@@ -40,7 +40,7 @@ class _LowestRandom(random.Random):
     ],
 )
 def test_лестница_D4_60_потом_30_потом_базовый(elapsed: timedelta, expected: float) -> None:
-    rig = make_rig(kind=SourceKind.API, base_interval=20.0, ladder_elapsed=elapsed)
+    rig = make_rig(kind=SourceKind.SAE, base_interval=20.0, ladder_elapsed=elapsed)
     assert rig.loop.current_interval(T0) == expected
 
 
@@ -71,27 +71,6 @@ async def test_проверки_идут_с_заданным_интервало�
     await rig.advance(0.001)
     await rig.advance(60)
     assert rig.rel(rig.source.starts) == [0, 20, 40, 60, 80]
-    await rig.kill()
-
-
-async def test_DomSource_опрашивается_не_чаще_раза_в_минуту() -> None:
-    rig = make_rig([EMPTY], kind=SourceKind.DOM, base_interval=10.0)
-    await rig.start()
-    await rig.advance(180)
-    assert rig.rel(rig.source.starts) == [0, 60, 120, 180]
-    await rig.kill()
-
-
-async def test_DomSource_минимум_60_с_держится_и_с_самым_коротким_разбросом() -> None:
-    # Разброс −10 % не должен опускать DOM-интервал ниже 60 с (инвариант 3)
-    rig = make_rig(
-        [EMPTY], kind=SourceKind.DOM, base_interval=10.0, jitter=0.1, rng=_LowestRandom()
-    )
-    await rig.start()
-    await rig.advance(600)
-    gaps = spans(rig.source.starts)
-    assert len(gaps) >= 9
-    assert min(gaps) >= MIN_DOM_POLL_INTERVAL_SEC
     await rig.kill()
 
 
@@ -348,7 +327,7 @@ async def test_повторный_wake_во_время_паузы_не_запу�
     rig = make_rig([EMPTY], paused_until=T0 + timedelta(hours=1))
     await rig.start()
     rig.loop.wake()
-    rig.loop.manual_done()
+    rig.loop.wake()
     await rig.advance(600)
     assert rig.source.starts == []
     assert rig.clock.sleeping == 1
@@ -365,7 +344,7 @@ async def test_resume_без_паузы_просто_будит_цикл() -> No
     await rig.kill()
 
 
-# --- месяцы, «Готово», /relogin ---
+# --- месяцы ---
 
 
 async def test_set_months_зажимает_и_сохраняет_и_доходит_до_источника() -> None:
@@ -379,36 +358,6 @@ async def test_set_months_зажимает_и_сохраняет_и_доходи
     await rig.loop.set_months(9)
     await rig.advance(20)
     assert rig.source.targets[-1].months_ahead == 9
-    await rig.kill()
-
-
-async def test_manual_done_будит_цикл_из_ожидания_шага_1() -> None:
-    from rcbot.domain.errors import ManualStepRequired
-
-    rig = make_rig([ManualStepRequired("шаг 1"), EMPTY], base_interval=20.0)
-    await rig.start()
-    assert rig.loop.status.state is PollState.NEEDS_MANUAL
-    await rig.advance(30)  # ждём 900 с, ничего не происходит
-    assert len(rig.source.starts) == 1
-    rig.loop.manual_done()
-    await rig.advance(0)
-    assert rig.rel(rig.source.starts) == [0, 30]
-    assert rig.loop.status.state is PollState.RUNNING
-    await rig.kill()
-
-
-async def test_relogin_по_команде_входит_и_будит_цикл() -> None:
-    rig = make_rig([EMPTY], base_interval=60.0)
-    await rig.start()
-    await rig.advance(20)
-    await rig.loop.relogin()
-    await rig.advance(0)
-    assert rig.auth.logins == 1
-    assert rig.session.has_session
-    assert rig.rel(rig.source.starts) == [0, 20]
-    assert rig.source.cookie_history and rig.source.cookie_history[-1][0].name == (
-        "simple_bpm_session"
-    )
     await rig.kill()
 
 

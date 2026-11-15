@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -33,33 +32,13 @@ class Clock(Protocol):
     async def sleep(self, seconds: float) -> None: ...
 
 
-@dataclass(frozen=True)
-class SessionCookie:
-    """Cookie сессии. Живёт только в памяти; значение никогда не логируется."""
-
-    name: str
-    value: str
-    domain: str
-    path: str = "/"
-    secure: bool = True
-
-    def __repr__(self) -> str:
-        return f"SessionCookie(name={self.name!r}, domain={self.domain!r}, value=***)"
-
-
 class AvailabilitySource(Protocol):
     @property
     def kind(self) -> SourceKind: ...
 
     async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot: ...
 
-    def use_cookies(self, cookies: Sequence[SessionCookie]) -> None: ...
-
     async def close(self) -> None: ...
-
-
-class Authenticator(Protocol):
-    async def login(self) -> list[SessionCookie]: ...
 
 
 class Notifier(Protocol):
@@ -113,12 +92,6 @@ class KeyValueStore(Protocol):
     async def all(self) -> dict[str, str]: ...
 
 
-class TargetRepository(Protocol):
-    async def ensure(
-        self, name: str, agenda_url: str, location_text: str, months_ahead: int
-    ) -> WatchTarget: ...
-
-
 class Maintenance(Protocol):
     async def delete_older_than(self, cutoffs: dict[str, datetime]) -> dict[str, int]: ...
 
@@ -126,7 +99,7 @@ class Maintenance(Protocol):
 
 
 class FileStore(Protocol):
-    """Файлы бота на диске: дампы, карантин, снимки, временные данные, логи."""
+    """Файлы бота на диске: дампы, снимки страницы, временные данные, логи."""
 
     def prune(
         self, name: str, max_age: timedelta, now: datetime, max_files: int | None = None

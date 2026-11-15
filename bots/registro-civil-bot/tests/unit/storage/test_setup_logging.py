@@ -14,7 +14,7 @@ from rcbot.infrastructure.logging import setup as logging_setup
 from rcbot.infrastructure.logging.redaction import REDACTOR, RedactionFilter
 from rcbot.infrastructure.logging.setup import BACKUPS, MAX_BYTES, setup_logging
 
-NOISY = ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "asyncio", "playwright")
+NOISY = ("aiohttp", "aiogram", "aiogram_dialog", "sqlalchemy", "alembic", "asyncio")
 
 
 @pytest.fixture(autouse=True)

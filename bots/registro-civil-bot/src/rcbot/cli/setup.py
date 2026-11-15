@@ -22,9 +22,6 @@ from aiogram.exceptions import TelegramAPIError
 from rcbot.bootstrap import Core, build_core
 from rcbot.config.secrets import DESCRIPTIONS, REQUIRED, SecretKey
 from rcbot.config.settings import AGENDA_URL_TEMPLATE, Settings
-from rcbot.infrastructure.gubuy.browser import CHROME, EDGE
-from rcbot.infrastructure.gubuy.browser import NAMES as BROWSER_NAMES
-from rcbot.infrastructure.gubuy.browser import survey as browser_survey
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.files import FileJournal
 
@@ -124,12 +121,12 @@ def _init(core: Core, *, new_ntfy_topic: bool = False) -> int:
         shutil.copyfile(example, core.paths.env_file)
         print(f"Создан {core.paths.env_file}.")
     _ask_case(core)
+    if removed := core.secrets.delete_legacy():
+        print(f"Удалены ненужные секреты прежнего входа на gub.uy: {', '.join(removed)}.")
     present = core.secrets.present()
     print("Секреты кладутся в Windows Credential Manager (служба rcbot), не на диск.\n")
 
     for key, hidden in (
-        (SecretKey.DOC_NUMBER, True),
-        (SecretKey.PASSWORD, True),
         (SecretKey.TELEGRAM_TOKEN, True),
         (SecretKey.CALLMEBOT_USER, False),
     ):
@@ -236,17 +233,6 @@ def _onedrive_roots() -> list[Path]:
     return [Path(os.environ[n]).resolve() for n in names if os.environ.get(n)]
 
 
-def _playwright_ready() -> tuple[bool, str]:
-    try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as pw:
-            path = Path(pw.chromium.executable_path)
-            return path.exists(), str(path)
-    except Exception as error:  # Playwright сообщает о сломанной установке разными исключениями
-        return False, f"Playwright недоступен: {type(error).__name__}"
-
-
 async def _probe_hosts(settings: Settings) -> list[tuple[str, bool, str, float | None]]:
     http = SafeHttp(settings.allowed_hosts(), timeout_sec=settings.request_timeout_sec)
     results = []
@@ -284,29 +270,6 @@ def _doctor_journal(core: Core) -> None:
         _line(None, "Журнал лежит в OneDrive: он будет синхронизироваться в облако")
 
 
-def _doctor_browsers(choice: str) -> bool:
-    """Какие браузеры нашлись и какой будет использован; нет ни одного — `False`."""
-    bundled_ready, where = _playwright_ready()
-    found = browser_survey(choice, Path(where) if bundled_ready else None)
-    for channel in (CHROME, EDGE):
-        path = found.found[channel]
-        _line(
-            True if path else None,
-            f"{BROWSER_NAMES[channel]}: {path or 'не найден'}",
-        )
-    _line(
-        True if bundled_ready else (None if found.chosen else False),
-        f"Chromium для Playwright: {where}",
-    )
-    if found.chosen is None:
-        _line(False, f"Браузер для работы (RCBOT_BROWSER={choice}): ничего не найдено")
-        print("    Установите Google Chrome (рекомендуется) или Microsoft Edge,")
-        print("    либо выполните: uv run python dev.py setup --bot registro-civil-bot")
-        return False
-    _line(True, f"Браузер для работы: {BROWSER_NAMES[found.chosen]} (RCBOT_BROWSER={choice})")
-    return True
-
-
 def cmd_doctor(args: argparse.Namespace) -> int:
     with build_core(console=False, command="doctor") as core:
         return _doctor(core, full=args.full, offline=args.offline)
@@ -317,10 +280,8 @@ def _doctor(core: Core, *, full: bool, offline: bool) -> int:
     py = sys.version_info
     _line(py[:2] == (3, 14), f"Python {py.major}.{py.minor}.{py.micro} (нужен 3.14)")
     _line(sys.platform == "win32" or None, f"Платформа {sys.platform} (бот рассчитан на Windows)")
-    for package in ("aiohttp", "aiogram", "aiogram-dialog", "sqlalchemy", "playwright", "keyring"):
+    for package in ("aiohttp", "aiogram", "aiogram-dialog", "sqlalchemy", "keyring"):
         _line(True, f"{package} {importlib.metadata.version(package)}")
-
-    ok &= _doctor_browsers(core.settings.browser)
 
     _line(True, f"Хранилище секретов: {core.secrets.backend_name()}")
     for key, present in core.secrets.present().items():
@@ -331,7 +292,6 @@ def _doctor(core: Core, *, full: bool, offline: bool) -> int:
     _line(core.settings.agenda_configured, "RCBOT_AGENDA_URL задан (номер этапа вместо метки)")
     ok &= core.settings.agenda_configured
     _line(bool(core.settings.tramite_id) or None, "RCBOT_TRAMITE_ID задан (номер заявки в тексте)")
-    _line(bool(core.settings.api_url) or None, "RCBOT_API_URL (после разведки; пока — DomSource)")
 
     in_cloud = [root for root in _onedrive_roots() if core.paths.home.is_relative_to(root)]
     _line(

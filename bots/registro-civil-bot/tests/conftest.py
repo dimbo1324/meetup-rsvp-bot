@@ -28,9 +28,6 @@ from tests.fakes import FakeClock, LocalTlsServer, ManualClock
 BOT_DIR = Path(__file__).resolve().parent.parent
 MIGRATIONS = Path(rcbot.__file__).resolve().parent / "infrastructure" / "db" / "migrations"
 
-# Браузер лежит в каталоге бота; worktree и CI могут задать свой путь заранее
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(BOT_DIR / ".browsers"))
-
 settings.register_profile(
     "rcbot",
     deadline=None,
@@ -85,9 +82,6 @@ def bot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # В тестах журнал пишется синхронно: файлы читаются сразу. Фоновый режим проверяют
     # отдельные тесты (tests/unit/storage/test_journal_background.py, e2e)
     monkeypatch.setenv("RCBOT_JOURNAL_BACKGROUND", "false")
-    # Большинство тестов проверяет путь через вход в bpmgob (API и DomSource); источник SAE (R12),
-    # главный по умолчанию в работе, тесты включают явно
-    monkeypatch.setenv("RCBOT_SAE_SOURCE_ENABLED", "false")
     return home
 
 
@@ -132,24 +126,3 @@ def manual_clock() -> ManualClock:
 async def tls_server() -> AsyncIterator[LocalTlsServer]:
     async with LocalTlsServer() as server:
         yield server
-
-
-_CHROMIUM: bool | None = None
-
-
-def chromium_ready() -> bool:
-    global _CHROMIUM
-    if _CHROMIUM is None:
-        try:
-            from playwright.sync_api import sync_playwright
-
-            with sync_playwright() as pw:
-                _CHROMIUM = Path(pw.chromium.executable_path).exists()
-        except Exception:  # Playwright сломан или не установлен — тесты браузера пропускаются
-            _CHROMIUM = False
-    return _CHROMIUM
-
-
-def pytest_runtest_setup(item: pytest.Item) -> None:
-    if item.get_closest_marker("browser") and not chromium_ready():
-        pytest.skip("Chromium не установлен: uv run python dev.py setup --bot registro-civil-bot")

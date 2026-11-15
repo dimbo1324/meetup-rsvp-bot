@@ -8,7 +8,7 @@ import pytest
 from aiogram.types import Message
 
 from rcbot.domain.events import SlotsAppeared
-from rcbot.infrastructure.notify.telegram import CALLBACK_ACK, CALLBACK_MANUAL_DONE
+from rcbot.infrastructure.notify.telegram import CALLBACK_ACK
 from tests.fakes import T0, slots, snapshot
 from tests.unit.bot.harness import (
     GROUP,
@@ -74,12 +74,11 @@ async def test_команда_чужого_молча_отбрасывается
 
 
 @pytest.mark.parametrize("who", list(OUTSIDERS))
-async def test_кнопки_ack_и_готово_у_чужого_не_работают(who: str) -> None:
+async def test_кнопка_ack_у_чужого_не_работает(who: str) -> None:
     setup = await make_setup()
     await armed(setup)
     before = snapshot_of_state(setup.rig)
-    for data in (CALLBACK_ACK, CALLBACK_MANUAL_DONE):
-        await outsider(setup, who).press(data)
+    await outsider(setup, who).press(CALLBACK_ACK)
     assert setup.session.calls == []
     assert snapshot_of_state(setup.rig) == before
     assert setup.rig.alerts.repeating() is True

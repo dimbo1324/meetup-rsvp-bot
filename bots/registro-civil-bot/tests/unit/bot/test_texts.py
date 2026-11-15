@@ -29,15 +29,13 @@ def view(**changes: object) -> StatusView:
     status = PollStatus(started_at=T0 - timedelta(hours=26, minutes=3))
     base = StatusView(
         status=status,
-        source=SourceKind.DOM,
+        source=SourceKind.SAE,
         interval_sec=60.0,
         base_interval_sec=20.0,
         months_ahead=6,
         paused_until=None,
         incident=None,
         repeating=False,
-        logins_last_hour=2,
-        quiet_remaining_sec=0.0,
         channels_off=frozenset(),
         folder_bytes=12 * MB,
         journal_bytes=3 * 1024,
@@ -92,12 +90,12 @@ def test_обычный_статус_содержит_все_строки_spec()
     text = texts.status_text(view(), TZ)
     assert text.splitlines() == [
         "Состояние: работает",
-        "Источник: DOM",
+        "Источник: SAE",
         "Интервал: ≈ 60 с (базовый 20 с)",
         "Месяцев вперёд: 6",
         "Последняя проверка: ещё не было",
         "Время ответа: последнее 0 мс, медиана 0 мс",
-        "Проверок: 0, ошибок: 0, входов за час: 2",
+        "Проверок: 0, ошибок: 0",
         "Работает: 1 д 2 ч 3 мин",
         "Размер папки: 12.0 МБ",
         "Журнал на рабочем столе: 3.0 КБ",
@@ -111,11 +109,6 @@ def test_причина_показывается_только_не_в_рабоч
     assert "Причина: сайт ответил 429" in backoff
     running = texts.status_text(with_status(state_reason="старая причина"), TZ)
     assert "Причина" not in running
-
-
-def test_состояние_ждёт_шага_1_называется_прямо() -> None:
-    text = texts.status_text(with_status(state=PollState.NEEDS_MANUAL), TZ)
-    assert "шаг 1" in text.splitlines()[0]
 
 
 def test_пауза_показывается_в_часовом_поясе_владельца() -> None:
@@ -158,13 +151,6 @@ def test_открытый_инцидент_с_числом_мест_и_подт�
     assert "тревога подтверждена" in texts.status_text(view(incident=incident), TZ)
 
 
-def test_отложенный_вход_показывается_в_минутах() -> None:
-    assert "Повторный вход отложен ещё на 5 мин (D5)" in texts.status_text(
-        view(quiet_remaining_sec=300), TZ
-    )
-    assert "отложен" not in texts.status_text(view(quiet_remaining_sec=0), TZ)
-
-
 def test_последняя_ошибка_со_сроком() -> None:
     text = texts.status_text(
         with_status(last_error="сайт недоступен", last_error_at=T0 - timedelta(seconds=45)), TZ
@@ -192,7 +178,7 @@ def test_задержки_последняя_и_медиана() -> None:
 
 def test_счётчики_проверок_и_ошибок() -> None:
     text = texts.status_text(with_status(checks_total=4300, errors_total=12), TZ)
-    assert "Проверок: 4300, ошибок: 12, входов за час: 2" in text
+    assert "Проверок: 4300, ошибок: 12" in text
 
 
 @pytest.mark.parametrize(
@@ -335,8 +321,7 @@ def test_справка_не_содержит_секретов_и_влезает
 def test_шаблоны_подставляются_без_ошибок() -> None:
     assert "20 с" in texts.INTERVAL_SET.format(value=20.0)
     assert "01.02 03:04" in texts.PAUSED.format(until="01.02 03:04")
-    assert "Источник: DOM, интервал ≈ 20 с" in texts.STARTED.format(source="DOM", interval=20)
-    assert texts.RELOGIN_FAILED.format(error="причина") == "Вход не удался: причина"
+    assert "Источник: SAE, интервал ≈ 20 с" in texts.STARTED.format(source="SAE", interval=20)
 
 
 # --- тексты с подставленными константами и общие помощники ---
@@ -345,19 +330,13 @@ def test_шаблоны_подставляются_без_ошибок() -> None
 def test_тексты_берут_пределы_из_констант_а_не_из_литералов() -> None:
     from rcbot.application.control import MAX_PAUSE_MINUTES
     from rcbot.bot.handlers.commands import PAUSE_BAD
-    from rcbot.config.settings import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
+    from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
 
     assert f"до {MAX_PAUSE_MINUTES}:" in texts.PAUSE_BAD
     assert PAUSE_BAD == texts.PAUSE_BAD
     assert f"не меньше {MIN_POLL_INTERVAL_SEC:.0f}:" in texts.INTERVAL_BAD
     assert f"(не меньше {MIN_POLL_INTERVAL_SEC:.0f})" in texts.HELP
-    assert f"раза в {MIN_DOM_POLL_INTERVAL_SEC:.0f} с" in texts.INTERVAL_SET.format(value=20)
     assert "{" not in texts.HELP
-
-
-def test_relogin_text_успех_и_ошибка() -> None:
-    assert texts.relogin_text("") == texts.RELOGIN_OK
-    assert texts.relogin_text("страница входа") == "Вход не удался: страница входа"
 
 
 def test_moment_в_часовом_поясе_владельца() -> None:

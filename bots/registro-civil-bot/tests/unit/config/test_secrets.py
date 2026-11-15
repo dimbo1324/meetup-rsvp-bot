@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 
 import pytest
@@ -12,9 +11,9 @@ from pydantic import SecretStr
 
 from rcbot.config.secrets import (
     DESCRIPTIONS,
+    LEGACY_KEYS,
     REQUIRED,
     SERVICE,
-    Credentials,
     SecretKey,
     SecretMissing,
     SecretStore,
@@ -41,9 +40,9 @@ def test_у_каждого_ключа_есть_описание_а_обязат�
 
 def test_set_и_get_кладут_значение_в_службу_rcbot(memory_keyring: MemoryKeyring) -> None:
     store = SecretStore()
-    store.set(SecretKey.PASSWORD, PASSWORD)
-    assert memory_keyring.store == {("rcbot", "gubuy_password"): PASSWORD}
-    value = store.get(SecretKey.PASSWORD)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
+    assert memory_keyring.store == {("rcbot", "telegram_token"): PASSWORD}
+    value = store.get(SecretKey.TELEGRAM_TOKEN)
     assert isinstance(value, SecretStr)
     assert value.get_secret_value() == PASSWORD
 
@@ -54,7 +53,7 @@ def test_set_обрезает_пробелы_и_переводы_строк(memo
 
 
 def test_get_отсутствующего_секрета_это_none() -> None:
-    assert SecretStore().get(SecretKey.DOC_NUMBER) is None
+    assert SecretStore().get(SecretKey.CALLMEBOT_USER) is None
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\n\t "])
@@ -69,11 +68,11 @@ def test_пустое_значение_это_нет_секрета(blank: str) 
 
 def test_require_без_секрета_даёт_понятный_текст_без_значений() -> None:
     store = SecretStore()
-    store.set(SecretKey.PASSWORD, PASSWORD)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
     with pytest.raises(SecretMissing) as info:
-        store.require(SecretKey.DOC_NUMBER)
+        store.require(SecretKey.CALLMEBOT_USER)
     message = str(info.value)
-    assert DESCRIPTIONS[SecretKey.DOC_NUMBER] in message
+    assert DESCRIPTIONS[SecretKey.CALLMEBOT_USER] in message
     assert "rcbot init" in message
     assert PASSWORD not in message
 
@@ -90,20 +89,22 @@ def test_require_возвращает_значение_когда_секрет_�
     assert store.require(SecretKey.TELEGRAM_CHAT_ID).get_secret_value() == "123456789"
 
 
-def test_credentials_собирает_номер_документа_и_пароль() -> None:
-    store = SecretStore()
-    store.set(SecretKey.DOC_NUMBER, DOC)
-    store.set(SecretKey.PASSWORD, PASSWORD)
-    creds = store.credentials()
-    assert creds.doc_number.get_secret_value() == DOC
-    assert creds.password.get_secret_value() == PASSWORD
+def test_обязательны_только_токен_и_владелец_номера_паспорта_и_пароля_нет() -> None:
+    # Решение R13: бот не входит на gub.uy, секреты входа ему не нужны
+    assert REQUIRED == (SecretKey.TELEGRAM_TOKEN, SecretKey.TELEGRAM_CHAT_ID)
+    assert not {key.value for key in SecretKey} & set(LEGACY_KEYS)
 
 
-def test_credentials_без_пароля_падает_с_secret_missing() -> None:
+def test_delete_legacy_удаляет_старые_секреты_входа_и_не_трогает_нужные(
+    memory_keyring: MemoryKeyring,
+) -> None:
+    for name in LEGACY_KEYS:
+        memory_keyring.set_password(SERVICE, name, "synthetic-old-value")
     store = SecretStore()
-    store.set(SecretKey.DOC_NUMBER, DOC)
-    with pytest.raises(SecretMissing, match="пароль"):
-        store.credentials()
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
+    assert store.delete_legacy() == list(LEGACY_KEYS)
+    assert memory_keyring.store == {(SERVICE, "telegram_token"): PASSWORD}
+    assert store.delete_legacy() == []  # повтор — без ошибок
 
 
 def test_delete_возвращает_был_ли_секрет() -> None:
@@ -116,12 +117,11 @@ def test_delete_возвращает_был_ли_секрет() -> None:
 
 def test_present_показывает_заданность_всех_ключей() -> None:
     store = SecretStore()
-    store.set(SecretKey.DOC_NUMBER, DOC)
+    store.set(SecretKey.CALLMEBOT_USER, DOC)
     present = store.present()
     assert set(present) == set(SecretKey)
-    assert present[SecretKey.DOC_NUMBER] is True
+    assert present[SecretKey.CALLMEBOT_USER] is True
     assert [k for k, v in present.items() if not v and k in REQUIRED] == [
-        SecretKey.PASSWORD,
         SecretKey.TELEGRAM_TOKEN,
         SecretKey.TELEGRAM_CHAT_ID,
     ]
@@ -130,7 +130,7 @@ def test_present_показывает_заданность_всех_ключей
 def test_present_не_читает_значения_в_фильтр() -> None:
     seen: list[str] = []
     store = SecretStore(on_read=seen.append)
-    store.set(SecretKey.PASSWORD, PASSWORD)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
     store.present()
     assert seen == []
 
@@ -145,19 +145,17 @@ def test_backend_name_это_тестовое_хранилище_в_памяти
 def test_on_read_регистрирует_каждое_прочитанное_значение() -> None:
     seen: list[str] = []
     store = SecretStore(on_read=seen.append)
-    store.set(SecretKey.DOC_NUMBER, DOC)
-    store.set(SecretKey.PASSWORD, PASSWORD)
-    store.get(SecretKey.DOC_NUMBER)
-    store.require(SecretKey.PASSWORD)
+    store.set(SecretKey.CALLMEBOT_USER, DOC)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
+    store.get(SecretKey.CALLMEBOT_USER)
+    store.require(SecretKey.TELEGRAM_TOKEN)
     assert seen == [DOC, PASSWORD]
-    store.credentials()
-    assert seen[2:] == [DOC, PASSWORD]
 
 
 def test_on_read_не_вызывается_для_отсутствующего_и_пустого() -> None:
     seen: list[str] = []
     store = SecretStore(on_read=seen.append)
-    store.get(SecretKey.PASSWORD)
+    store.get(SecretKey.TELEGRAM_TOKEN)
     store.set(SecretKey.NTFY_TOPIC, "  ")
     store.get(SecretKey.NTFY_TOPIC)
     assert seen == []
@@ -165,14 +163,14 @@ def test_on_read_не_вызывается_для_отсутствующего_�
 
 def test_прочитанный_секрет_вырезается_из_логов_через_redactor() -> None:
     store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.PASSWORD, PASSWORD)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
     assert PASSWORD in f"вход с {PASSWORD}"
-    store.get(SecretKey.PASSWORD)
+    store.get(SecretKey.TELEGRAM_TOKEN)
     assert REDACTOR.redact(f"вход с {PASSWORD} выполнен") == f"вход с {MASK} выполнен"
 
 
 def test_до_чтения_значение_не_зарегистрировано_в_фильтре() -> None:
-    SecretStore(on_read=REDACTOR.register).set(SecretKey.PASSWORD, PASSWORD)
+    SecretStore(on_read=REDACTOR.register).set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
     assert PASSWORD in REDACTOR.redact(f"x {PASSWORD}")
 
 
@@ -180,8 +178,8 @@ def test_секрет_не_попадает_в_записанный_лог(caplo
     from rcbot.infrastructure.logging.redaction import RedactionFilter
 
     store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.PASSWORD, PASSWORD)
-    secret = store.require(SecretKey.PASSWORD)
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
+    secret = store.require(SecretKey.TELEGRAM_TOKEN)
     logger = logging.getLogger("rcbot.test.secrets")
     logger.addFilter(RedactionFilter())
     with caplog.at_level(logging.INFO):
@@ -200,24 +198,11 @@ def test_secretstr_не_раскрывает_значение_в_repr_str_и_f_�
         assert PASSWORD not in text
 
 
-def test_credentials_не_раскрывают_значения_в_repr_и_str() -> None:
-    creds = Credentials(SecretStr(DOC), SecretStr(PASSWORD))
-    for text in (repr(creds), str(creds), f"{creds}", repr([creds]), repr({"c": creds})):
-        assert DOC not in text
-        assert PASSWORD not in text
-
-
 def test_значение_из_хранилища_не_раскрывается_в_repr() -> None:
     store = SecretStore()
-    store.set(SecretKey.PASSWORD, PASSWORD)
-    assert PASSWORD not in repr(store.get(SecretKey.PASSWORD))
+    store.set(SecretKey.TELEGRAM_TOKEN, PASSWORD)
+    assert PASSWORD not in repr(store.get(SecretKey.TELEGRAM_TOKEN))
     assert PASSWORD not in repr(store)
-
-
-def test_credentials_неизменяемы() -> None:
-    creds = Credentials(SecretStr(DOC), SecretStr(PASSWORD))
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        creds.password = SecretStr("другой")  # type: ignore[misc]
 
 
 @given(st.text(max_size=40))

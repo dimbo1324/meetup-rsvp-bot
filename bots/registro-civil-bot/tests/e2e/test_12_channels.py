@@ -63,8 +63,8 @@ async def test_служебные_сообщения_не_доходят_до_nt
     stand = await make_stand(site=site, channels=channels_site)
     site.push(fake.status(429))
     await stand.next_check()  # BACKOFF
-    site.push(fake.html(fake.STEP1_HTML))
-    await stand.advance(900)  # шаг 1
+    site.push(fake.html(fake.BLOCKED_HTML))
+    await stand.advance(900)  # чужая страница после паузы
     site.push(fake.html("<html>х</html>"), times=3)
     await stand.checks(3)
 
@@ -164,12 +164,11 @@ async def test_тревога_сразу_во_все_каналы_когда_tel
 
 
 async def run_everything(stand, site: FakeSite) -> None:
-    """Вход, тревога, мусорная страница с эхом cookies, 429, шаг 1, истечение сессии, остановка."""
+    """Тревога, чужая страница с эхом секретов и cookie сайта, 429, блокировка, остановка."""
     stand.journal.attach_log_handler()
     await appear(stand, site)
-    site.push(fake.echo_cookies_html(), fake.status(429), fake.html(fake.STEP1_HTML))
+    site.push(fake.echo_secrets_html(), fake.status(429), fake.html(fake.BLOCKED_HTML))
     await stand.checks(3)
-    site.expire_sessions()
     await stand.advance(900)
     await stand.controller.ack()
     await stand.controller.cleanup()
@@ -187,8 +186,7 @@ def scan(root, needles: list[str], *, skip_db: bool) -> list[str]:
 
 
 SECRETS = [
-    "SESSION-1-0",
-    "SESSION-2-1",
+    fake.SITE_COOKIE,
     TRAMITE_ID,
     NTFY_TOPIC,
     "hunter22-test",
@@ -203,10 +201,11 @@ async def test_ни_cookies_ни_номера_заявки_ни_темы_ntfy_н
     await run_everything(stand, site)
 
     assert scan(tmp_path, SECRETS, skip_db=False) == []
-    # номер этапа (часть адреса заявки) не должен быть ни в журнале, ни в логе, ни в карантине
+    # номер этапа (часть адреса заявки) не должен быть ни в журнале, ни в логе, ни в снимках
     assert scan(tmp_path, ["TEST-ETAPA"], skip_db=True) == []
     files = [p for p in tmp_path.rglob("*") if p.is_file()]
-    assert len(files) >= 6, "просмотрены журналы, лог, карантин и база"
+    assert len(files) >= 6, "просмотрены журналы, лог, снимки страницы и база"
+    assert list(stand.paths.shots.glob("sae-*-unknown.html")), "чужая страница сохранена снимком"
 
 
 async def test_номер_этапа_не_попадает_в_базу(make_stand, site: FakeSite, tmp_path) -> None:

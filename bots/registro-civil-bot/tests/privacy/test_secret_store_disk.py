@@ -57,7 +57,6 @@ async def test_после_полного_сценария_каталоги_бо�
 
     core = build_core(console=False, level="DEBUG", command="run")
     # то, что делает запуск: чтение всех секретов регистрирует их в фильтре
-    core.secrets.credentials()
     for key in C.secrets():
         core.secrets.require(key)
 
@@ -66,10 +65,10 @@ async def test_после_полного_сценария_каталоги_бо�
         log.warning("и в аргумент: %s", value)
         core.journal.event("test.secret", f"в событии {value}", "WARNING", value=value)
     try:
-        raise RuntimeError(f"падение с {C.password} и {C.telegram_token}")
+        raise RuntimeError(f"падение с {C.call_user} и {C.telegram_token}")
     except RuntimeError:
-        log.exception("сбой входа")
-    core.journal.status({"last_error": f"вход не удался: {C.password}", "doc": C.doc_number})
+        log.exception("сбой проверки")
+    core.journal.status({"last_error": f"сбой: {C.call_user}", "topic": C.ntfy_topic})
 
     storage = await open_storage(core)
     await storage.events.write(AppEvent(T0, "WARNING", "state.backoff", "замедление"))

@@ -25,10 +25,9 @@ async def test_счётчики_одного_часа_копятся_без_за
     stats.count(latency_ms=10.0)
     stats.count(latency_ms=30.0)
     stats.count(error=True)
-    stats.count(relogins=2)
     await settle()
     assert stats.current is not None
-    assert (stats.current.checks, stats.current.errors, stats.current.relogins) == (2, 1, 2)
+    assert (stats.current.checks, stats.current.errors) == (2, 1)
     assert stats.current.latencies_ms == [10.0, 30.0]
     assert not repository.saved  # каждая проверка в БД не пишется (SPEC 2.7)
 

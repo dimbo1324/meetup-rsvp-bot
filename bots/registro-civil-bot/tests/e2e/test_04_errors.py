@@ -54,14 +54,18 @@ async def test_отказ_сайта_шаг_назад_по_лестнице_и_
     assert "Опрос снова работает" in stand.texts(Channel.TELEGRAM)[-1]
 
 
-async def test_страница_блокировки_шлюза_считается_отказом_сайта(
+async def test_чужая_страница_вместо_записи_это_сбой_и_снимок_для_разбора(
     make_stand, site: FakeSite
 ) -> None:
     stand = await make_stand(site=site)
-    site.push(fake.html(fake.BLOCKED_HTML))
+    site.push(fake.html(fake.BLOCKED_HTML), fake.redirect())
     await stand.next_check()
+    assert stand.journal.read_checks()[-1]["error_kind"] == "UnexpectedResponse"
+    assert list(stand.paths.shots.glob("sae-*-unknown.html")), "страница сохранена для разбора"
+    await stand.next_check()  # переадресация не выполняется: тоже неожиданный ответ
     assert stand.loop.status.state is PollState.BACKOFF
-    assert stand.journal.read_checks()[-1]["error_kind"] == "RateLimited"
+    assert stand.journal.read_checks()[-1]["error_kind"] == "UnexpectedResponse"
+    assert len(site.calls) == 3, "по переадресации бот никуда не ходил"
 
 
 async def test_серия_503_пауза_растёт_30_60_120_backoff_со_второго_подряд(

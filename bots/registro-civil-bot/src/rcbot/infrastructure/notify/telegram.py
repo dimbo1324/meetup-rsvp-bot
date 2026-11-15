@@ -1,4 +1,4 @@
-"""Канал Telegram (SPEC 2.4): сообщение от собственного бота владельца, кнопки «Вижу» и «Готово».
+"""Канал Telegram (SPEC 2.4): сообщение от собственного бота владельца, кнопка «Вижу».
 
 Бот aiogram общий с Telegram-интерфейсом: одно прогретое соединение с api.telegram.org.
 """
@@ -18,13 +18,11 @@ logger = logging.getLogger(__name__)
 
 # callback_data кнопок — значения действий домена: на них же настроены обработчики слоя bot
 CALLBACK_ACK = AlertAction.ACK.value
-CALLBACK_MANUAL_DONE = AlertAction.MANUAL_DONE.value
 REQUEST_TIMEOUT_SEC = 10
 MAX_TEXT = 4096
 
 _BUTTONS = {
     AlertAction.ACK: ("✅ Вижу", CALLBACK_ACK),
-    AlertAction.MANUAL_DONE: ("✅ Готово, шаг 1 пройден", CALLBACK_MANUAL_DONE),
 }
 
 

@@ -13,14 +13,9 @@ from rcbot.application import poll_loop
 from rcbot.application.liveness import HUNG_CHECK_SEC
 from rcbot.domain.models import Channel, PollState, SourceKind
 from tests.e2e.helpers import MIN_GAP
-from tests.e2e.site import FakeSite, SiteAuthenticator
+from tests.e2e.site import FakeSite
 from tests.e2e.stand import fake_source
 from tests.fakes import slots
-
-
-class NoLogin:
-    async def login(self) -> list:
-        return []
 
 
 def hanging(event: asyncio.Event):
@@ -57,8 +52,9 @@ async def test_зависшая_проверка_прерывается_исто
     t = stand.elapsed
     await stand.next_check()
     assert stand.elapsed - t == pytest.approx(30)
-    await stand.advance(MIN_GAP)  # если сессия потерялась, повторная проверка идёт после входа
     assert stand.journal.read_checks()[-1]["ok"] is True
+    await stand.advance(MIN_GAP)
+    assert stand.loop.status.state is PollState.RUNNING
 
 
 async def test_два_зависания_подряд_уводят_в_backoff_и_сообщают(
@@ -73,18 +69,6 @@ async def test_два_зависания_подряд_уводят_в_backoff_и
     assert stand.loop.status.state is PollState.RUNNING
 
 
-async def test_после_сброса_зависшего_источника_сессия_не_теряется(
-    make_stand, site: FakeSite, short_timeout
-) -> None:
-    stand = await make_stand(site=site)
-    site.push(site.hang())
-    await stand.next_check()
-    await stand.next_check()
-
-    assert stand.session.logins == 1, "сброс соединений не должен стоить входа"
-    assert site.calls[-1].cookie.startswith("simple_bpm_session=SESSION-1")
-
-
 # --- цикл опроса встал: монитор живости ---
 
 
@@ -92,12 +76,12 @@ async def test_монитор_живости_замечает_зависший_�
     make_stand, stand_clock
 ) -> None:
     release = asyncio.Event()
-    source = fake_source(stand_clock, hanging(release), slots(23), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=NoLogin(), ignore={"tick"})
+    source = fake_source(stand_clock, hanging(release), slots(23), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source, ignore={"tick"})
     old_task = stand.supervisor._tasks["poll"]
     assert stand.loop.tick_started_at is not None, "проверка идёт и не заканчивается"
 
-    await stand.advance(HUNG_CHECK_SEC)  # норма — до запроса и входа, дальше порог монитора
+    await stand.advance(HUNG_CHECK_SEC)  # норма — до таймаута запроса, дальше порог монитора
     assert stand.liveness.recoveries == 0 and stand.journal.read_status()["hung"] is False
     await stand.advance(30)  # ближайший тик монитора видит время за порогом
     assert stand.liveness.recoveries == 1
@@ -106,7 +90,7 @@ async def test_монитор_живости_замечает_зависший_�
     new_task = stand.supervisor._tasks["poll"]
     assert new_task is not old_task and old_task.done(), "задача настоящая, а не заглушка"
     assert not new_task.done()
-    assert source.closed >= 1, "источник (браузер) закрыт и создастся заново"
+    assert source.closed >= 1, "источник (соединение) закрыт и создастся заново"
     assert any("завис" in m for m in stand.texts(Channel.TELEGRAM))
     codes = stand.journal.codes()
     assert "liveness.hung" in codes
@@ -116,30 +100,6 @@ async def test_монитор_живости_замечает_зависший_�
     assert "liveness.recovered" in stand.journal.codes()
     assert stand.journal.read_status()["hung"] is False
     release.set()
-
-
-async def test_зависший_вход_тоже_ловится_и_блокировка_входа_не_залипает(
-    make_stand, site: FakeSite
-) -> None:
-    stuck = asyncio.Event()
-    calls = 0
-
-    async def first_login_hangs() -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            await stuck.wait()
-
-    auth = SiteAuthenticator(site, delay=first_login_hangs)
-    stand = await make_stand(site=site, auth=auth, ignore={"tick"})
-    assert stand.session.logins == 0, "первый вход завис"
-
-    await stand.advance(HUNG_CHECK_SEC + 30)
-    assert stand.liveness.recoveries == 1
-    await stand.advance(30)
-    assert stand.session.logins >= 1, "после перезапуска вход прошёл: блокировка освобождена"
-    assert stand.loop.status.checks_total >= 1
-    stuck.set()
 
 
 # --- задача упала ---
@@ -153,8 +113,8 @@ async def test_исключение_источника_не_роняет_цик�
     make_stand, stand_clock
 ) -> None:
     boom = RuntimeError("секретный-текст-сбоя")
-    source = fake_source(stand_clock, boom, boom, boom, slots(23), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=NoLogin())
+    source = fake_source(stand_clock, boom, boom, boom, slots(23), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source)
     task = stand.supervisor._tasks["poll"]
     await stand.checks(3)
 
@@ -172,8 +132,8 @@ async def test_исключение_источника_не_роняет_цик�
 
 
 async def test_сбой_самого_цикла_ловится_и_опрос_продолжается(make_stand, stand_clock) -> None:
-    source = fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=NoLogin())
+    source = fake_source(stand_clock, slots(), slots(23), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source)
     real_compare = stand.detector.compare
     failures = [ValueError("внутренний сбой")]
 
@@ -193,8 +153,8 @@ async def test_сбой_самого_цикла_ловится_и_опрос_п�
 async def test_супервизор_перезапускает_упавшую_задачу_с_паузой_5_10_20_секунд(
     make_stand, stand_clock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    source = fake_source(stand_clock, slots(), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=NoLogin())
+    source = fake_source(stand_clock, slots(), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source)
     starts: list[float] = []
 
     async def canary() -> None:
@@ -212,8 +172,8 @@ async def test_супервизор_перезапускает_упавшую_з
 
 async def test_остановка_не_оставляет_висящих_задач(make_stand, stand_clock) -> None:
     before = asyncio.all_tasks()
-    source = fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=NoLogin())
+    source = fake_source(stand_clock, slots(), slots(23), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source)
     await stand.checks(2)
     assert stand.alerts.repeating()
     await stand.stop()

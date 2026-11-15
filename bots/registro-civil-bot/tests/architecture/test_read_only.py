@@ -1,8 +1,8 @@
 """Инвариант 1 и 5 (SPEC 0.3): бот только читает, контрольный вопрос не решает.
 
-Статические проверки по `ast` исходников: действия над страницей разрешены только там и только
-в тех функциях, где они нужны для входа или листания месяцев; в локаторах нет кнопок черновика;
-JS, который выполняется на странице, ничего не меняет; HTTP-методы и тела запросов ограничены.
+Статические проверки по `ast` исходников. С решением R13 браузера в боте нет: действий над
+страницей нет нигде, в строках адаптера нет кнопок записи и оплаты, HTTP-методы и тела запросов
+ограничены, решателя контрольного вопроса нет.
 """
 
 from __future__ import annotations
@@ -10,9 +10,6 @@ from __future__ import annotations
 import ast
 import re
 
-import pytest
-
-from rcbot.infrastructure.gubuy.parsers import READ_MONTH_JS
 from tests.architecture.srcscan import (
     Module,
     attr_name,
@@ -25,8 +22,9 @@ from tests.architecture.srcscan import (
 ALL = modules()
 GUBUY = [m for m in ALL if m.rel.startswith("infrastructure/gubuy/")]
 
-# Имена действий Playwright. «check», «clear», «type» совпадают с обычными методами
-# (SafeHttp.check, Redactor.clear), поэтому в gubuy/ ищутся все, а в остальном коде — без них
+# Имена действий над страницей (Playwright и подобные). «check», «clear», «type» совпадают с
+# обычными методами (SafeHttp.check, Redactor.clear), поэтому в gubuy/ ищутся все, в остальном
+# коде — без них
 ACTIONS = {
     "click",
     "dblclick",
@@ -47,21 +45,6 @@ ACTIONS = {
 }
 AMBIGUOUS = {"check", "clear", "type"}
 
-# Где что разрешено: вход (auth), радиокнопка офиса и стрелка месяца (calendar)
-ALLOWED = {
-    "infrastructure/gubuy/auth.py": {
-        "_choose": {"select_option", "click"},
-        "_click_text": {"click"},
-        "_fill_identity": {"fill"},
-    },
-    # Общий модуль чтения календаря: им пользуются и DomSource, и разведка
-    "infrastructure/gubuy/calendar.py": {
-        "select_office": {"check"},
-        "next_month": {"click"},
-    },
-}
-CALENDAR_USERS = ("infrastructure/gubuy/dom_source.py", "infrastructure/gubuy/discovery.py")
-
 
 def _actions(module: Module) -> list[tuple[str, str, str, int]]:
     names = ACTIONS if module.rel.startswith("infrastructure/gubuy/") else ACTIONS - AMBIGUOUS
@@ -72,64 +55,31 @@ def _actions(module: Module) -> list[tuple[str, str, str, int]]:
     ]
 
 
-def test_действия_над_страницей_только_в_разрешённых_файлах_и_функциях() -> None:
-    violations = []
-    for module in ALL:
-        allowed = ALLOWED.get(module.rel, {})
-        for func, action, _, line in _actions(module):
-            if action not in allowed.get(func, set()):
-                violations.append(f"{module.rel}:{line}: {func}() вызывает .{action}()")
+def test_действий_над_страницей_нет_нигде() -> None:
+    violations = [
+        f"{module.rel}:{line}: {func}() вызывает .{action}()"
+        for module in ALL
+        for func, action, _, line in _actions(module)
+    ]
     assert violations == []
 
 
-def test_разрешённые_действия_действительно_есть_контроль_что_сканер_не_слеп() -> None:
-    found = {(m.rel, func, action) for m in ALL for func, action, _, _ in _actions(m)}
-    expected = {
-        (rel, func, action)
-        for rel, funcs in ALLOWED.items()
-        for func, actions in funcs.items()
-        for action in actions
-    }
-    assert expected <= found
+def test_браузерной_автоматизации_в_коде_нет() -> None:
+    """Решение R13: бот читает страницу SAE обычным GET, браузер ему не нужен."""
+    found = [
+        f"{m.rel}:{i}"
+        for m in ALL
+        for i, line in enumerate(m.text.splitlines(), start=1)
+        if re.search(r"\b(playwright|selenium|pyppeteer)\b", line.split("#", 1)[0], re.I)
+    ]
+    assert found == []
 
 
-def test_клик_в_календаре_только_по_стрелке_следующего_месяца() -> None:
-    module = next(m for m in ALL if m.rel == "infrastructure/gubuy/calendar.py")
-    clicks = [r for _, a, r, _ in _actions(module) if a == "click"]
-    assert clicks
-    for target in clicks:
-        assert "NEXT_MONTH" in target or "ui-datepicker-next" in target, target
-
-
-def test_check_в_календаре_только_по_радиокнопке_офиса() -> None:
-    module = next(m for m in ALL if m.rel == "infrastructure/gubuy/calendar.py")
-    checks = [r for _, a, r, _ in _actions(module) if a == "check"]
-    assert checks
-    assert all(r.startswith("radio") for r in checks), checks
-
-
-def test_dom_source_и_разведка_листают_и_выбирают_офис_только_через_calendar() -> None:
-    """Сами они страницу не трогают: действия есть только в общем модуле (набор не расширен)."""
-    for rel in CALENDAR_USERS:
-        module = next(m for m in ALL if m.rel == rel)
-        assert _actions(module) == [], rel
-        imported = {
-            name
-            for node in ast.walk(module.tree)
-            if isinstance(node, ast.ImportFrom)
-            and node.module == "rcbot.infrastructure.gubuy.calendar"
-            for name in (alias.name for alias in node.names)
-        }
-        assert {"next_month", "select_office"} & imported, rel
-
-
-def test_в_поля_входа_вводятся_только_номер_документа_и_пароль() -> None:
-    module = next(m for m in ALL if m.rel == "infrastructure/gubuy/auth.py")
-    values = [ast.unparse(call.args[0]) for call, _ in calls(module) if attr_name(call) == "fill"]
-    assert len(values) == 2
-    assert any("doc_number" in v for v in values)
-    assert any("password" in v for v in values)
-    assert all("get_secret_value" in v for v in values)
+def test_адаптер_сайта_один_и_только_читает_страницу_sae() -> None:
+    assert sorted(m.rel for m in GUBUY) == [
+        "infrastructure/gubuy/__init__.py",
+        "infrastructure/gubuy/sae_source.py",
+    ]
 
 
 FORBIDDEN_LOCATOR = re.compile(
@@ -171,45 +121,6 @@ def test_локаторы_во_всём_коде_не_называют_запр�
                     ):
                         found.append(f"{module.rel}:{call.lineno}: {node.value!r}")
     assert found == []
-
-
-MUTATING_JS = re.compile(
-    r"\.(click|submit|focus|blur|dispatchEvent|scrollIntoView|remove|append\w*|insert\w*|"
-    r"setAttribute|removeAttribute|reset)\s*\(|\.\w+\s*=(?!=)|\bfetch\s*\(|XMLHttpRequest|"
-    r"\blocation\b|\bwindow\.open|innerHTML|document\.cookie|localStorage|sessionStorage"
-)
-
-
-def _js_sources() -> dict[str, str]:
-    found = {"READ_MONTH_JS": READ_MONTH_JS}
-    for module in ALL:
-        for call, _ in calls(module):
-            if attr_name(call) in {"evaluate", "wait_for_function", "add_init_script"}:
-                for node in call.args:
-                    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                        found[f"{module.rel}:{call.lineno}"] = node.value
-    return found
-
-
-def test_js_на_странице_ничего_не_меняет() -> None:
-    sources = _js_sources()
-    assert len(sources) >= 3, "JS из evaluate не найден: проверка ничего не проверила бы"
-    bad = {name: m.group(0) for name, js in sources.items() if (m := MUTATING_JS.search(js))}
-    assert bad == {}
-
-
-def test_контроль_шаблон_мутирующего_js_ловит_изменения() -> None:
-    for js in (
-        "el.click()",
-        "form.submit()",
-        "input.value = '1'",
-        "document.body.innerHTML = ''",
-        "fetch('/x', {method: 'POST'})",
-        "el.dispatchEvent(new Event('click'))",
-        "window.location = '/x'",
-    ):
-        assert MUTATING_JS.search(js), js
-    assert not MUTATING_JS.search("() => document.querySelector('.a').textContent")
 
 
 def test_add_init_script_и_подмена_отпечатка_не_используются() -> None:
@@ -291,28 +202,9 @@ def test_в_коде_нет_решателя_контрольного_вопро
 
 
 def test_тексты_контрольных_вопросов_не_используются_как_ответы() -> None:
-    """Слова вопросов шага 1 встречаются только как признаки страницы (pages.py)."""
+    """Слова вопросов шага 1 в коде не встречаются вовсе: вход на bpmgob удалён (R13)."""
     pattern = re.compile(r"(?i)cu[aá]ntos minutos|n[uú]mero est[aá] antes|minutos tiene")
     found = [
         f"{m.rel}:{line}" for m in ALL for text, line in string_constants(m) if pattern.search(text)
     ]
     assert found == []
-
-
-def test_страница_шага_1_зовёт_владельца_и_не_ведёт_к_вводу() -> None:
-    from rcbot.infrastructure.gubuy.pages import STEP1_MARKERS, PageKind, classify
-
-    for marker in STEP1_MARKERS:
-        assert classify("https://bpmgob.mec.gub.uy/x", f"<p>{marker}</p>", 200) is PageKind.STEP1
-
-
-def test_dom_source_на_шаге_1_поднимает_manualsteprequired_а_не_действует() -> None:
-    from rcbot.domain.errors import ManualStepRequired
-    from rcbot.infrastructure.gubuy.dom_source import DomSource
-
-    with pytest.raises(ManualStepRequired):
-        DomSource._raise_for_page(
-            "https://bpmgob.mec.gub.uy/etapas/ejecutar/TEST-ETAPA",
-            "Verificación de seguridad ¿Cuántos minutos tiene una hora?",
-            200,
-        )

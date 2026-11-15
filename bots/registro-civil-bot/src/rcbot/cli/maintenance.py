@@ -26,7 +26,7 @@ def _purge(paths: Paths) -> int:
         print("Удалять нечего.")
     for directory in removed:
         print(f"Удалено: {directory}")
-    print("База данных, .env и Chromium не тронуты.")
+    print("База данных и .env не тронуты.")
     return 0
 
 
@@ -46,10 +46,12 @@ def _uninstall(paths: Paths) -> int:
     for key in SecretKey:
         if store.delete(key):
             print(f"Секрет удалён: {key.value}")
+    for name in store.delete_legacy():
+        print(f"Секрет удалён: {name}")
     task_removed = _remove_scheduler_task() if sys.platform == "win32" else True
     print(
         f"Готово. Чтобы убрать всё остальное: `rcbot purge`, затем можно удалить каталог\n"
-        f"{paths.home} (база, .env и Chromium лежат в нём)."
+        f"{paths.home} (база и .env лежат в нём)."
     )
     return 0 if task_removed else 1
 

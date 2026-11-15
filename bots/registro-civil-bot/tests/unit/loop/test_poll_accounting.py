@@ -3,14 +3,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 
 from tests.fakes import slots
 from tests.unit.loop.harness import make_rig
 
-from rcbot.domain.errors import LoginFailed, SessionExpired, SiteUnavailable
+from rcbot.domain.errors import SiteUnavailable
 from rcbot.domain.events import PollerStateChanged
 from rcbot.domain.models import PollState, SourceKind
 
@@ -78,35 +77,14 @@ async def test_сбой_записи_статистики_при_останов�
     assert rig.task is not None and rig.task.exception() is None
 
 
-async def test_ошибки_и_входы_считаются_отдельно_от_проверок() -> None:
-    rig = make_rig([SiteUnavailable("503"), SessionExpired("x"), EMPTY])
+async def test_ошибки_считаются_отдельно_от_проверок() -> None:
+    rig = make_rig([SiteUnavailable("503"), EMPTY])
     await rig.start()
     await rig.advance(1000)
     hour = rig.loop.current_hour()
     assert hour is not None
-    assert hour.errors == 1  # только SiteUnavailable: истёкшая сессия не «ошибка сайта»
-    assert hour.relogins == 1
-    assert hour.checks == len(rig.source.starts) - 2
-    await rig.kill()
-
-
-async def test_вход_по_команде_попадает_в_статистику_один_раз() -> None:
-    rig = make_rig([EMPTY])
-    await rig.start()
-    await rig.loop.relogin()
-    await rig.advance(30)  # проверка после входа не должна засчитать его второй раз
-    hour = rig.loop.current_hour()
-    assert hour is not None and hour.relogins == 1
-    await rig.kill()
-
-
-async def test_неудачный_вход_по_команде_не_считается_входом() -> None:
-    rig = make_rig([EMPTY], failures=[LoginFailed("нет")])
-    await rig.start()
-    with contextlib.suppress(LoginFailed):
-        await rig.loop.relogin()
-    hour = rig.loop.current_hour()
-    assert hour is not None and hour.relogins == 0
+    assert hour.errors == 1
+    assert hour.checks == len(rig.source.starts) - 1
     await rig.kill()
 
 
@@ -140,7 +118,7 @@ async def test_snapshot_для_status_json() -> None:
     await rig.advance(2)
     mid = rig.loop.snapshot()
     assert mid["check_in_progress_sec"] == 2.0
-    assert mid["source"] == "api" and mid["state"] == "running"
+    assert mid["source"] == "sae" and mid["state"] == "running"
     assert mid["months_ahead"] == 4 and mid["base_interval_sec"] == 20.0
     assert mid["paused_until"] is None and mid["last_check_at"] is None
     await rig.advance(3)
@@ -169,10 +147,10 @@ async def test_snapshot_при_паузе_показывает_дату_а_по�
     await rig.kill()
 
 
-async def test_snapshot_DomSource_показывает_минимум_60_с() -> None:
-    rig = make_rig([EMPTY], kind=SourceKind.DOM, base_interval=20.0)
-    assert rig.loop.snapshot()["interval_sec"] == 60.0
-    assert rig.loop.snapshot()["source"] == "dom"
+async def test_snapshot_показывает_источник_sae_и_базовый_интервал() -> None:
+    rig = make_rig([EMPTY], kind=SourceKind.SAE, base_interval=20.0)
+    assert rig.loop.snapshot()["interval_sec"] == 20.0
+    assert rig.loop.snapshot()["source"] == "sae"
 
 
 # --- журнал проверок ---
@@ -184,7 +162,7 @@ async def test_запись_проверки_для_журнала_наблюд�
     await rig.advance(20)
     ok, failed = rig.journal.checks
     assert ok.ok and ok.slots == slots(23, 24) and ok.latency_ms == 5.0
-    assert ok.state == "running" and ok.interval_sec == 20.0 and ok.source is SourceKind.API
+    assert ok.state == "running" and ok.interval_sec == 20.0 and ok.source is SourceKind.SAE
     assert ok.error_kind == "" and ok.error == ""
     assert ok.at == HOUR_15
     assert not failed.ok and failed.slots == frozenset()

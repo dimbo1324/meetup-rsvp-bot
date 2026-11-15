@@ -10,7 +10,6 @@ import pytest
 from rcbot.application.control import IntervalTooSmall
 from rcbot.application.runtime import K_CHANNELS_OFF, K_INTERVAL, K_PAUSED_UNTIL
 from rcbot.bot import texts
-from rcbot.domain.errors import LoginFailed
 from rcbot.domain.models import Channel, PollState, SourceKind
 from tests.e2e.helpers import D23, gaps
 from tests.e2e.site import FakeSite
@@ -45,7 +44,7 @@ async def test_бессрочная_пауза_и_resume_проверка_сра
     await stand.advance(24 * 3600)
     calls = len(site.calls)
     assert stand.loop.status.state is PollState.PAUSED
-    assert stand.loop.status.state is PollState.PAUSED and stand.session.logins == 1
+    assert stand.loop.status.state is PollState.PAUSED
 
     await stand.controller.resume()
     await stand.quiesce()
@@ -140,31 +139,7 @@ async def test_тест_каналов_идёт_во_все_и_не_создаё
     assert not stand.alerts.repeating(), "проверка канала повторов не запускает"
 
 
-# --- вход, подтверждение, статус, список, очистка ---
-
-
-async def test_команда_relogin_входит_сразу_и_будит_проверку(make_stand, site: FakeSite) -> None:
-    stand = await make_stand(site=site)
-    calls, last = len(site.calls), site.calls[-1].mono
-    assert await stand.controller.relogin() == ""
-    await stand.quiesce()
-    assert stand.session.logins == 2 and len(site.calls) == calls, "минимум 10 с ещё не прошёл"
-    await stand.advance(10)
-    assert len(site.calls) == calls + 1 and site.calls[-1].cookie.endswith("SESSION-2-1")
-    assert site.calls[-1].mono - last == 10
-    assert "command.relogin" in stand.journal.codes()
-
-
-async def test_команда_relogin_возвращает_причину_отказа_и_подчиняется_лимиту(
-    make_stand, site: FakeSite
-) -> None:
-    stand = await make_stand(site=site)
-    stand.auth._failures.append(LoginFailed("сайт отказал во входе"))  # type: ignore[attr-defined]
-    assert "сайт отказал" in await stand.controller.relogin()
-
-    for _ in range(4):  # попытки № 3–6 за час (№ 1 — старт, № 2 — отказ)
-        assert await stand.controller.relogin() == ""
-    assert "лимит 6" in await stand.controller.relogin()
+# --- подтверждение, статус, список, очистка ---
 
 
 async def test_ack_без_тревоги_ничего_не_подтверждает(make_stand, site: FakeSite) -> None:
@@ -181,10 +156,10 @@ async def test_статус_и_последние_инциденты_собир�
     await stand.controller.ack()
 
     view = await stand.controller.status()
-    assert view.status.state is PollState.RUNNING and view.source is SourceKind.API
+    assert view.status.state is PollState.RUNNING and view.source is SourceKind.SAE
     assert view.incident is not None and view.incident.acked and not view.repeating
     text = texts.status_text(view, stand.settings.tz)
-    assert "Состояние: работает" in text and "Источник: API" in text
+    assert "Состояние: работает" in text and "Источник: SAE" in text
     assert "Открыт инцидент №1: 3 мест, тревога подтверждена" in text
 
     (item,) = await stand.controller.last()
@@ -198,29 +173,24 @@ async def test_очистка_по_команде_удаляет_старые_ф
     make_stand, site: FakeSite
 ) -> None:
     stand = await make_stand(site=site)
-    old = stand.paths.quarantine / "old.json"
-    fresh = stand.paths.quarantine / "fresh.json"
-    old.write_text("{}", "utf-8")
-    fresh.write_text("{}", "utf-8")
+    old = stand.paths.shots / "sae-old-empty.html"
+    fresh = stand.paths.shots / "sae-fresh-empty.html"
+    old.write_text("<html></html>", "utf-8")
+    fresh.write_text("<html></html>", "utf-8")
     stale = (stand.clock.now() - timedelta(days=10)).timestamp()
     os.utime(old, (stale, stale))
     os.utime(fresh, (stand.clock.now().timestamp(),) * 2)
 
     removed = await stand.controller.cleanup()
-    assert removed.get("quarantine") == 1
+    assert removed.get("shots") == 1
     assert not old.exists() and fresh.exists()
     assert "command.cleanup" in stand.journal.codes()
 
 
 async def test_число_месяцев_доходит_до_источника(make_stand, stand_clock) -> None:
-    source = fake_source(stand_clock, slots(), kind=SourceKind.API)
-    stand = await make_stand(primary=source, auth=_NoLogin())
+    source = fake_source(stand_clock, slots(), kind=SourceKind.SAE)
+    stand = await make_stand(primary=source)
     assert await stand.controller.set_months(99) == 12
     assert await stand.controller.set_months(9) == 9
     await stand.next_check()
     assert source.calls[-1].months_ahead == 9
-
-
-class _NoLogin:
-    async def login(self) -> list:
-        return []

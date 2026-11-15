@@ -181,7 +181,6 @@ class _HourBase:
 
     checks: int = 0
     errors: int = 0
-    relogins: int = 0
     p50_ms: float = 0.0
     p95_ms: float = 0.0
 
@@ -211,15 +210,15 @@ class SqlStatsRepository:
                 base = (
                     _HourBase()
                     if row is None
-                    else _HourBase(row.checks, row.errors, row.relogins, row.p50_ms, row.p95_ms)
+                    else _HourBase(row.checks, row.errors, row.p50_ms, row.p95_ms)
                 )
                 self._remember(stats.hour, base)
             if row is None:
-                row = PollStatsHourRow(hour=stats.hour)
+                # Столбец входов остался от пути bpmgob (до R13): бот больше не входит на сайт
+                row = PollStatsHourRow(hour=stats.hour, relogins=0)
                 session.add(row)
             row.checks = base.checks + stats.checks
             row.errors = base.errors + stats.errors
-            row.relogins = base.relogins + stats.relogins
             row.p50_ms, row.p95_ms = _merged_percentiles(base, stats)
 
     def _remember(self, hour: datetime, base: _HourBase) -> None:
@@ -235,7 +234,7 @@ class SqlStatsRepository:
             )
             result = []
             for row in rows:
-                hour = PollStatsHour(row.hour, row.checks, row.errors, row.relogins)
+                hour = PollStatsHour(row.hour, row.checks, row.errors)
                 # Перцентили хранятся готовыми: восстанавливаем их как две точки распределения
                 hour.latencies_ms = [row.p50_ms, row.p95_ms]
                 result.append(hour)

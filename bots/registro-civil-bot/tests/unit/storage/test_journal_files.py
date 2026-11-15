@@ -40,7 +40,7 @@ def make(root: Path, clock: FakeClock | ManualClock | None = None, **kwargs: int
 def check_record(at: datetime = T0, **overrides: object) -> CheckRecord:
     fields: dict[str, object] = {
         "at": at,
-        "source": SourceKind.API,
+        "source": SourceKind.SAE,
         "ok": True,
         "slots": slots(24, 23),
         "latency_ms": 41.26,
@@ -103,7 +103,7 @@ def test_строка_проверки_содержит_все_поля_и_вр�
     assert line == {
         "at": "2026-11-12T12:00:00-03:00",
         "ok": True,
-        "source": "api",
+        "source": "sae",
         "state": "running",
         "slots": ["2027-02-23", "2027-02-24"],
         "slots_count": 2,
@@ -343,7 +343,7 @@ def opening(at: datetime = T0, kind: str = "appeared", **overrides: object) -> O
         "at": at,
         "kind": kind,
         "slots": slots(24, 23, 23),
-        "source": SourceKind.DOM,
+        "source": SourceKind.SAE,
         "incident_open_sec": None,
     }
     fields.update(overrides)
@@ -378,7 +378,7 @@ def test_openings_строка_содержит_время_даты_источн
         "gone",
         "2",  # число различных дней: 23 и 24 февраля
         "2027-02-23 2027-02-24",
-        "dom",
+        "sae",
         "12.6",  # 754 с = 12,57 мин
     ]
 

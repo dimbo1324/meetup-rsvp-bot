@@ -1,4 +1,4 @@
-"""Все пути бота — от его каталога (решение R2): данные, логи, браузер и кеш лежат рядом с кодом."""
+"""Все пути бота — от его каталога (решение R2): данные, логи и кеш лежат рядом с кодом."""
 
 from __future__ import annotations
 
@@ -39,6 +39,8 @@ class Paths:
     def lock_file(self) -> Path:
         return self.data / "rcbot.lock"
 
+    # Каталоги прежнего пути bpmgob (до R13): бот в них больше не пишет, очистка добирает
+    # оставшиеся дампы по сроку, `purge` удаляет их целиком
     @property
     def discovery(self) -> Path:
         return self.data / "discovery"
@@ -63,6 +65,7 @@ class Paths:
     def log_file(self) -> Path:
         return self.logs / "rcbot.log"
 
+    # Chromium прежнего пути bpmgob (до R13): больше не нужен, `purge` его удаляет
     @property
     def browsers(self) -> Path:
         return self.home / ".browsers"
@@ -77,8 +80,6 @@ class Paths:
     def ensure(self) -> None:
         for directory in (
             self.data,
-            self.discovery,
-            self.quarantine,
             self.shots,
             self.tmp,
             self.logs,
@@ -86,6 +87,5 @@ class Paths:
             directory.mkdir(parents=True, exist_ok=True)
 
     def apply_process_env(self) -> None:
-        """Playwright и Python ищут браузер и кеш байт-кода в каталоге бота (SPEC 2.7)."""
-        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(self.browsers))
+        """Python держит кеш байт-кода в каталоге бота (SPEC 2.7)."""
         os.environ.setdefault("PYTHONPYCACHEPREFIX", str(self.cache / "pycache"))

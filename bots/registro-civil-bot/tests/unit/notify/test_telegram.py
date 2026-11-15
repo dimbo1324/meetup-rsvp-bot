@@ -9,7 +9,6 @@ from aiogram.methods import GetMe, SendMessage
 from rcbot.domain.models import Alert, AlertAction, AlertKind, Channel
 from rcbot.infrastructure.notify.telegram import (
     CALLBACK_ACK,
-    CALLBACK_MANUAL_DONE,
     MAX_TEXT,
     REQUEST_TIMEOUT_SEC,
     TelegramNotifier,
@@ -102,13 +101,6 @@ async def test_кнопка_вижу_для_ack() -> None:
     assert CALLBACK_ACK == "ack"
 
 
-async def test_кнопка_готово_для_manual_done() -> None:
-    channel, session = make()
-    await channel.send(alert(action=AlertAction.MANUAL_DONE), 1)
-    ((text, data),) = buttons(session.sent[0])
-    assert "Готово" in text and data == CALLBACK_MANUAL_DONE == "manual_done"
-
-
 async def test_без_кнопки_для_none() -> None:
     channel, session = make()
     await channel.send(alert(action=AlertAction.NONE), 1)
@@ -116,7 +108,7 @@ async def test_без_кнопки_для_none() -> None:
 
 
 def test_данные_кнопок_укладываются_в_лимит_telegram_64_байта() -> None:
-    for action in (AlertAction.ACK, AlertAction.MANUAL_DONE):
+    for action in (AlertAction.ACK,):
         markup = keyboard(action)
         assert markup is not None
         for row in markup.inline_keyboard:

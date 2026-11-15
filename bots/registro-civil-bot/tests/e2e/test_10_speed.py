@@ -12,7 +12,7 @@ import time
 import pytest
 
 from rcbot.domain.models import AlertKind, Channel, SourceKind
-from tests.e2e.helpers import NoLogin, TimedSource, percentile
+from tests.e2e.helpers import TimedSource, percentile
 from tests.e2e.site import ChannelsSite
 from tests.e2e.stand import Stand, fake_source
 from tests.fakes import slots
@@ -46,8 +46,8 @@ def first_wave(stand: Stand, channel: Channel) -> list:
 
 
 async def build_timed(make_stand, stand_clock, reps: int, **kwargs) -> tuple[Stand, TimedSource]:
-    source = TimedSource(fake_source(stand_clock, *cycle(reps), kind=SourceKind.API))
-    stand = await make_stand(primary=source, auth=NoLogin(), **kwargs)
+    source = TimedSource(fake_source(stand_clock, *cycle(reps), kind=SourceKind.SAE))
+    stand = await make_stand(primary=source, **kwargs)
     return stand, source
 
 
@@ -82,10 +82,9 @@ async def test_запись_в_базу_не_задерживает_рассыл
     async def slow_open() -> None:
         await asyncio.sleep(0.5)
 
-    source = TimedSource(fake_source(stand_clock, slots(23), kind=SourceKind.API))
+    source = TimedSource(fake_source(stand_clock, slots(23), kind=SourceKind.SAE))
     stand = await make_stand(
         primary=source,
-        auth=NoLogin(),
         incidents_open_hook=slow_open,
         ignore={"bus", "background"},
         start=False,
@@ -108,10 +107,8 @@ async def test_запись_в_базу_не_задерживает_рассыл
 async def test_запись_журнала_не_задерживает_рассылку_диск_завис_на_200_мс(
     make_stand, stand_clock
 ) -> None:
-    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API))
-    stand = await make_stand(
-        primary=source, auth=NoLogin()
-    )  # журнал — в фоновом потоке, как в работе
+    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.SAE))
+    stand = await make_stand(primary=source)  # журнал — в фоновом потоке, как в работе
     stand.journal.stall_sec = 0.2  # каждая запись на диск занимает 200 мс
     await stand.next_check()
 
@@ -129,8 +126,8 @@ async def test_синхронный_журнал_на_зависшем_диск�
 ) -> None:
     """Режим без фонового потока (RCBOT_JOURNAL_BACKGROUND=false) остаётся медленным — по
     замыслу; тест фиксирует, что именно фоновый поток снимает задержку."""
-    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API))
-    stand = await make_stand(primary=source, auth=NoLogin(), journal_background=False)
+    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.SAE))
+    stand = await make_stand(primary=source, journal_background=False)
     stand.journal.stall_sec = 0.1
     await stand.next_check()
     (value,) = latencies_ms(stand, source)
@@ -166,8 +163,8 @@ async def test_настоящие_ntfy_и_callmebot_по_https_от_событи
 async def test_настоящий_ntfy_прогретое_соединение_используется_первой_тревогой(
     make_stand, stand_clock, channels_site: ChannelsSite
 ) -> None:
-    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.API))
-    stand = await make_stand(primary=source, auth=NoLogin(), channels=channels_site)
+    source = TimedSource(fake_source(stand_clock, slots(), slots(23), kind=SourceKind.SAE))
+    stand = await make_stand(primary=source, channels=channels_site)
     await stand.notifiers[Channel.NTFY].warmup()  # то, что делает keep_warm раз в 4 минуты
     await stand.next_check()
 

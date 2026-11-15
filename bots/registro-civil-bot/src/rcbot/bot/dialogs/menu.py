@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery
 from aiogram_dialog import Dialog, DialogManager, Window
 from aiogram_dialog.widgets.kbd import Button, Cancel, Column, Row, Select, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
@@ -118,13 +118,6 @@ async def _on_test(callback: CallbackQuery, _: Any, manager: DialogManager, item
     await callback.answer(texts.deliveries_text(results)[:CALLBACK_ANSWER_MAX], show_alert=True)
 
 
-async def _on_relogin(callback: CallbackQuery, _: Button, manager: DialogManager) -> None:
-    await callback.answer(texts.RELOGIN_STARTED)
-    error = await _controller(manager).relogin()
-    if isinstance(callback.message, Message):
-        await callback.message.answer(texts.relogin_text(error))
-
-
 async def _on_cleanup(callback: CallbackQuery, _: Button, manager: DialogManager) -> None:
     removed = await _controller(manager).cleanup()
     await callback.answer(texts.cleanup_text(removed)[:CALLBACK_ANSWER_MAX], show_alert=True)
@@ -217,7 +210,6 @@ def build_menu_dialog() -> Dialog:
         ),
         Window(
             Format("Размер папки: {size}\n\nПоследние ошибки:\n{errors}"),
-            Button(Const("🔑 Войти заново"), id="relogin", on_click=_on_relogin),
             Button(Const("🧹 Очистить сейчас"), id="cleanup", on_click=_on_cleanup),
             to_main,
             state=MenuSG.maintenance,

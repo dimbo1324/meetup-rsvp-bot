@@ -46,7 +46,8 @@ def test_prune_удаляет_файлы_строго_старше_срока(ja
 
 
 def test_prune_отсутствующая_папка_даёт_ноль(janitor: FileJanitor, paths: Paths) -> None:
-    paths.discovery.rmdir()
+    # Каталоги прежнего пути bpmgob (R13) не создаются: очистка их отсутствия не замечает
+    assert not paths.discovery.exists()
     assert janitor.prune("discovery", 7 * DAY, NOW) == 0
 
 
@@ -57,7 +58,7 @@ def test_prune_неизвестное_имя_папки_отвергается(j
 
 def test_prune_не_трогает_подкаталоги(janitor: FileJanitor, paths: Paths) -> None:
     sub = paths.quarantine / "вложенная"
-    sub.mkdir()
+    sub.mkdir(parents=True)
     make(sub, "old.json", 100 * DAY)
     assert janitor.prune("quarantine", DAY, NOW) == 0
     assert (sub / "old.json").exists()
@@ -225,9 +226,10 @@ def test_folder_size_пропускает_файлы_с_ошибкой_stat(
 # --- purge ---
 
 
-def test_purge_удаляет_логи_временное_карантин_снимки_разведку_и_кеш(paths: Paths) -> None:
+def test_purge_удаляет_логи_временное_снимки_кеш_и_остатки_пути_bpmgob(paths: Paths) -> None:
     paths.ensure()
     paths.cache.mkdir()
+    paths.browsers.mkdir()
     for folder in (
         paths.logs,
         paths.tmp,
@@ -235,6 +237,7 @@ def test_purge_удаляет_логи_временное_карантин_сн�
         paths.shots,
         paths.discovery,
         paths.cache,
+        paths.browsers,
     ):
         make(folder, "f.dat", DAY)
     removed = purge(paths)
@@ -245,18 +248,17 @@ def test_purge_удаляет_логи_временное_карантин_сн�
         paths.shots,
         paths.discovery,
         paths.cache,
+        paths.browsers,
     }
     assert not any(p.exists() for p in removed)
 
 
-def test_purge_не_трогает_базу_настройки_браузер_и_код(paths: Paths) -> None:
+def test_purge_не_трогает_базу_настройки_и_код(paths: Paths) -> None:
     paths.ensure()
-    paths.browsers.mkdir()
     keep = [
         make(paths.data, "rcbot.sqlite3", DAY),
         make(paths.data, "rcbot.sqlite3-wal", DAY),
         make(paths.home, ".env", DAY),
-        make(paths.browsers, "chromium/chrome.exe", DAY),
         make(paths.home, "alembic.ini", DAY),
     ]
     purge(paths)
@@ -267,7 +269,7 @@ def test_purge_не_трогает_базу_настройки_браузер_и
 def test_purge_отсутствующие_папки_не_попадают_в_результат_и_вызов_повторяем(paths: Paths) -> None:
     assert purge(paths) == []
     paths.ensure()
-    assert len(purge(paths)) == 5  # кеша нет
+    assert len(purge(paths)) == 3  # логи, снимки, временное: кеша и остатков bpmgob нет
     assert purge(paths) == []
 
 

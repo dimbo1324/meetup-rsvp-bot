@@ -1,22 +1,17 @@
-"""Типы секретов не раскрывают значения: `SecretStr`, `Credentials`, `SessionCookie` (SPEC 2.6)."""
+"""Типы секретов не раскрывают значения: `SecretStr` и хранилище секретов (SPEC 2.6)."""
 
 from __future__ import annotations
 
-import copy
 import json
 import traceback
 
 import keyring
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
 from pydantic import SecretStr
 
-from rcbot.application.ports import SessionCookie
 from rcbot.config.secrets import (
     DESCRIPTIONS,
     SERVICE,
-    Credentials,
     SecretKey,
     SecretMissing,
     SecretStore,
@@ -48,52 +43,20 @@ def _every_text_form(obj: object) -> list[str]:
 
 
 def test_secretstr_во_всех_текстовых_видах_скрыт() -> None:
-    secret = SecretStr(C.password)
-    assert [t for t in _every_text_form(secret) if C.password in t] == []
-    assert secret.get_secret_value() == C.password  # а явный запрос значения работает
-
-
-def test_credentials_не_раскрывают_значения() -> None:
-    creds = Credentials(SecretStr(C.doc_number), SecretStr(C.password))
-    leaked = [t for t in _every_text_form(creds) if C.password in t or C.doc_number in t]
-    assert leaked == []
-
-
-def test_credentials_раскрытие_только_явным_вызовом() -> None:
-    creds = Credentials(SecretStr(C.doc_number), SecretStr(C.password))
-    assert creds.password.get_secret_value() == C.password
-    assert copy.deepcopy(creds) == creds
-    assert C.password not in repr(copy.deepcopy(creds))
-
-
-def test_session_cookie_во_всех_текстовых_видах_скрыт() -> None:
-    cookie = SessionCookie("simple_bpm_session", C.cookie_value, "bpmgob.mec.gub.uy")
-    texts = _every_text_form(cookie) + _every_text_form([cookie, cookie])
-    assert [t for t in texts if C.cookie_value in t] == []
-    assert "simple_bpm_session" in repr(cookie)  # имя нужно для разбора, значение — нет
-    assert "***" in repr(cookie)
-
-
-@given(
-    value=st.text(alphabet="0123456789abcdef", min_size=8, max_size=64),
-    name=st.sampled_from(["simple_bpm_session", "TS0191f197", "target_bal"]),
-)
-def test_session_cookie_repr_не_содержит_значения_ни_для_каких_значений(
-    value: str, name: str
-) -> None:
-    cookie = SessionCookie(name, value, "bpmgob.mec.gub.uy")
-    assert value not in repr(cookie)
-    assert value not in str([cookie])
+    secret = SecretStr(C.telegram_token)
+    assert [t for t in _every_text_form(secret) if C.telegram_token in t] == []
+    assert secret.get_secret_value() == C.telegram_token  # а явный запрос значения работает
 
 
 def test_secret_store_отдаёт_secretstr_и_регистрирует_значение_в_фильтре() -> None:
     store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.PASSWORD, C.password)
-    assert REDACTOR.redact(C.password) == C.password  # до чтения фильтр секрета не знает
-    value = store.get(SecretKey.PASSWORD)
+    # Имя для звонка, а не токен: токен Telegram фильтр узнаёт по виду и без регистрации
+    store.set(SecretKey.CALLMEBOT_USER, C.call_user)
+    assert REDACTOR.redact(C.call_user) == C.call_user  # до чтения фильтр секрета не знает
+    value = store.get(SecretKey.CALLMEBOT_USER)
     assert isinstance(value, SecretStr)
-    assert C.password not in repr(value)
-    assert REDACTOR.redact(f"пароль {C.password}!") == "пароль ***!"
+    assert C.call_user not in repr(value)
+    assert REDACTOR.redact(f"звонок {C.call_user}!") == "звонок ***!"
 
 
 @pytest.mark.parametrize("key", list(SecretKey))
@@ -109,19 +72,11 @@ def test_каждое_прочитанное_значение_регистрир
     assert value not in REDACTOR.redact(f"[{value}]"), key
 
 
-def test_credentials_регистрирует_номер_документа_и_пароль() -> None:
-    store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.DOC_NUMBER, C.doc_number)
-    store.set(SecretKey.PASSWORD, C.password)
-    store.credentials()
-    assert REDACTOR.redact(f"{C.doc_number}/{C.password}") == "***/***"
-
-
 def test_present_не_читает_значения_в_лог_и_не_вызывает_обратный_вызов() -> None:
     seen: list[str] = []
     store = SecretStore(on_read=seen.append)
-    store.set(SecretKey.PASSWORD, C.password)
-    assert store.present()[SecretKey.PASSWORD] is True
+    store.set(SecretKey.TELEGRAM_TOKEN, C.telegram_token)
+    assert store.present()[SecretKey.TELEGRAM_TOKEN] is True
     assert seen == []
 
 
@@ -136,24 +91,24 @@ def test_пустое_и_отсутствующее_значение_не_выз
 
 def test_исключение_об_отсутствии_секрета_не_содержит_значений_и_называет_действие() -> None:
     store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.DOC_NUMBER, C.doc_number)
+    store.set(SecretKey.CALLMEBOT_USER, C.call_user)
     with pytest.raises(SecretMissing) as info:
-        store.require(SecretKey.PASSWORD)
-    assert C.doc_number not in str(info.value)
-    assert DESCRIPTIONS[SecretKey.PASSWORD] in str(info.value)
+        store.require(SecretKey.TELEGRAM_TOKEN)
+    assert C.call_user not in str(info.value)
+    assert DESCRIPTIONS[SecretKey.TELEGRAM_TOKEN] in str(info.value)
     assert "rcbot init" in str(info.value)
 
 
 def test_set_убирает_пробелы_по_краям_как_и_регистрация() -> None:
     store = SecretStore(on_read=REDACTOR.register)
-    store.set(SecretKey.PASSWORD, f"  {C.password}\n")
-    value = store.require(SecretKey.PASSWORD)
-    assert value.get_secret_value() == C.password
+    store.set(SecretKey.TELEGRAM_TOKEN, f"  {C.telegram_token}\n")
+    value = store.require(SecretKey.TELEGRAM_TOKEN)
+    assert value.get_secret_value() == C.telegram_token
 
 
 def test_delete_убирает_секрет_из_хранилища() -> None:
     store = SecretStore()
-    store.set(SecretKey.PASSWORD, C.password)
-    assert store.delete(SecretKey.PASSWORD) is True
-    assert store.get(SecretKey.PASSWORD) is None
-    assert keyring.get_password(SERVICE, SecretKey.PASSWORD.value) is None
+    store.set(SecretKey.TELEGRAM_TOKEN, C.telegram_token)
+    assert store.delete(SecretKey.TELEGRAM_TOKEN) is True
+    assert store.get(SecretKey.TELEGRAM_TOKEN) is None
+    assert keyring.get_password(SERVICE, SecretKey.TELEGRAM_TOKEN.value) is None

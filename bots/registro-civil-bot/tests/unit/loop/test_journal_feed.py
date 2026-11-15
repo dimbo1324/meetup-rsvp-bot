@@ -9,13 +9,10 @@ from rcbot.application.journal_feed import JournalFeed
 from rcbot.domain import events
 from rcbot.domain.events import (
     DomainEvent,
-    ManualActionRequired,
     PollerStateChanged,
     SlotsAppeared,
     SlotsChanged,
     SlotsGone,
-    SourceSwitched,
-    UnconfirmedSlotsSeen,
 )
 from rcbot.domain.models import PollState, SourceKind
 
@@ -34,7 +31,7 @@ class Feed:
 
 async def test_появление_мест_событие_и_окно_записи() -> None:
     feed = Feed()
-    snap = snapshot(slots(24, 23), source=SourceKind.API)
+    snap = snapshot(slots(24, 23), source=SourceKind.SAE)
     await feed.send(SlotsAppeared(T0, snap))
     code, message, level, _ = feed.journal.events[0]
     assert (code, level) == ("slots.appeared", "WARNING")
@@ -44,7 +41,7 @@ async def test_появление_мест_событие_и_окно_запис
         T0,
         "появились",
         snap.slots,
-        SourceKind.API,
+        SourceKind.SAE,
     )
     assert opening.incident_open_sec is None
 
@@ -69,12 +66,12 @@ async def test_пропажа_мест_и_длительность_окна() ->
     feed = Feed()
     await feed.send(SlotsAppeared(T0, snapshot(slots(23))))
     await feed.clock.advance(125)
-    await feed.send(SlotsGone(T0, snapshot(source=SourceKind.DOM)))
+    await feed.send(SlotsGone(T0, snapshot(source=SourceKind.SAE)))
     code, _, level, _ = feed.journal.events[-1]
     assert (code, level) == ("slots.gone", "INFO")
     gone = feed.journal.openings[-1]
     assert gone.kind == "пропали" and gone.slots == frozenset()
-    assert gone.incident_open_sec == 125.0 and gone.source is SourceKind.DOM
+    assert gone.incident_open_sec == 125.0 and gone.source is SourceKind.SAE
 
 
 async def test_изменение_состава_не_сбрасывает_отсчёт_окна() -> None:
@@ -121,39 +118,13 @@ async def test_смена_состояния() -> None:
     assert feed.journal.openings == []
 
 
-async def test_смена_источника() -> None:
-    feed = Feed()
-    await feed.send(SourceSwitched(T0, SourceKind.API, SourceKind.DOM, "3 неожиданных ответа"))
-    code, message, level, _ = feed.journal.events[0]
-    assert (code, level) == ("source.switched", "WARNING")
-    assert "api → dom" in message and "3 неожиданных ответа" in message
-
-
-async def test_нужен_шаг_1() -> None:
-    feed = Feed()
-    await feed.send(ManualActionRequired(T0, "сайт просит шаг 1"))
-    code, message, level, _ = feed.journal.events[0]
-    assert (code, level) == ("manual.required", "WARNING")
-    assert message.endswith("сайт просит шаг 1")
-
-
-async def test_неподтверждённые_места_SAE() -> None:
-    feed = Feed()
-    await feed.send(UnconfirmedSlotsSeen(T0, snapshot(slots(23, 24), source=SourceKind.SAE)))
-    assert feed.journal.events == [("sae.seen", "SAE: 2 мест (неподтверждённые)", "INFO", {})]
-    assert feed.journal.openings == []  # неподтверждённое не попадает в статистику окон
-
-
 async def test_каждый_вид_доменного_события_разобран_явно() -> None:
     # Запасной ветки «неизвестное событие» нет: новое событие без своей ветки молча пропало бы
     examples: dict[type[DomainEvent], DomainEvent] = {
         SlotsAppeared: SlotsAppeared(T0, snapshot(slots(23))),
         SlotsChanged: SlotsChanged(T0, snapshot(slots(23)), slots(23)),
         SlotsGone: SlotsGone(T0, snapshot()),
-        ManualActionRequired: ManualActionRequired(T0, "шаг 1"),
-        SourceSwitched: SourceSwitched(T0, SourceKind.API, SourceKind.DOM, "x"),
         PollerStateChanged: PollerStateChanged(T0, PollState.RUNNING, PollState.BACKOFF, "x"),
-        UnconfirmedSlotsSeen: UnconfirmedSlotsSeen(T0, snapshot(slots(23))),
     }
     defined = {
         cls
@@ -165,11 +136,6 @@ async def test_каждый_вид_доменного_события_разоб�
         feed = Feed()
         await feed.send(event)
         assert len(feed.journal.events) == 1, type(event).__name__
-
-
-def test_доменного_события_SessionExpired_нет_есть_только_исключение() -> None:
-    # Одноимённые событие и исключение путали импорты; событие никто не публиковал
-    assert not hasattr(events, "SessionExpired")
 
 
 async def test_каждое_событие_даёт_запись_и_порядок_сохраняется() -> None:

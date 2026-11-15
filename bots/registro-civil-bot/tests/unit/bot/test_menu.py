@@ -12,7 +12,6 @@ from aiogram.types import InlineKeyboardMarkup, Message
 from rcbot.bot import texts
 from rcbot.bot.dialogs.menu import INTERVALS, MONTHS, PAUSES
 from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
-from rcbot.domain.errors import LoginFailed
 from rcbot.domain.models import Channel
 from tests.fakes import T0
 from tests.unit.bot.harness import Setup, make_setup, snapshot_of_state
@@ -370,24 +369,6 @@ async def test_окно_обслуживания_без_ошибок() -> None:
     _, screen = await open_menu()
     await screen.click("🛠 Обслуживание")
     assert "Ошибок нет." in screen.text
-
-
-async def test_войти_заново_успех() -> None:
-    setup, screen = await open_menu()
-    await screen.click("🛠 Обслуживание")
-    answers = await screen.click("🔑 Войти заново")
-    assert [a.text for a in answers] == ["Вхожу заново…"]
-    assert setup.rig.auth.logins == 1
-    assert setup.session.sent_texts[-1] == texts.RELOGIN_OK
-
-
-async def test_войти_заново_ошибка() -> None:
-    setup = await make_setup(relogin_failures=(LoginFailed("страница входа изменилась"),))
-    await setup.owner.say("/menu")
-    screen = Screen(setup)
-    await screen.click("🛠 Обслуживание")
-    await screen.click("🔑 Войти заново")
-    assert setup.session.sent_texts[-1] == "Вход не удался: страница входа изменилась"
 
 
 async def test_очистить_сейчас_показывает_итог_во_всплывающем_окне() -> None:

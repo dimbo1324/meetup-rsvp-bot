@@ -8,7 +8,7 @@ import itertools
 import time
 
 import pytest
-from tests.fakes import T0, ManualClock, RecordingJournal, settle, slots, snapshot
+from tests.fakes import T0, ManualClock, RecordingJournal, settle, slots
 from tests.unit.alerts.helpers import (
     Rig,
     appeared,
@@ -22,18 +22,14 @@ from rcbot.application import alerting
 from rcbot.application.alerting import RepeatPolicy
 from rcbot.application.bus import EventBus
 from rcbot.domain.events import (
-    ManualActionRequired,
     PollerStateChanged,
     SlotsAppeared,
-    SourceSwitched,
-    UnconfirmedSlotsSeen,
 )
 from rcbot.domain.models import (
     AlertAction,
     AlertKind,
     Channel,
     PollState,
-    SourceKind,
 )
 
 NO_REPEATS: dict[Channel, RepeatPolicy] = {}
@@ -254,35 +250,6 @@ async def test_пропажа_мест_идёт_только_в_telegram() -> No
     assert not rig.alerts.repeating()
 
 
-async def test_ручной_шаг_идёт_только_в_telegram_с_кнопкой_готово() -> None:
-    rig = make_rig()
-    await rig.alerts.on_manual(ManualActionRequired(T0, "контрольный вопрос"))
-    [(alert, attempt)] = rig.sent(Channel.TELEGRAM)
-    assert alert.action is AlertAction.MANUAL_DONE and attempt == 1
-    assert "контрольный вопрос" in alert.text
-    _only_telegram(rig)
-    await rig.clock.advance(3600)
-    assert len(rig.sent(Channel.TELEGRAM)) == 1  # служебное сообщение не повторяется
-
-
-async def test_смена_источника_идёт_только_в_telegram() -> None:
-    rig = make_rig()
-    await rig.alerts.on_source_switched(
-        SourceSwitched(T0, SourceKind.API, SourceKind.DOM, "3 неожиданных ответа")
-    )
-    [text] = _only_telegram(rig)
-    assert "api → dom" in text and "3 неожиданных ответа" in text
-
-
-async def test_неподтверждённые_места_sae_идут_только_в_telegram_без_кнопки() -> None:
-    rig = make_rig()
-    event = UnconfirmedSlotsSeen(T0, snapshot(slots(5), source=SourceKind.SAE))
-    await rig.alerts.on_unconfirmed(event)
-    [(alert, _)] = rig.sent(Channel.TELEGRAM)
-    assert alert.kind is AlertKind.UNCONFIRMED and alert.action is AlertAction.NONE
-    _only_telegram(rig)
-
-
 async def test_произвольное_служебное_сообщение_идёт_только_в_telegram() -> None:
     rig = make_rig()
     await rig.alerts.service("бот запущен")
@@ -300,7 +267,7 @@ async def test_смена_состояния_сообщается_только_�
     rig = make_rig()
     await rig.alerts.on_state_changed(PollerStateChanged(T0, old, new, "429 от сайта"))
     expect_slow = new is PollState.BACKOFF
-    expect_back = new is PollState.RUNNING and old in (PollState.BACKOFF, PollState.NEEDS_MANUAL)
+    expect_back = new is PollState.RUNNING and old is PollState.BACKOFF
     texts = [] if not (expect_slow or expect_back) else _only_telegram(rig)
     if not (expect_slow or expect_back):
         assert all(not n.sent for n in rig.notifiers.values())
@@ -313,33 +280,7 @@ async def test_смена_состояния_сообщается_только_�
 # --- ожидаемые побочные эффекты тревоги ---
 
 
-async def test_после_тревоги_бот_10_минут_не_входит_на_сайт_D5() -> None:
-    rig = make_rig(policies=NO_REPEATS)
-    assert rig.session.quiet_remaining() == 0
-    await rig.alerts.on_appeared(appeared(23))
-    assert rig.session.quiet_remaining() == 600.0
-    await rig.clock.advance(250)
-    assert rig.session.quiet_remaining() == 350.0
-
-
-async def test_новая_тревога_об_изменении_тоже_продлевает_тишину() -> None:
-    rig = make_rig(policies=NO_REPEATS)
-    await rig.alerts.on_appeared(appeared(23))
-    await rig.clock.advance(300)
-    await rig.alerts.on_changed(changed(23, 24))
-    assert rig.session.quiet_remaining() == 600.0
-
-
-async def test_служебные_сообщения_и_тест_тишину_не_включают() -> None:
-    rig = make_rig(policies=NO_REPEATS)
-    await rig.alerts.on_gone(gone())
-    await rig.alerts.on_manual(ManualActionRequired(T0, "x"))
-    await rig.alerts.service("привет")
-    await rig.alerts.test()
-    assert rig.session.quiet_remaining() == 0
-
-
-async def test_координатор_отказал_тревоги_нет_и_тишина_не_включается() -> None:
+async def test_координатор_отказал_тревоги_нет() -> None:
     class Refuse:
         def __init__(self) -> None:
             self.seen: list[str] = []
@@ -355,7 +296,6 @@ async def test_координатор_отказал_тревоги_нет_и_т
     assert coordinator.seen == [event.snapshot.fingerprint]
     assert all(not n.sent for n in rig.notifiers.values())
     assert not rig.alerts.repeating()
-    assert rig.session.quiet_remaining() == 0
 
 
 async def test_сообщение_об_изменении_содержит_новые_даты_и_идёт_всем_каналам() -> None:
@@ -405,7 +345,6 @@ async def test_служебные_тестовые_и_имитированные
     rig = make_rig(policies=NO_REPEATS)
     await rig.book.on_appeared(appeared(23))
     await rig.alerts.on_gone(gone())
-    await rig.alerts.on_manual(ManualActionRequired(T0, "x"))
     await rig.alerts.service("x")
     await rig.alerts.test()
     await rig.alerts.close()

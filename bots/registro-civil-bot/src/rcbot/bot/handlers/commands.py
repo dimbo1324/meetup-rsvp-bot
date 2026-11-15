@@ -1,4 +1,4 @@
-"""Команды SPEC 2.5: /status /pause /resume /test /last /interval /relogin /cleanup /menu."""
+"""Команды SPEC 2.5: /status /pause /resume /test /last /interval /cleanup /menu."""
 
 from __future__ import annotations
 
@@ -75,11 +75,6 @@ async def cmd_last(message: Message, controller: Controller, tz: ZoneInfo) -> No
     await message.answer(texts.last_text(await controller.last(5), tz))
 
 
-async def cmd_relogin(message: Message, controller: Controller) -> None:
-    await message.answer(texts.RELOGIN_STARTED)
-    await message.answer(texts.relogin_text(await controller.relogin()))
-
-
 async def cmd_cleanup(message: Message, controller: Controller) -> None:
     await message.answer(texts.cleanup_text(await controller.cleanup()))
 
@@ -99,7 +94,6 @@ def build_router() -> Router:
     router.message.register(cmd_interval, Command("interval"))
     router.message.register(cmd_test, Command("test"))
     router.message.register(cmd_last, Command("last"))
-    router.message.register(cmd_relogin, Command("relogin"))
     router.message.register(cmd_cleanup, Command("cleanup"))
     router.message.register(cmd_menu, Command("menu"))
     return router

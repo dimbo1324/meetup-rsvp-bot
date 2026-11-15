@@ -94,15 +94,16 @@ def test_свойство_отчёт_строго_в_будущем_не_дал�
 # --- report_text ---
 
 
-def _hour(checks: int, latencies: list[float], errors: int = 0, relogins: int = 0) -> PollStatsHour:
-    return PollStatsHour(T0, checks, errors, relogins, list(latencies))
+def _hour(checks: int, latencies: list[float], errors: int = 0) -> PollStatsHour:
+    return PollStatsHour(T0, checks, errors, list(latencies))
 
 
-def test_отчёт_суммирует_проверки_ошибки_и_входы() -> None:
+def test_отчёт_суммирует_проверки_и_ошибки() -> None:
     text = report_text(
-        [_hour(3, [100, 200, 300], errors=1, relogins=1), _hour(2, [400, 500], errors=4)], 2, None
+        [_hour(3, [100, 200, 300], errors=1), _hour(2, [400, 500], errors=4)], 2, None
     )
-    assert "Проверок: 5, ошибок: 5, входов на сайт: 1" in text
+    assert "Проверок: 5, ошибок: 5\n" in text
+    assert "вход" not in text  # бот на сайт не входит (R13)
     assert "Инцидентов: 2" in text
     assert "Размер папки" not in text
     assert "ни одной успешной" not in text
@@ -188,14 +189,14 @@ class Rig:
 
 async def test_отчёт_берёт_последние_24_часа_текущий_час_и_инциденты_за_сутки() -> None:
     rig = Rig()
-    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=26), 100, 0, 0, [1.0]))  # старый
-    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=5), 10, 2, 1, [100.0] * 10))
-    rig.current = PollStatsHour(T0, 4, 1, 0, [200.0] * 4)
+    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=26), 100, 0, [1.0]))  # старый
+    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=5), 10, 2, [100.0] * 10))
+    rig.current = PollStatsHour(T0, 4, 1, [200.0] * 4)
     await rig.open_incident(T0 - timedelta(days=3))  # давно
     await rig.open_incident(T0 - timedelta(hours=3))
     await rig.open_incident(T0 - timedelta(minutes=1))
     text = await rig.monitor.build_report()
-    assert "Проверок: 14, ошибок: 3, входов на сайт: 1" in text
+    assert "Проверок: 14, ошибок: 3\n" in text
     assert "Инцидентов: 2" in text
     assert "Размер папки: 5 МБ" in text
 
@@ -226,8 +227,8 @@ async def test_отчёт_включает_час_в_который_попада
     """Отчёт уходит чуть позже 09:00:00 (сон не бывает точнее), а часовая строка статистики
     помечена началом часа: сутки не должны терять первый час."""
     rig = Rig(start=T0 + timedelta(seconds=1))
-    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=24), 7, 0, 0, [10.0] * 7))
-    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=25), 99, 0, 0, [10.0] * 99))
+    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=24), 7, 0, [10.0] * 7))
+    await rig.stats.save_hour(PollStatsHour(T0 - timedelta(hours=25), 99, 0, [10.0] * 99))
     assert "Проверок: 7," in await rig.monitor.build_report()
 
 

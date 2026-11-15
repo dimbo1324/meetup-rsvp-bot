@@ -55,7 +55,7 @@ class Bot:
         """Значения по умолчанию из `[tool.monorepo].env`; относительные пути — от каталога бота.
 
         Переменная, уже заданная в окружении вызова, не перекрывается: так worktree агента
-        или CI могут указать общий каталог браузера (PLAYWRIGHT_BROWSERS_PATH).
+        или CI могут указать свой путь.
         """
         return {
             key: str((self.path / value).resolve()) if value.startswith(".") else value

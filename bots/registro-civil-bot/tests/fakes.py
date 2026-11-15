@@ -4,7 +4,7 @@
 - `FakeClock` — время бежит само: `sleep` мгновенно сдвигает часы. Для линейных сценариев.
 - `ManualClock` — время идёт только по `await clock.advance(sec)`; спящие задачи просыпаются в
   порядке сроков. Для повторов, пауз, расписаний, зависаний: проверяет точные моменты.
-- `FakeSource`, `FakeAuthenticator`, `FakeNotifier` — адаптеры по сценарию с журналом вызовов.
+- `FakeSource`, `FakeNotifier` — адаптеры по сценарию с журналом вызовов.
 - `Memory*` — реализации портов хранения в памяти (прикладным тестам БД не нужна).
 - `RecordingJournal` — журнал наблюдения, который запоминает всё записанное.
 - `LocalTlsServer` — настоящий HTTPS-сервер на 127.0.0.1 с сертификатом `trustme`: через него
@@ -27,11 +27,7 @@ from typing import Any
 import trustme
 from aiohttp import web
 
-from rcbot.application.ports import (
-    CheckRecord,
-    OpeningRecord,
-    SessionCookie,
-)
+from rcbot.application.ports import CheckRecord, OpeningRecord
 from rcbot.domain.models import (
     Alert,
     AppEvent,
@@ -68,7 +64,7 @@ def snapshot(
     found: frozenset[Slot] = frozenset(),
     *,
     at: datetime = T0,
-    source: SourceKind = SourceKind.DOM,
+    source: SourceKind = SourceKind.SAE,
     latency_ms: float = 5.0,
     target_id: int = TARGET.id,
 ) -> AvailabilitySnapshot:
@@ -157,7 +153,7 @@ class ManualClock:
         self._mono = mono
 
 
-# --- источники, вход, каналы ---
+# --- источники и каналы ---
 
 ScriptItem = frozenset[Slot] | BaseException | Callable[[], Awaitable[frozenset[Slot]]]
 
@@ -172,7 +168,7 @@ class FakeSource:
         self,
         script: Sequence[ScriptItem] = (),
         *,
-        kind: SourceKind = SourceKind.DOM,
+        kind: SourceKind = SourceKind.SAE,
         clock: FakeClock | ManualClock | None = None,
         latency_ms: float = 5.0,
         repeat_last: bool = True,
@@ -184,7 +180,6 @@ class FakeSource:
         self._repeat_last = repeat_last
         self._last: ScriptItem | None = None
         self.calls: list[WatchTarget] = []
-        self.cookie_history: list[list[SessionCookie]] = []
         self.closed = 0
 
     def push(self, *items: ScriptItem) -> None:
@@ -193,9 +188,6 @@ class FakeSource:
     @property
     def remaining(self) -> int:
         return len(self._script)
-
-    def use_cookies(self, cookies: Sequence[SessionCookie]) -> None:
-        self.cookie_history.append(list(cookies))
 
     async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
         self.calls.append(target)
@@ -214,40 +206,6 @@ class FakeSource:
 
     async def close(self) -> None:
         self.closed += 1
-
-
-class FakeAuthenticator:
-    """Вход по сценарию: список исключений на первые попытки, затем успех."""
-
-    def __init__(
-        self,
-        cookies: Sequence[SessionCookie] | None = None,
-        failures: Sequence[BaseException] = (),
-        delay: Callable[[], Awaitable[None]] | None = None,
-    ) -> None:
-        self.cookies = (
-            list(cookies)
-            if cookies is not None
-            else [SessionCookie("simple_bpm_session", "TEST", "bpmgob.mec.gub.uy")]
-        )
-        self._failures = list(failures)
-        self._delay = delay
-        self.logins = 0
-        self.concurrent = 0
-        self.max_concurrent = 0
-
-    async def login(self) -> list[SessionCookie]:
-        self.logins += 1
-        self.concurrent += 1
-        self.max_concurrent = max(self.max_concurrent, self.concurrent)
-        try:
-            if self._delay is not None:
-                await self._delay()
-            if self._failures:
-                raise self._failures.pop(0)
-            return list(self.cookies)
-        finally:
-            self.concurrent -= 1
 
 
 class FakeNotifier:

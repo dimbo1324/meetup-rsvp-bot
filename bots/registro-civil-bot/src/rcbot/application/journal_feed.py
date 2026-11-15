@@ -8,13 +8,10 @@ from rcbot.application.messages import GONE_REASON
 from rcbot.application.ports import Clock, Journal, OpeningRecord
 from rcbot.domain.events import (
     DomainEvent,
-    ManualActionRequired,
     PollerStateChanged,
     SlotsAppeared,
     SlotsChanged,
     SlotsGone,
-    SourceSwitched,
-    UnconfirmedSlotsSeen,
 )
 from rcbot.domain.models import iso_days
 
@@ -52,13 +49,3 @@ class JournalFeed:
                 )
             case PollerStateChanged(old=old, new=new, reason=reason):
                 self._journal.event("state.changed", f"{old} → {new}: {reason}", "INFO")
-            case SourceSwitched(old=old, new=new, reason=reason):
-                self._journal.event("source.switched", f"{old} → {new}: {reason}", "WARNING")
-            case ManualActionRequired(reason=reason):
-                self._journal.event(
-                    "manual.required", f"нужен шаг 1 владельцем: {reason}", "WARNING"
-                )
-            case UnconfirmedSlotsSeen(snapshot=snapshot):
-                self._journal.event(
-                    "sae.seen", f"SAE: {len(snapshot.slots)} мест (неподтверждённые)"
-                )

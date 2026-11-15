@@ -10,7 +10,6 @@ from pathlib import Path
 import keyring
 import pytest
 
-from rcbot.application.ports import SessionCookie
 from rcbot.bootstrap import build_core, upgrade_database_async
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretKey, SecretStore
@@ -21,7 +20,6 @@ from rcbot.infrastructure.logging.redaction import REDACTOR
 from tests.fakes import (
     T0,
     TARGET,
-    FakeAuthenticator,
     FakeClock,
     FakeNotifier,
     FakeSource,
@@ -39,10 +37,10 @@ from tests.fakes import (
 def test_keyring_в_памяти_а_не_credential_manager() -> None:
     assert type(keyring.get_keyring()).__name__ == "MemoryKeyring"
     store = SecretStore()
-    store.set(SecretKey.PASSWORD, "пароль-для-теста")
-    assert store.get(SecretKey.PASSWORD) is not None
-    assert store.delete(SecretKey.PASSWORD) is True
-    assert store.delete(SecretKey.PASSWORD) is False
+    store.set(SecretKey.TELEGRAM_TOKEN, "токен-для-теста")
+    assert store.get(SecretKey.TELEGRAM_TOKEN) is not None
+    assert store.delete(SecretKey.TELEGRAM_TOKEN) is True
+    assert store.delete(SecretKey.TELEGRAM_TOKEN) is False
 
 
 def test_окружение_изолировано(bot_home: Path, tmp_path: Path) -> None:
@@ -56,17 +54,15 @@ def test_окружение_изолировано(bot_home: Path, tmp_path: Pat
             "RCBOT_HOME",
             "RCBOT_JOURNAL_DIR",
             "RCBOT_JOURNAL_BACKGROUND",
-            "RCBOT_SAE_SOURCE_ENABLED",  # тесты явно выбирают путь bpmgob (R12)
         )
     ]
     assert os.environ["RCBOT_JOURNAL_DIR"].startswith(str(tmp_path))
-    assert os.environ["RCBOT_SAE_SOURCE_ENABLED"] == "false"
 
 
 def test_фильтр_секретов_чистый_в_начале_теста() -> None:
-    assert REDACTOR.redact("пароль-для-теста") == "пароль-для-теста"
-    REDACTOR.register("пароль-для-теста")
-    assert REDACTOR.redact("пароль-для-теста") == "***"
+    assert REDACTOR.redact("токен-для-теста") == "токен-для-теста"
+    REDACTOR.register("токен-для-теста")
+    assert REDACTOR.redact("токен-для-теста") == "***"
 
 
 async def test_миграции_применяются_к_временной_базе(paths: Paths) -> None:
@@ -154,16 +150,6 @@ async def test_fake_source_без_повтора_падает_на_исчерп�
     await source.fetch(TARGET)
     with pytest.raises(AssertionError):
         await source.fetch(TARGET)
-
-
-async def test_fake_authenticator_отказы_затем_успех() -> None:
-    auth = FakeAuthenticator(failures=[RuntimeError("раз")])
-    with pytest.raises(RuntimeError):
-        await auth.login()
-    cookies = await auth.login()
-    assert auth.logins == 2
-    assert isinstance(cookies[0], SessionCookie)
-    assert "TEST" not in repr(cookies[0])  # значение cookie в repr не попадает
 
 
 async def test_fake_notifier_запоминает_и_отказывает() -> None:

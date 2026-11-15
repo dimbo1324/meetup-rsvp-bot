@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Sequence
 from datetime import date
 from datetime import time as dtime
 from itertools import pairwise
 from typing import Any
 
-from rcbot.application.ports import AvailabilitySource, SessionCookie
+from rcbot.application.ports import AvailabilitySource
 from rcbot.domain.events import DomainEvent
 from rcbot.domain.models import AvailabilitySnapshot, Channel, Slot, SourceKind, WatchTarget
 from tests.e2e.site import FakeSite
 from tests.e2e.stand import Stand
 from tests.fakes import FakeNotifier
 
-MIN_GAP = 10.0  # минимум между проверками для ApiSource (SPEC 0.3), действует и после входа
+MIN_GAP = 10.0  # минимум между проверками (SPEC 0.3)
 D23 = ["2027-02-23T10:30", "2027-02-23T10:45", "2027-02-23T11:00"]
 D24 = ["2027-02-24T09:00"]
 D25 = ["2027-02-25T09:30"]
@@ -70,18 +69,8 @@ class TimedSource:
             self.got.append(time.perf_counter())
         return snapshot
 
-    def use_cookies(self, cookies: Sequence[SessionCookie]) -> None:
-        self.inner.use_cookies(cookies)
-
     async def close(self) -> None:
         await self.inner.close()
-
-
-class NoLogin:
-    """Вход не нужен: источник не ходит на сайт."""
-
-    async def login(self) -> list[SessionCookie]:
-        return []
 
 
 def percentile(values: list[float], q: float) -> float:

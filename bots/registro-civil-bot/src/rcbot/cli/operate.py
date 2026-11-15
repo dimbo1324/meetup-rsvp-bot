@@ -1,4 +1,4 @@
-"""Рабочие команды: discover, login, check, run, simulate."""
+"""Рабочие команды: check, run, simulate."""
 
 from __future__ import annotations
 
@@ -9,76 +9,13 @@ import sys
 from collections import defaultdict
 from collections.abc import Callable
 
-from playwright.async_api import Error as PlaywrightError
-
-from rcbot.application.housekeeping import FILE_RETENTION
 from rcbot.application.ports import CheckRecord
-from rcbot.bootstrap import (
-    Core,
-    browser_options,
-    build_authenticator,
-    build_core,
-    build_session,
-    build_sources,
-    transient_target,
-)
+from rcbot.bootstrap import Core, build_core, build_source, transient_target
 from rcbot.cli.exclusive import run_exclusive
-from rcbot.config.secrets import SecretKey
-from rcbot.domain.errors import ManualStepRequired, RcbotError, SessionExpired
+from rcbot.domain.errors import RcbotError
 from rcbot.domain.models import AvailabilitySnapshot, DeliveryResult, Slot, SourceKind
-from rcbot.infrastructure.gubuy.discovery import DiscoveryRecorder
-from rcbot.infrastructure.gubuy.pages import PageKind
-from rcbot.infrastructure.gubuy.probe import probe_agenda
 from rcbot.infrastructure.win.power import KeepAwake
 from rcbot.runner import run_app
-
-PROBE_MESSAGES = {
-    PageKind.AGENDA: (True, "Шаг «Agenda» открыт напрямую: календарь доступен."),
-    PageKind.STEP1: (
-        False,
-        "Сайт открыл шаг 1 с контрольным вопросом. Бот его не решает (D3): после каждого\n"
-        "такого входа он будет звать вас кнопкой «Готово» в Telegram.",
-    ),
-    PageKind.LOGIN: (False, "Сайт вернул страницу входа: cookies не приняты."),
-    PageKind.BLOCKED: (False, "Сайт ответил отказом защитного шлюза: подождите и не повторяйте."),
-    PageKind.UNKNOWN: (False, "Страница не распознана: признаки шага «Agenda» не найдены."),
-}
-DISCOVERY_KEEP_DAYS = FILE_RETENTION["discovery"][0].days
-RELOGGED_RETRY = (
-    "Сессия истекла, вход выполнен заново. Повторите проверку через минуту: "
-    "календарь не запрашивается дважды подряд."
-)
-
-
-class ReloggedRetryLater(RcbotError):
-    """Сессия истекла посреди проверки; вход выполнен, но вторую проверку сразу не делаем."""
-
-
-def cmd_discover(_: argparse.Namespace) -> int:
-    with build_core(command="discover") as core:
-        return run_exclusive(core.paths, lambda: _discover(core))
-
-
-def _discover(core: Core) -> int:
-    s = core.settings
-    core.secrets.get(SecretKey.DOC_NUMBER)  # регистрирует номер документа в фильтре очистки
-    recorder = DiscoveryRecorder(
-        s.login_url,
-        s.agenda_url,
-        s.location_text,
-        s.months_ahead,
-        core.paths.discovery,
-        browser_options(core, headless=False),
-    )
-    try:
-        result = asyncio.run(recorder.run(core.clock.now()))
-    except (RcbotError, PlaywrightError) as error:
-        print(f"Разведка не завершилась: {type(error).__name__}: {error}", file=sys.stderr)
-        return 1
-    print(f"\nЗаписано запросов: {len(result.records)} → {result.path}")
-    print("\n".join(result.summary()))
-    print(f"Файл очищен от cookies и личных данных; хранится {DISCOVERY_KEEP_DAYS} дней.")
-    return 0
 
 
 def _print_snapshot(snapshot: AvailabilitySnapshot) -> None:
@@ -100,47 +37,13 @@ def _print_snapshot(snapshot: AvailabilitySnapshot) -> None:
 
 async def _check_once(core: Core) -> tuple[SourceKind, AvailabilitySnapshot | RcbotError]:
     """Одна проверка; вид источника нужен и при ошибке: запись в журнале не должна его путать."""
-    session = build_session(core)
-    source, fallback = await build_sources(core)
-    if fallback is not None:
-        await fallback.close()
-    session.subscribe(source.use_cookies)
-    target = transient_target(core)
+    source = build_source(core)
     try:
-        # Странице SAE вход не нужен (R12): без этой проверки ручной check входил бы на bpmgob зря
-        if source.kind is not SourceKind.SAE:
-            await session.ensure()
-        try:
-            return source.kind, await source.fetch(target)
-        except SessionExpired:
-            session.mark_expired()
-            await session.relogin("сессия истекла во время проверки")
-            # Второй запрос сразу после первого нарушил бы минимальный интервал DomSource (60 с)
-            return source.kind, ReloggedRetryLater(RELOGGED_RETRY)
+        return source.kind, await source.fetch(transient_target(core))
     except RcbotError as error:
         return source.kind, error
     finally:
         await source.close()
-
-
-def cmd_login(args: argparse.Namespace) -> int:
-    with build_core(command="login") as core:
-        return run_exclusive(core.paths, lambda: _login(core, check=args.check))
-
-
-def _login(core: Core, *, check: bool) -> int:
-    try:
-        cookies = asyncio.run(build_authenticator(core).login())
-    except RcbotError as error:
-        print(f"Вход не удался: {error}", file=sys.stderr)
-        return 1
-    print(f"Вход выполнен: {len(cookies)} cookies сессии (значения не показываются).")
-    if not check:
-        return 0
-    kind = asyncio.run(probe_agenda(core.settings.agenda_url, cookies, browser_options(core)))
-    ok, message = PROBE_MESSAGES[kind]
-    print(message)
-    return 0 if ok else 1
 
 
 def cmd_check(_: argparse.Namespace) -> int:
@@ -164,12 +67,7 @@ def _check(core: Core) -> int:
                 str(outcome),
             )
         )
-        if isinstance(outcome, ManualStepRequired):
-            print("Сайт требует шаг 1: пройдите его в своём браузере и повторите.", file=sys.stderr)
-        elif isinstance(outcome, ReloggedRetryLater):
-            print(outcome, file=sys.stderr)
-        else:
-            print(f"Проверка не удалась: {type(outcome).__name__}: {outcome}", file=sys.stderr)
+        print(f"Проверка не удалась: {type(outcome).__name__}: {outcome}", file=sys.stderr)
         return 1
     core.journal.check(
         CheckRecord(

@@ -16,18 +16,15 @@ import html
 import logging
 import time as monotonic_time
 import unicodedata
-from collections.abc import Sequence
 from html.parser import HTMLParser
 from pathlib import Path
 
 import aiohttp
 
-from rcbot.application.ports import Clock, SessionCookie
+from rcbot.application.ports import Clock
 from rcbot.domain.errors import RateLimited, SiteUnavailable, UnexpectedResponse
 from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
 from rcbot.infrastructure.gubuy import MAX_STORED_FILES
-from rcbot.infrastructure.gubuy.api_source import read_limited
-from rcbot.infrastructure.gubuy.pages import RATE_LIMIT_STATUSES
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.logging.redaction import REDACTOR
 
@@ -39,6 +36,11 @@ NO_SLOTS_PHRASE = "no hay cupos disponibles"
 # архитектурный тест запрещает их в строках gubuy
 BOOKING_PAGE_MARKERS = ("ubicacion",)
 SNAPSHOT_PREFIX = "sae-"
+# Статусы отказа защитного шлюза: шаг назад по лестнице частоты (D4)
+RATE_LIMIT_STATUSES = frozenset({403, 429})
+# Предел ответа (после распаковки): страница записи — десятки килобайт. Больший ответ не читается
+# в память целиком и считается неожиданным
+MAX_RESPONSE_BYTES = 1024 * 1024
 _SKIPPED_TAGS = frozenset({"script", "style", "noscript", "template"})
 
 
@@ -109,6 +111,30 @@ def seats_open(page: str) -> bool | None:
     return None
 
 
+async def read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
+    """Тело не длиннее `MAX_RESPONSE_BYTES` и признак «ответ больше предела»."""
+    declared = response.content_length
+    if declared is not None and declared > MAX_RESPONSE_BYTES:
+        return "", True
+    raw = bytearray()
+    # read(n) отдаёт сколько есть в буфере, не обязательно n: читаем до конца или до предела
+    while len(raw) <= MAX_RESPONSE_BYTES:
+        chunk = await response.content.read(MAX_RESPONSE_BYTES + 1 - len(raw))
+        if not chunk:
+            break
+        raw += chunk
+    too_large = len(raw) > MAX_RESPONSE_BYTES
+    return _decode(bytes(raw[:MAX_RESPONSE_BYTES]), response.charset), too_large
+
+
+def _decode(raw: bytes, charset: str | None) -> str:
+    """Как `response.text(errors="replace")`: кодировка из заголовка, без неё — UTF-8."""
+    try:
+        return raw.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
 class SaeSource:
     def __init__(self, http: SafeHttp, url: str, snapshots_dir: Path, clock: Clock) -> None:
         self._http = http
@@ -121,9 +147,6 @@ class SaeSource:
     @property
     def kind(self) -> SourceKind:
         return SourceKind.SAE
-
-    def use_cookies(self, cookies: Sequence[SessionCookie]) -> None:
-        """Страница SAE открывается без входа: cookies сессии bpmgob ей не нужны."""
 
     async def fetch(self, target: WatchTarget) -> AvailabilitySnapshot:
         started = monotonic_time.perf_counter()

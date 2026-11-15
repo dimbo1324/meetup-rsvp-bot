@@ -226,12 +226,12 @@ async def test_доставка_без_инцидента_служебное_с�
 
 async def test_save_hour_пишет_строку_и_перезаписывает_тот_же_час(db: Db) -> None:
     hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
-    first = PollStatsHour(hour, checks=10, errors=1, relogins=0, latencies_ms=[10.0, 20.0, 30.0])
+    first = PollStatsHour(hour, checks=10, errors=1, latencies_ms=[10.0, 20.0, 30.0])
     await db.stats.save_hour(first)
-    second = PollStatsHour(hour, checks=25, errors=2, relogins=1, latencies_ms=[5.0])
+    second = PollStatsHour(hour, checks=25, errors=2, latencies_ms=[5.0])
     await db.stats.save_hour(second)
     (stored,) = await db.stats.since(hour)
-    assert (stored.hour, stored.checks, stored.errors, stored.relogins) == (hour, 25, 2, 1)
+    assert (stored.hour, stored.checks, stored.errors) == (hour, 25, 2)
     assert stored.percentile(0.5) == 5.0
 
 
@@ -240,35 +240,35 @@ async def test_после_перезапуска_в_тот_же_час_счёт�
 ) -> None:
     """COL-16: новый процесс (новый репозиторий) дописывает свой итог к строке прошлого."""
     hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
-    await db.stats.save_hour(PollStatsHour(hour, 40, 3, 1, [10.0] * 40))
+    await db.stats.save_hour(PollStatsHour(hour, 40, 3, [10.0] * 40))
     restarted = SqlStatsRepository(db.sessions)
-    await restarted.save_hour(PollStatsHour(hour, 5, 1, 0, [10.0] * 5))
+    await restarted.save_hour(PollStatsHour(hour, 5, 1, [10.0] * 5))
     (stored,) = await db.stats.since(hour)
-    assert (stored.checks, stored.errors, stored.relogins) == (45, 4, 1)
+    assert (stored.checks, stored.errors) == (45, 4)
 
 
 async def test_повторные_сохранения_часа_после_перезапуска_не_задваивают_базу(db: Db) -> None:
     hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
-    await db.stats.save_hour(PollStatsHour(hour, 40, 3, 1, [10.0]))
+    await db.stats.save_hour(PollStatsHour(hour, 40, 3, [10.0]))
     restarted = SqlStatsRepository(db.sessions)
     for checks in (5, 9, 12):  # накопленный итог процесса растёт
-        await restarted.save_hour(PollStatsHour(hour, checks, 1, 0, [10.0]))
+        await restarted.save_hour(PollStatsHour(hour, checks, 1, [10.0]))
     (stored,) = await db.stats.since(hour)
-    assert (stored.checks, stored.errors, stored.relogins) == (52, 4, 1)
+    assert (stored.checks, stored.errors) == (52, 4)
     # Следующий час того же процесса — без базы прошлого часа
-    await restarted.save_hour(PollStatsHour(hour + timedelta(hours=1), 7, 0, 0, [1.0]))
+    await restarted.save_hour(PollStatsHour(hour + timedelta(hours=1), 7, 0, [1.0]))
     stored_next = (await db.stats.since(hour + timedelta(hours=1)))[0]
     assert stored_next.checks == 7
 
 
 async def test_перцентили_после_перезапуска_учитывают_прошлый_процесс(db: Db) -> None:
     hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
-    await db.stats.save_hour(PollStatsHour(hour, 3, 0, 0, [100.0, 100.0, 900.0]))
+    await db.stats.save_hour(PollStatsHour(hour, 3, 0, [100.0, 100.0, 900.0]))
     restarted = SqlStatsRepository(db.sessions)
-    await restarted.save_hour(PollStatsHour(hour, 2, 0, 0, []))  # без замеров — база как есть
+    await restarted.save_hour(PollStatsHour(hour, 2, 0, []))  # без замеров — база как есть
     (stored,) = await db.stats.since(hour)
     assert (stored.percentile(0.0), stored.percentile(1.0)) == (100.0, 900.0)
-    await restarted.save_hour(PollStatsHour(hour, 3, 0, 0, [500.0]))
+    await restarted.save_hour(PollStatsHour(hour, 3, 0, [500.0]))
     (stored,) = await db.stats.since(hour)
     assert stored.percentile(0.95) == 900.0 and stored.percentile(0.5) == 500.0
 
@@ -276,7 +276,7 @@ async def test_перцентили_после_перезапуска_учиты
 async def test_перцентили_считаются_при_записи_и_переживают_чтение(db: Db) -> None:
     hour = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
     latencies = [float(n) for n in range(1, 101)]
-    original = PollStatsHour(hour, 100, 0, 0, latencies)
+    original = PollStatsHour(hour, 100, 0, latencies)
     await db.stats.save_hour(original)
     (stored,) = await db.stats.since(hour)
     assert stored.percentile(0.50) == original.percentile(0.50)
@@ -291,10 +291,10 @@ async def test_перцентили_совпадают_для_одной_и_дв
         base + timedelta(hours=2): [],
     }
     for hour, values in cases.items():
-        await db.stats.save_hour(PollStatsHour(hour, len(values), 0, 0, values))
+        await db.stats.save_hour(PollStatsHour(hour, len(values), 0, values))
     stored = {h.hour: h for h in await db.stats.since(base)}
     for hour, values in cases.items():
-        expected = PollStatsHour(hour, 0, 0, 0, values)
+        expected = PollStatsHour(hour, 0, 0, values)
         assert stored[hour].percentile(0.50) == expected.percentile(0.50), values
         assert stored[hour].percentile(0.95) == expected.percentile(0.95), values
 
@@ -302,7 +302,7 @@ async def test_перцентили_совпадают_для_одной_и_дв
 async def test_since_возвращает_часы_не_раньше_границы_по_порядку(db: Db) -> None:
     base = datetime(2026, 11, 12, 0, 0, tzinfo=UTC)
     for hours in (5, 1, 3, 2, 4):  # записываем вразнобой
-        await db.stats.save_hour(PollStatsHour(base + timedelta(hours=hours), hours, 0, 0, [1.0]))
+        await db.stats.save_hour(PollStatsHour(base + timedelta(hours=hours), hours, 0, [1.0]))
     got = await db.stats.since(base + timedelta(hours=3))
     assert [h.checks for h in got] == [3, 4, 5]  # граница включается
     assert await db.stats.since(base + timedelta(hours=6)) == []

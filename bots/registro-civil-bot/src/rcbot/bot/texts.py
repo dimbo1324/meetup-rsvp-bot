@@ -6,14 +6,12 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from rcbot.application.control import MAX_PAUSE_MINUTES, IncidentView, StatusView
-from rcbot.config.settings import MIN_DOM_POLL_INTERVAL_SEC, MIN_POLL_INTERVAL_SEC
+from rcbot.config.settings import MIN_POLL_INTERVAL_SEC
 from rcbot.domain.models import AppEvent, Channel, DeliveryResult, PollState
 
 STATE_NAMES = {
     PollState.RUNNING: "работает",
-    PollState.REAUTH: "входит на сайт заново",
     PollState.BACKOFF: "замедлился из-за ошибок сайта",
-    PollState.NEEDS_MANUAL: "ждёт, пока вы пройдёте шаг 1",
     PollState.PAUSED: "на паузе",
 }
 CHANNEL_NAMES = {Channel.TELEGRAM: "Telegram", Channel.NTFY: "ntfy", Channel.CALL: "звонок"}
@@ -30,35 +28,22 @@ HELP = f"""Команды:
 /interval <сек> — интервал опроса (не меньше {_MIN_INTERVAL})
 /test — проверить все каналы уведомлений
 /last — последние 5 инцидентов
-/relogin — войти на сайт заново
 /cleanup — очистить старые данные сейчас
 /menu — меню
 Подтвердить тревогу: кнопка «✅ Вижу» или слово «ок»."""
 
 NOT_ACKED = "Нечего подтверждать: тревоги сейчас нет."
 ACKED = "Принято: повторы остановлены. Инцидент открыт, пока места есть."
-MANUAL_THANKS = "Спасибо, проверяю календарь."
 STARTED = "▶️ rcbot запущен. Источник: {source}, интервал ≈ {interval:.0f} с. /status — состояние."
 STOPPED = "⏹ rcbot остановлен."
-INTERVAL_SET = (
-    "Интервал опроса: {value:.0f} с (в режиме браузера фактически не чаще раза в "
-    f"{MIN_DOM_POLL_INTERVAL_SEC:.0f} с)."
-)
+INTERVAL_SET = "Интервал опроса: {value:.0f} с."
 INTERVAL_BAD = f"Нужно число секунд, не меньше {_MIN_INTERVAL}: /interval 20"
 # Дольше года пауза «на минуты» не бывает; для паузы без срока есть /pause без числа
 PAUSE_BAD = f"Нужно число минут от 1 до {MAX_PAUSE_MINUTES}: /pause 30 (или просто /pause)"
 PAUSED = "Пауза до {until}. /resume — продолжить."
 PAUSED_FOREVER = "Пауза до команды /resume."
 RESUMED = "Опрос продолжен."
-RELOGIN_STARTED = "Вхожу заново…"
-RELOGIN_OK = "Вход выполнен."
-RELOGIN_FAILED = "Вход не удался: {error}"
 MENU_STALE = "Меню устарело: откройте заново /menu"
-
-
-def relogin_text(error: str) -> str:
-    """Итог повторного входа: пустая строка ошибки — вход выполнен."""
-    return RELOGIN_FAILED.format(error=error) if error else RELOGIN_OK
 
 
 def moment(at: datetime, tz: ZoneInfo) -> str:
@@ -103,8 +88,7 @@ def status_text(view: StatusView, tz: ZoneInfo) -> str:
         f"Месяцев вперёд: {view.months_ahead}",
         f"Последняя проверка: {_ago(view.now, s.last_check_at)}",
         f"Время ответа: последнее {s.last_latency_ms or 0:.0f} мс, медиана {p50 or 0:.0f} мс",
-        f"Проверок: {s.checks_total}, ошибок: {s.errors_total}, "
-        f"входов за час: {view.logins_last_hour}",
+        f"Проверок: {s.checks_total}, ошибок: {s.errors_total}",
         f"Работает: {_uptime(view.now - s.started_at)}",
         f"Размер папки: {human_size(view.folder_bytes)}",
         f"Журнал на рабочем столе: {human_size(view.journal_bytes)}",
@@ -118,8 +102,6 @@ def status_text(view: StatusView, tz: ZoneInfo) -> str:
         lines.append(
             f"Открыт инцидент №{view.incident.id}: {len(view.incident.slots)} мест, тревога {acked}"
         )
-    if view.quiet_remaining_sec > 0:
-        lines.append(f"Повторный вход отложен ещё на {view.quiet_remaining_sec / 60:.0f} мин (D5)")
     if s.last_error:
         lines.append(f"Последняя ошибка: {s.last_error} ({_ago(view.now, s.last_error_at)})")
     if view.folder_bytes is not None and view.folder_bytes > FOLDER_WARN_BYTES:

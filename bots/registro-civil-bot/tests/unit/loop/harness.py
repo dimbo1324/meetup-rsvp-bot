@@ -10,14 +10,13 @@ from __future__ import annotations
 import asyncio
 import itertools
 import random
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from tests.fakes import (
     T0,
     TARGET,
-    FakeAuthenticator,
     FakeSource,
     ManualClock,
     MemoryEventLog,
@@ -30,9 +29,8 @@ from tests.fakes import (
 
 from rcbot.application.bus import EventBus
 from rcbot.application.poll_loop import PollLoop
-from rcbot.application.ports import AvailabilitySource, SessionCookie
+from rcbot.application.ports import AvailabilitySource
 from rcbot.application.runtime import RuntimeSettings, RuntimeStore
-from rcbot.application.session_manager import SessionManager
 from rcbot.domain.detector import Detector
 from rcbot.domain.events import DomainEvent
 from rcbot.domain.models import AvailabilitySnapshot, SourceKind, WatchTarget
@@ -46,7 +44,7 @@ class TimedSource(FakeSource):
         script: Sequence[ScriptItem] = (),
         *,
         clock: ManualClock,
-        kind: SourceKind = SourceKind.API,
+        kind: SourceKind = SourceKind.SAE,
         **kwargs: object,
     ) -> None:
         super().__init__(script, kind=kind, clock=clock, **kwargs)  # type: ignore[arg-type]
@@ -65,8 +63,6 @@ class Rig:
     clock: ManualClock
     loop: PollLoop
     source: TimedSource
-    session: SessionManager
-    auth: FakeAuthenticator
     bus: EventBus
     runtime: RuntimeSettings
     kv: MemoryKV
@@ -75,7 +71,6 @@ class Rig:
     journal: RecordingJournal
     events: list[DomainEvent] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
-    fallback: TimedSource | None = None
     t_start: float = 1000.0
 
     async def start(self) -> None:
@@ -114,18 +109,12 @@ class Rig:
 def make_rig(
     script: Sequence[ScriptItem] = (),
     *,
-    kind: SourceKind = SourceKind.API,
-    fallback_script: Sequence[ScriptItem] | None = None,
-    fallback_kind: SourceKind = SourceKind.DOM,
+    kind: SourceKind = SourceKind.SAE,
     jitter: float = 0.0,
     seed: int | None = None,
     rng: random.Random | None = None,
     base_interval: float = 20.0,
     ladder_elapsed: timedelta = timedelta(hours=18),
-    max_logins_per_hour: int = 6,
-    quiet_after_alert_sec: float = 600.0,
-    failures: Sequence[BaseException] = (),
-    auth_delay: Callable[[], Awaitable[None]] | None = None,
     paused_until: datetime | None = None,
     months: int = 6,
     start: datetime = T0,
@@ -133,16 +122,6 @@ def make_rig(
     """Собрать цикл. По умолчанию лестница D4 уже на базовом интервале (прошло 18 часов)."""
     clock = ManualClock(start)
     source = TimedSource(script, clock=clock, kind=kind)
-    fallback = (
-        TimedSource(fallback_script, clock=clock, kind=fallback_kind)
-        if fallback_script is not None
-        else None
-    )
-    auth = FakeAuthenticator(failures=failures, delay=auth_delay)
-    session = SessionManager(auth, clock, max_logins_per_hour, quiet_after_alert_sec)
-    session.subscribe(source.use_cookies)
-    if fallback is not None:
-        session.subscribe(fallback.use_cookies)
     bus = EventBus()
     kv = MemoryKV()
     runtime = RuntimeSettings(
@@ -155,9 +134,7 @@ def make_rig(
     event_log = MemoryEventLog()
     journal = RecordingJournal()
     loop = PollLoop(
-        primary=source,
-        fallback=fallback,
-        session=session,
+        source=source,
         detector=Detector(),
         bus=bus,
         clock=clock,
@@ -170,10 +147,7 @@ def make_rig(
         rng=rng or random.Random(0 if seed is None else seed),
         journal=journal,
     )
-    rig = Rig(
-        clock, loop, source, session, auth, bus, runtime, kv, stats, event_log, journal,
-        fallback=fallback,
-    )  # fmt: skip
+    rig = Rig(clock, loop, source, bus, runtime, kv, stats, event_log, journal)
     rig.t_start = clock.monotonic()
 
     async def collect(event: DomainEvent) -> None:
@@ -186,10 +160,6 @@ def make_rig(
 def spans(moments: Sequence[float]) -> list[float]:
     """Промежутки между соседними моментами."""
     return [b - a for a, b in itertools.pairwise(moments)]
-
-
-def cookie(name: str = "simple_bpm_session") -> SessionCookie:
-    return SessionCookie(name, "TEST", "bpmgob.mec.gub.uy")
 
 
 def as_source(source: TimedSource) -> AvailabilitySource:

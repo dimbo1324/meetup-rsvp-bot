@@ -225,32 +225,12 @@ def test_ссылка_на_agenda_только_в_тексте_для_telegram_�
 # --- служебные, неподтверждённые, тестовые ---
 
 
-def test_неподтверждённая_находка_только_в_telegram_без_кнопки_и_звонка() -> None:
-    alert = composer().unconfirmed_alert(snapshot(feb(23)))
-    assert alert.kind is AlertKind.UNCONFIRMED
-    assert alert.channels == TELEGRAM_ONLY == frozenset({Channel.TELEGRAM})
-    assert alert.action is AlertAction.NONE
-    assert alert.call_text == "" and alert.push_text == ""
-    assert alert.text.splitlines()[0].startswith("🟡 SAE")
-    assert "• 23.02.2027 (вт)" in alert.text
-
-
 def test_пропажа_мест_только_в_telegram_и_с_локальным_временем() -> None:
     alert = composer().gone(T0)
     assert alert.kind is AlertKind.SERVICE
     assert alert.channels == TELEGRAM_ONLY
     assert alert.action is AlertAction.NONE
     assert alert.text == "⚪ Места пропали (12:00:00): три проверки подряд без мест."
-
-
-def test_ручной_шаг_с_кнопкой_готово_только_в_telegram() -> None:
-    alert = composer().manual_step("страница шага 1")
-    assert alert.kind is AlertKind.SERVICE
-    assert alert.action is AlertAction.MANUAL_DONE
-    assert alert.channels == TELEGRAM_ONLY
-    assert "Причина: страница шага 1" in alert.text
-    assert AGENDA_URL in alert.text
-    assert alert.call_text == "" and alert.push_text == ""
 
 
 def test_служебное_сообщение_только_в_telegram_без_кнопки() -> None:
@@ -291,8 +271,6 @@ def test_тестовый_звонок_без_запасного_текста_о
     for alert in (
         composer().gone(T0),
         composer().service("x"),
-        composer().unconfirmed_alert(snapshot(feb(23))),
-        composer().manual_step("x"),
     ):
         assert alert.call_fallback_text == ""
 
@@ -300,20 +278,16 @@ def test_тестовый_звонок_без_запасного_текста_о
 def test_служебные_тексты_собирает_composer_и_число_проверок_берётся_из_детектора() -> None:
     from rcbot.application.messages import GONE_REASON, MessageComposer
     from rcbot.domain.detector import EMPTY_CHECKS_TO_CLOSE
-    from rcbot.domain.models import SourceKind
 
     assert EMPTY_CHECKS_TO_CLOSE == 3 and GONE_REASON == "три проверки подряд без мест"
     c = composer()
-    assert c.source_switched(SourceKind.API, SourceKind.DOM, "тест").text == (
-        "🔀 Источник данных: api → dom. Причина: тест."
-    )
     assert c.slowed_down("429").text == "⏸ Бот замедлился: 429. Опрос продолжится сам."
     assert c.poll_resumed().text == "▶️ Опрос снова работает."
-    assert c.poll_hung("200 с") == "⚠️ Цикл опроса завис (200 с). Перезапускаю его и браузер."
-    for alert in (c.source_switched(SourceKind.API, SourceKind.DOM, "x"), c.poll_resumed()):
+    assert c.poll_hung("200 с") == "⚠️ Цикл опроса завис (200 с). Перезапускаю его."
+    for alert in (c.slowed_down("x"), c.poll_resumed()):
         assert alert.channels == TELEGRAM_ONLY and alert.call_text == ""
     report = MessageComposer.daily_report(
-        checks=1, errors=0, relogins=0, median_ms=1, p95_ms=2, incidents=0, size_bytes=2 << 20
+        checks=1, errors=0, median_ms=1, p95_ms=2, incidents=0, size_bytes=2 << 20
     )
     assert "Размер папки: 2 МБ" in report
 

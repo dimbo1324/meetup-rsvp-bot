@@ -1,9 +1,9 @@
 """Сквозная проверка утечек (SPEC 0.3 п. 6, 2.6, 7; инвариант 6): «канарейки» через весь бот.
 
-Сценарий (`scenario.py`) прогоняет вход с ошибкой, ответы сайта с эхом секретов, карантин,
-рассылку по каналам, журнал на рабочем столе и БД. Затем читается каждый файл и каждое
-сообщение канала: канарейки там быть не должно. Тест с отключённым фильтром обязан падать,
-иначе он ничего не проверяет.
+Сценарий (`scenario.py`) прогоняет ответы сайта с эхом секретов, снимки страницы SAE, ошибки
+с секретами в тексте, рассылку по каналам, журнал на рабочем столе и БД. Затем читается каждый
+файл и каждое сообщение канала: канарейки там быть не должно. Тест с отключённым фильтром
+обязан падать, иначе он ничего не проверяет.
 """
 
 from __future__ import annotations
@@ -38,9 +38,8 @@ def _leaks(root: Path, values: list[str]) -> list[str]:
 
 def test_сценарий_прошёл_все_ветки_и_оставил_следы(art: Artifacts) -> None:
     """Без этого «чисто» могло бы значить «ничего не произошло»."""
-    assert "backoff" in art.states
-    assert "reauth" in art.states or "running" in art.states
-    assert len(list(art.paths.quarantine.glob("*.json"))) == 2
+    assert "backoff" in art.states and "running" in art.states
+    assert len(list(art.paths.shots.glob("sae-*-unknown.html"))) == 1
     assert art.paths.log_file.stat().st_size > 0
     journal = art.journal_dir
     assert list((journal / "checks").glob("*.jsonl"))
@@ -51,7 +50,7 @@ def test_сценарий_прошёл_все_ветки_и_оставил_сл�
     assert art.database_files()
     assert art.ntfy
     assert art.call
-    assert len(art.api) == 3
+    assert len(art.site) == 3
     assert any(C.tramite in text for text in art.owner_texts)
 
 
@@ -63,12 +62,9 @@ def test_журнал_на_рабочем_столе_без_канареек(art
     assert _leaks(art.journal_dir, C.all_values()) == []
 
 
-def test_карантин_без_канареек_и_без_заголовков(art: Artifacts) -> None:
-    files = sorted(art.paths.quarantine.glob("*.json"))
-    assert _leaks(art.paths.quarantine, C.all_values()) == []
-    for file in files:
-        record = json.loads(file.read_text(encoding="utf-8"))
-        assert set(record) == {"at", "source", "status", "content_type", "body"}
+def test_снимки_страницы_без_канареек(art: Artifacts) -> None:
+    assert list(art.paths.shots.glob("sae-*.html"))
+    assert _leaks(art.paths.shots, C.all_values()) == []
 
 
 def test_status_json_без_канареек_но_с_диагностикой(art: Artifacts) -> None:
@@ -76,7 +72,7 @@ def test_status_json_без_канареек_но_с_диагностикой(ar
     assert [v for v in C.all_values() if v in text] == []
     status = json.loads(text)
     assert status["state"]
-    assert "вход не удался" in status["last_error"] or status["last_error"]
+    assert status["last_error"]
 
 
 def test_весь_каталог_бота_и_tmp_кроме_бд_без_канареек(art: Artifacts) -> None:
@@ -88,14 +84,14 @@ def test_весь_каталог_бота_и_tmp_кроме_бд_без_кана
     assert found == []
 
 
-SECRETS_ONLY = [C.doc_number, C.password, C.telegram_token, C.ntfy_topic, C.call_user]
+SECRETS_ONLY = [C.telegram_token, C.ntfy_topic, C.call_user, C.chat_id]
 
 
 def _db_leaks(art: Artifacts, values: list[str]) -> list[str]:
     text = sqlite_text(art.paths.database)
     in_rows = [v[:12] for v in values if v in text]
     in_bytes = [
-        f for f in find_in_tree(art.paths.data, values) if "sqlite3" in f and "quarantine" not in f
+        f for f in find_in_tree(art.paths.data, values) if "sqlite3" in f and "shots" not in f
     ]
     return in_rows + in_bytes
 
@@ -161,12 +157,12 @@ def test_владельцу_в_telegram_уходят_номер_заявки_и_
 
 
 def test_запросы_к_сайту_не_несут_лишних_данных(art: Artifacts) -> None:
-    for request in art.api:
+    for request in art.site:
         assert request.method == "GET"
         assert not request.body
         text = json.dumps(request.headers) + json.dumps(request.query)
         assert [
-            v for v in (C.doc_number, C.password, C.telegram_token, C.ntfy_topic) if v in text
+            v for v in (C.telegram_token, C.ntfy_topic, C.call_user, C.chat_id) if v in text
         ] == []
 
 
@@ -179,11 +175,11 @@ async def test_контроль_без_фильтра_канарейки_вид�
     tls_server: LocalTlsServer,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Если отключить редактор, канарейки обязаны появиться в логе, журнале и карантине."""
+    """Если отключить редактор, канарейки обязаны появиться в логе, журнале и снимках."""
     monkeypatch.setattr(Redactor, "redact", lambda self, text: text)
     art = await run_scenario(tmp_path, paths, tls_server, monkeypatch)  # type: ignore[arg-type]
     assert _leaks(art.paths.logs, C.all_values()), "лог чист без фильтра: проверка слепа"
     assert _leaks(art.journal_dir, C.all_values()), "журнал чист без фильтра: проверка слепа"
-    assert _leaks(art.paths.quarantine, C.all_values()), "карантин чист без фильтра: проверка слепа"
+    assert _leaks(art.paths.shots, C.all_values()), "снимки чисты без фильтра: проверка слепа"
     status = (art.journal_dir / "status.json").read_text(encoding="utf-8")
     assert any(v in status for v in C.all_values()), "status.json чист без фильтра"

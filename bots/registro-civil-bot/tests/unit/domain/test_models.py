@@ -133,39 +133,39 @@ def test_свойство_отпечаток_равен_тогда_и_тольк
 
 def test_снимок_отвергает_naive_datetime() -> None:
     with pytest.raises(ValueError, match="aware"):
-        AvailabilitySnapshot(1, datetime(2026, 11, 12, 15, 0), slots(23), SourceKind.DOM, 5.0)
+        AvailabilitySnapshot(1, datetime(2026, 11, 12, 15, 0), slots(23), SourceKind.SAE, 5.0)
 
 
 def test_снимок_принимает_aware_в_любой_зоне() -> None:
     moment = datetime(2026, 11, 12, 12, 0, tzinfo=timezone(timedelta(hours=-3)))
-    snapshot = AvailabilitySnapshot(1, moment, slots(23), SourceKind.API, 5.0)
+    snapshot = AvailabilitySnapshot(1, moment, slots(23), SourceKind.SAE, 5.0)
     assert snapshot.observed_at == T0
 
 
 def test_снимок_сам_считает_отпечаток() -> None:
     found = slots(23, 24)
-    snapshot = AvailabilitySnapshot(1, T0, found, SourceKind.DOM, 5.0)
+    snapshot = AvailabilitySnapshot(1, T0, found, SourceKind.SAE, 5.0)
     assert snapshot.fingerprint == fingerprint_of(found)
 
 
 def test_снимок_пустого_календаря_имеет_непустой_отпечаток() -> None:
-    snapshot = AvailabilitySnapshot(1, T0, frozenset(), SourceKind.DOM, 5.0)
+    snapshot = AvailabilitySnapshot(1, T0, frozenset(), SourceKind.SAE, 5.0)
     assert snapshot.fingerprint
     assert snapshot.fingerprint == fingerprint_of(frozenset())
 
 
 def test_снимок_сохраняет_переданный_отпечаток() -> None:
-    snapshot = AvailabilitySnapshot(1, T0, slots(23), SourceKind.DOM, 5.0, fingerprint="abc")
+    snapshot = AvailabilitySnapshot(1, T0, slots(23), SourceKind.SAE, 5.0, fingerprint="abc")
     assert snapshot.fingerprint == "abc"
 
 
 def test_has_slots_отражает_непустоту_множества() -> None:
-    assert not AvailabilitySnapshot(1, T0, frozenset(), SourceKind.DOM, 1.0).has_slots
-    assert AvailabilitySnapshot(1, T0, slots(23), SourceKind.DOM, 1.0).has_slots
+    assert not AvailabilitySnapshot(1, T0, frozenset(), SourceKind.SAE, 1.0).has_slots
+    assert AvailabilitySnapshot(1, T0, slots(23), SourceKind.SAE, 1.0).has_slots
 
 
 def test_снимок_неизменяем() -> None:
-    snapshot = AvailabilitySnapshot(1, T0, slots(23), SourceKind.DOM, 1.0)
+    snapshot = AvailabilitySnapshot(1, T0, slots(23), SourceKind.SAE, 1.0)
     with pytest.raises(dataclasses.FrozenInstanceError):
         snapshot.latency_ms = 9.0  # type: ignore[misc]
 
@@ -246,7 +246,7 @@ def test_iso_days_дни_без_повторов_по_порядку_время_
 def test_счётчики_часа_по_умолчанию_нулевые_и_списки_не_общие() -> None:
     first, second = PollStatsHour(T0), PollStatsHour(T0)
     first.latencies_ms.append(1.0)
-    assert (first.checks, first.errors, first.relogins) == (0, 0, 0)
+    assert (first.checks, first.errors) == (0, 0)
     assert second.latencies_ms == []
 
 
@@ -294,17 +294,11 @@ def test_инцидент_открыт_и_не_подтверждён_по_ум�
 
 def test_значения_перечислений_зафиксированы_они_лежат_в_бд_и_настройках() -> None:
     assert [c.value for c in Channel] == ["telegram", "ntfy", "call"]
-    assert {s.value for s in SourceKind} == {"api", "dom", "sae"}
-    assert {s.value for s in PollState} == {
-        "running",
-        "reauth",
-        "backoff",
-        "needs_manual",
-        "paused",
-    }
-    assert {k.value for k in AlertKind} == {"appeared", "changed", "service", "unconfirmed", "test"}
+    assert {s.value for s in SourceKind} == {"sae"}
+    assert {s.value for s in PollState} == {"running", "backoff", "paused"}
+    assert {k.value for k in AlertKind} == {"appeared", "changed", "service", "test"}
     assert {s.value for s in IncidentStatus} == {"open", "closed"}
-    assert {a.value for a in AlertAction} == {"none", "ack", "manual_done"}
+    assert {a.value for a in AlertAction} == {"none", "ack"}
 
 
 def test_источник_и_канал_создаются_из_строки() -> None:

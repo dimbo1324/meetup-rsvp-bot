@@ -11,7 +11,6 @@ import pytest
 
 from rcbot.application import housekeeping
 from rcbot.domain.models import Channel, SourceKind
-from tests.e2e.helpers import NoLogin
 from tests.e2e.stand import Stand, fake_source
 from tests.fakes import slots
 
@@ -25,8 +24,8 @@ def script(ticks: int, every: int = 50) -> list:
 
 
 async def build(make_stand, stand_clock, ticks: int, **kwargs) -> Stand:
-    source = fake_source(stand_clock, *script(ticks), kind=SourceKind.API)
-    return await make_stand(primary=source, auth=NoLogin(), **{**STEADY, **kwargs})
+    source = fake_source(stand_clock, *script(ticks), kind=SourceKind.SAE)
+    return await make_stand(primary=source, **{**STEADY, **kwargs})
 
 
 @pytest.mark.slow

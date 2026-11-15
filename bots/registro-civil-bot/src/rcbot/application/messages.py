@@ -19,7 +19,6 @@ from rcbot.domain.models import (
     AvailabilitySnapshot,
     Channel,
     Slot,
-    SourceKind,
 )
 
 WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
@@ -111,19 +110,9 @@ class MessageComposer:
             action=AlertAction.ACK,
         )
 
-    def unconfirmed_alert(self, snapshot: AvailabilitySnapshot) -> Alert:
-        lines = [
-            "🟡 SAE показывает места (неподтверждённые, источник вторичный):",
-            *_day_lines(snapshot.slots),
-        ]
-        return Alert(AlertKind.UNCONFIRMED, "\n".join(lines), channels=TELEGRAM_ONLY)
-
     def gone(self, at: datetime) -> Alert:
         text = f"⚪ Места пропали ({self.local(at):%H:%M:%S}): {GONE_REASON}."
         return Alert(AlertKind.SERVICE, text, channels=TELEGRAM_ONLY)
-
-    def source_switched(self, old: SourceKind, new: SourceKind, reason: str) -> Alert:
-        return self.service(f"🔀 Источник данных: {old} → {new}. Причина: {reason}.")
 
     def slowed_down(self, reason: str) -> Alert:
         return self.service(f"⏸ Бот замедлился: {reason}. Опрос продолжится сам.")
@@ -133,14 +122,13 @@ class MessageComposer:
 
     @staticmethod
     def poll_hung(problem: str) -> str:
-        return f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его и браузер."
+        return f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его."
 
     @staticmethod
     def daily_report(
         *,
         checks: int,
         errors: int,
-        relogins: int,
         median_ms: float,
         p95_ms: float,
         incidents: int,
@@ -148,7 +136,7 @@ class MessageComposer:
     ) -> str:
         lines = [
             "📋 Отчёт rcbot за сутки",
-            f"Проверок: {checks}, ошибок: {errors}, входов на сайт: {relogins}",
+            f"Проверок: {checks}, ошибок: {errors}",
             f"Время ответа: медиана {median_ms:.0f} мс, 95-й перцентиль {p95_ms:.0f} мс",
             f"Инцидентов: {incidents}",
         ]
@@ -157,17 +145,6 @@ class MessageComposer:
         if checks == 0:
             lines.append("⚠️ За сутки не было ни одной успешной проверки.")
         return "\n".join(lines)
-
-    def manual_step(self, reason: str) -> Alert:
-        text = (
-            "🟠 Сайт требует пройти шаг 1 «Datos necesarios» с контрольным вопросом.\n"
-            "Бот на него не отвечает. Откройте заявку в своём браузере, пройдите шаг 1 и нажмите\n"
-            "«Готово» — проверка продолжится.\n"
-            f"{self.agenda_url}\nПричина: {reason}"
-        )
-        return Alert(
-            AlertKind.SERVICE, text, action=AlertAction.MANUAL_DONE, channels=TELEGRAM_ONLY
-        )
 
     def service(self, text: str) -> Alert:
         return Alert(AlertKind.SERVICE, text, channels=TELEGRAM_ONLY)

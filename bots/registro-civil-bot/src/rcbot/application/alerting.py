@@ -17,16 +17,7 @@ from rcbot.application.incidents import IncidentBook
 from rcbot.application.messages import MessageComposer
 from rcbot.application.ports import Clock, Coordinator, Journal, Notifier, NullJournal
 from rcbot.application.runtime import RuntimeSettings
-from rcbot.application.session_manager import SessionManager
-from rcbot.domain.events import (
-    ManualActionRequired,
-    PollerStateChanged,
-    SlotsAppeared,
-    SlotsChanged,
-    SlotsGone,
-    SourceSwitched,
-    UnconfirmedSlotsSeen,
-)
+from rcbot.domain.events import PollerStateChanged, SlotsAppeared, SlotsChanged, SlotsGone
 from rcbot.domain.models import Alert, AlertKind, Channel, DeliveryResult, PollState
 
 logger = logging.getLogger(__name__)
@@ -43,7 +34,7 @@ def send_timeout(channel: Channel) -> float:
 
 WARMUP_EVERY_SEC = 240.0
 # Состояния, о которых владелец узнаёт сообщением; выход из них сообщается «▶️ снова работает»
-DEGRADED = frozenset({PollState.BACKOFF, PollState.NEEDS_MANUAL})
+DEGRADED = frozenset({PollState.BACKOFF})
 # Доставки пишутся в журнал инцидентов только у тревог о местах
 SLOT_ALERTS = frozenset({AlertKind.APPEARED, AlertKind.CHANGED})
 
@@ -61,7 +52,6 @@ class AlertOrchestrator:
         policies: dict[Channel, RepeatPolicy],
         composer: MessageComposer,
         book: IncidentBook,
-        session: SessionManager,
         runtime: RuntimeSettings,
         clock: Clock,
         coordinator: Coordinator,
@@ -71,7 +61,6 @@ class AlertOrchestrator:
         self._policies = policies
         self._composer = composer
         self._book = book
-        self._session = session
         self._runtime = runtime
         self._clock = clock
         self._coordinator = coordinator
@@ -87,11 +76,9 @@ class AlertOrchestrator:
     async def on_appeared(self, event: SlotsAppeared) -> None:
         if not await self._coordinator.should_alert(event.snapshot.fingerprint):
             return
-        self._session.quiet_after_alert()
         await self._campaign(self._composer.slots_alert(event.snapshot, self._clock.now()))
 
     async def on_changed(self, event: SlotsChanged) -> None:
-        self._session.quiet_after_alert()
         alert = self._composer.slots_alert(event.snapshot, self._clock.now(), added=event.added)
         await self._campaign(alert)
 
@@ -99,18 +86,7 @@ class AlertOrchestrator:
         self._cancel_repeats()
         await self._wave(self._composer.gone(event.at), attempt=1)
 
-    async def on_unconfirmed(self, event: UnconfirmedSlotsSeen) -> None:
-        await self._wave(self._composer.unconfirmed_alert(event.snapshot), attempt=1)
-
-    async def on_manual(self, event: ManualActionRequired) -> None:
-        await self._wave(self._composer.manual_step(event.reason), attempt=1)
-
-    async def on_source_switched(self, event: SourceSwitched) -> None:
-        alert = self._composer.source_switched(event.old, event.new, event.reason)
-        await self._wave(alert, attempt=1)
-
     async def on_state_changed(self, event: PollerStateChanged) -> None:
-        # NEEDS_MANUAL сообщается отдельным сообщением с кнопкой; REAUTH обычно проходит сам.
         # «Снова работает» — при первом RUNNING после любой сообщённой деградации, даже если
         # между ними была пауза (BACKOFF → PAUSED → RUNNING)
         if event.new in DEGRADED or event.old in DEGRADED:
