@@ -127,11 +127,6 @@ def render_target(root: Path, target: Target) -> str:
     return normalize("\n\n---\n\n".join(parts))
 
 
-def render(root: Path) -> str:
-    """Корневой AGENTS.md."""
-    return render_target(root, discover_targets(root)[0])
-
-
 def kib(text: str) -> float:
     return len(text.encode("utf-8")) / 1024
 

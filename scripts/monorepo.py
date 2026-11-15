@@ -14,7 +14,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BOTS_DIR = "bots"
-PACKAGES_DIR = "packages"
 
 # Файлы, без которых каталог бота не считается самостоятельным проектом.
 REQUIRED_FILES = (
