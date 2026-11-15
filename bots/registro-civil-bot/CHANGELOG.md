@@ -93,6 +93,18 @@
 
 ### Удалено
 
+- **Путь bpmgob целиком (решение R13).** Вход через ID Uruguay, браузер и зависимость
+  `playwright` (с ней шаг `playwright install chromium` из `dev.py setup`, CI и быстрого старта),
+  `ApiSource`, `DomSource`, разведка, команды `rcbot discover` и `rcbot login`, состояния `REAUTH` и
+  `NEEDS_MANUAL`, кнопка «Готово», команда и кнопка «Войти заново» (`/relogin`), смена источника,
+  «неподтверждённые» находки SAE, настройки `RCBOT_SAE_SOURCE_ENABLED`, `RCBOT_API_URL`,
+  `RCBOT_LOGIN_URL`, `RCBOT_DOC_COUNTRY`, `RCBOT_DOC_TYPE`, `RCBOT_HEADLESS`, `RCBOT_BROWSER`,
+  `RCBOT_RELOGIN_MAX_PER_HOUR` (лишние строки в `.env` игнорируются), секреты «номер документа» и
+  «пароль gub.uy». Страница SAE остаётся единственным источником; всё, что бот умел через неё,
+  работает как раньше. `rcbot init` и `rcbot uninstall` удаляют из Credential Manager номер
+  паспорта и пароль прежних версий; `rcbot purge` удаляет `data/quarantine/`, `data/discovery/` и
+  `.browsers/`. Список разрешённых хостов: `sae.mec.gub.uy`, Telegram, ntfy, CallMeBot, «сторож».
+  В ежедневном отчёте и `/status` больше нет числа входов.
 - Тестовая зависимость `aioresponses`, добавленная на этапе 0: 0.7.9 несовместима с aiohttp 3.14
   (решение R7); HTTP-тесты идут к локальному HTTPS-серверу.
 

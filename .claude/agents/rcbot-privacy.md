@@ -12,8 +12,9 @@ tools: Read, Grep, Glob, Bash
 
 Чек-лист:
 
-- Секреты (пароль gub.uy, номер документа, токены, тема ntfy, @username) — только через
-  keyring и `SecretStr`; в `.env`, коде, тестах и фикстурах их нет.
+- Секреты (токен Telegram, chat_id, тема ntfy, @username) — только через keyring и
+  `SecretStr`; в `.env`, коде, тестах и фикстурах их нет. Номер паспорта и пароль gub.uy бот не
+  хранит (R13): `init` и `uninstall` удаляют их из Credential Manager, если они остались.
 - `RedactionFilter` вырезает секреты, номер документа, cookies, заголовки
   `Cookie`/`Set-Cookie`/`Authorization`; есть тест, ищущий известные секреты в логах.
 - Номер заявки и этапа — только в локальном `.env` (решение R1); в diff, фикстурах и

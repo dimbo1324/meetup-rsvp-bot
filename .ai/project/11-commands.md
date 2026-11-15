@@ -11,7 +11,7 @@
 | Команда | Что делает |
 |---|---|
 | `doctor` | Окружение: Python 3.14, uv, git, docker (необязателен), `.venv`, pre-commit-хук, `.env` каждого бота |
-| `setup [--bot]` | `uv sync --all-packages --all-groups`, `.env` ботов из `.env.example`, шаги `setup` ботов (например, Chromium), pre-commit-хуки |
+| `setup [--bot]` | `uv sync --all-packages --all-groups`, `.env` ботов из `.env.example`, шаги `setup` ботов (если бот их задаёт), pre-commit-хуки |
 | `bots` | Список ботов: каталог, пакет, платформа |
 | `sync-agents` | Перегенерирует корневой и вложенные `AGENTS.md` из `.ai/`; `--check` только проверяет |
 | `check-layout` | Контракт каталога каждого бота и запрет импорта пакета одного бота из другого |

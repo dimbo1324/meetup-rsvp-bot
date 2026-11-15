@@ -12,7 +12,7 @@
 - `dev.py test`: полный прогон бота проверяет порог покрытия из `[tool.monorepo]`
   (`coverage` — пакеты, `coverage_min` — процент, необязательные ключи); `resolved_env` не
   перекрывает переменные, уже заданные в окружении запуска.
-- CI: Windows-задание ставит Chromium для тестов бота.
+- CI: Windows-задание больше не ставит Chromium: rcbot работает без браузера (решение R13 бота).
 
 ### Исправлено
 
@@ -25,7 +25,7 @@
   (`bots/*`, `packages/*`) с общими инструментами разработки (pytest, ruff, mypy, pre-commit,
   pip-audit) и одним `uv.lock`. `meetup-rsvp-bot` перенесён в `bots/meetup-rsvp-bot/` с
   сохранением истории; добавлен каталог `bots/registro-civil-bot/` с зависимостями из его ТЗ
-  (aiohttp, Playwright, keyring и др.).
+  (aiohttp, keyring и др.; Playwright убран решением R13 бота).
 - `dev.py`: обнаружение ботов, ключ `--bot`, команды `bots`, `check-layout`, `audit`; проверки
   mypy и pytest по каждому боту отдельным процессом.
 - `scripts/monorepo.py`: контракт каталога бота и запрет импорта одного бота из другого — в

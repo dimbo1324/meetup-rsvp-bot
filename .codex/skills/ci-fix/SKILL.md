@@ -19,7 +19,7 @@ uv run python dev.py quality-gate [--bot <бот>]
 
 Различайте: ошибка в коде / устаревший тест / окружение (версия Python; `uv.lock` не
 синхронизирован; `.venv` сужен до одного бота — `uv sync --all-packages --all-groups`;
-`AGENTS.md` не синхронизирован — `sync-agents`; нет Chromium — `dev.py setup --bot <бот>`).
+`AGENTS.md` не синхронизирован — `sync-agents`; не хватает шагов подготовки бота — `dev.py setup --bot <бот>`).
 
 ## 3. Исправьте минимально
 

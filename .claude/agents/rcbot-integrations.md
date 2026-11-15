@@ -1,6 +1,6 @@
 ---
 name: rcbot-integrations
-description: registro-civil-bot — используйте для внешних адаптеров rcbot: вход через Playwright, ApiSource и DomSource, HTTP-клиент со списком хостов, уведомления Telegram/ntfy/CallMeBot, Telegram-интерфейс на aiogram-dialog, автозапуск на Windows.
+description: registro-civil-bot — используйте для внешних адаптеров rcbot: источник SaeSource (страница записи SAE), HTTP-клиент со списком хостов, уведомления Telegram/ntfy/CallMeBot, Telegram-интерфейс на aiogram-dialog, автозапуск на Windows.
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
@@ -13,17 +13,16 @@ tools: Read, Edit, Write, Bash, Grep, Glob
 
 Жёсткие требования:
 
-- Только чтение календаря: никаких кликов «Siguiente», «Guardar y Cerrar», выбора даты,
-  оплаты, решения контрольного вопроса. Шаг 1 — кнопка «Готово» владельцу (D3).
-- Playwright — временный контекст без профиля на диске; cookies только в памяти; не больше
-  6 входов в час; 10 минут без повторного входа после уведомления (D5).
+- Только чтение страницы записи SAE (R12, R13): GET, без входа, без браузера; никаких
+  «Siguiente», «Guardar y Cerrar», выбора даты, отправки форм, оплаты, решения контрольного вопроса.
 - Одна долгоживущая `ClientSession` на сайт, таймауты на всех вызовах, только разрешённые
-  хосты, TLS всегда. Неожиданный ответ → `UnexpectedResponse` и карантин без cookies.
+  хосты, TLS всегда, без переадресаций. Чужая страница → `UnexpectedResponse` и снимок страницы
+  через фильтр секретов.
 - Каналы уведомлений параллельно через `TaskGroup`; сбой одного не задерживает другие; в ntfy
   и CallMeBot — только даты, время и общая фраза.
 - Telegram отвечает только `chat_id` владельца (middleware).
 - Тесты — только фикстуры и локальный HTTPS-сервер aiohttp с сертификатом `trustme`
-  (`tests/fakes.py::LocalTlsServer`, решение R7); на живой сайт ни тесты, ни вы не ходите. Разведка (`rcbot discover`) — на ноутбуке владельца по его просьбе.
+  (`tests/fakes.py::LocalTlsServer`, решение R7); на живой сайт ни тесты, ни вы не ходите. Живую страницу проверяет `rcbot check --once` на ноутбуке владельца по его просьбе.
 - Windows: `ProactorEventLoop` без смены политики; uvloop только на Linux.
 
 Перед завершением: `uv run python dev.py quality-gate --bot registro-civil-bot`.
