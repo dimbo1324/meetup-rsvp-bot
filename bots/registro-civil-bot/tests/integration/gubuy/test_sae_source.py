@@ -80,6 +80,37 @@ def test_не_страница_записи_не_распознаётся() -> N
     assert seats_open("") is None
 
 
+@pytest.mark.parametrize(
+    "hidden_attr",
+    ['style="display:none"', 'style="display: none;"', "hidden", 'aria-hidden="true"'],
+)
+def test_скрытая_надпись_нет_мест_не_прячет_появившиеся_места(hidden_attr: str) -> None:
+    # Блок с надписью может остаться в разметке скрытым, когда места появятся
+    page = (
+        f'<div id="form:warnSinCupos" {hidden_attr}><h4>En la oficina seleccionada '
+        "no hay cupos disponibles</h4></div><fieldset><span>Ubicación</span><input type=radio>"
+        "</fieldset>"
+    )
+    assert seats_open(page) is True
+
+
+def test_незакрытые_теги_не_ломают_видимость() -> None:
+    page = '<div style="display:none"><p>скрыто<p>тоже</div><span>Ubicación</span>'
+    assert visible_text(page) == "ubicacion"
+
+
+def test_настоящий_снимок_страницы_без_мест() -> None:
+    """Форма блока с надписью — как в снимке живой страницы SAE от 2026-11-14 (без лишнего)."""
+    page = """<form><div id="form:warnSinCupos" class="ui-outputpanel ui-widget" style="">
+    <div class="ui-messages-warn"><h4 class="ui-messages-warn-title">En la oficina seleccionada
+    no hay cupos disponibles
+    </h4><ul><li><span>A la brevedad se añadirán cupos</span></li></ul></div></div>
+    <fieldset><legend>Formulario</legend><div id="recurso"><span class="label">Ubicación</span>
+    <div role="radiogroup"><input type="radio" checked="checked"/></div></div>
+    <!-- Calendario completo --></fieldset></form>"""
+    assert seats_open(page) is False
+
+
 # --- источник ---
 
 

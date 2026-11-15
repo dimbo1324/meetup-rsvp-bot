@@ -42,24 +42,48 @@ SNAPSHOT_PREFIX = "sae-"
 _SKIPPED_TAGS = frozenset({"script", "style", "noscript", "template"})
 
 
+# Элементы без закрывающего тега: в стеке открытых элементов их не держим
+_VOID_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr"}
+)
+
+
+def _hidden(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    """Скрипты, стили и скрытые элементы: надпись «нет мест» может остаться в разметке скрытой."""
+    if tag in _SKIPPED_TAGS:
+        return True
+    for name, value in attrs:
+        if name == "hidden" or (name == "aria-hidden" and value == "true"):
+            return True
+        if name == "style" and value and "display:none" in value.replace(" ", "").lower():
+            return True
+    return False
+
+
 class _VisibleText(HTMLParser):
-    """Текст страницы без скриптов и стилей: шаблон надписи в скрипте не считается надписью."""
+    """Видимый текст: без скриптов, стилей и элементов, скрытых атрибутами или `display:none`."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._skip_depth = 0
+        self._open: list[tuple[str, bool]] = []
+
+    def _inside_hidden(self) -> bool:
+        return any(hidden for _, hidden in self._open)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in _SKIPPED_TAGS:
-            self._skip_depth += 1
+        if tag not in _VOID_TAGS:
+            self._open.append((tag, _hidden(tag, attrs)))
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in _SKIPPED_TAGS and self._skip_depth:
-            self._skip_depth -= 1
+        # Незакрытые вложенные элементы закрываются вместе с родителем, как в браузере
+        for index in range(len(self._open) - 1, -1, -1):
+            if self._open[index][0] == tag:
+                del self._open[index:]
+                return
 
     def handle_data(self, data: str) -> None:
-        if not self._skip_depth:
+        if not self._inside_hidden():
             self.parts.append(data)
 
 
