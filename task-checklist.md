@@ -10,27 +10,38 @@
 
 ## Подготовка
 
-- [ ] Ветка от несмёрженных исправлений `fix/rcbot-check-sae-no-login`, карта зависимостей пути bpmgob
-- [ ] Чек-лист закоммичен до основной работы
+- [+] Ветка от несмёрженных исправлений `fix/rcbot-check-sae-no-login`, карта зависимостей пути bpmgob
+- [+] Чек-лист закоммичен до основной работы
 
 ## Реализация
 
-- [ ] Решение R13 в `docs/open-questions.md`
-- [ ] Удалены модули `infrastructure/gubuy` пути bpmgob; `SaeSource` не зависит от них
-- [ ] Ядро: без `SessionManager`, `Authenticator`, состояний REAUTH и NEEDS_MANUAL, запасного источника
-- [ ] Настройки и секреты: без браузера, входа, API, номера документа и пароля
-- [ ] CLI: без `login` и `discover`; `init` спрашивает только токен, @username, этап и заявку; `doctor` без браузеров
-- [ ] Telegram: без `/relogin`, «Войти заново» и кнопки «Готово»
-- [ ] Playwright убран из зависимостей, `uv.lock`, шагов setup, CI и `quickstart.ps1`
+- [+] Решение R13 в `docs/open-questions.md`
+- [+] Удалены модули `infrastructure/gubuy` пути bpmgob; `SaeSource` не зависит от них
+- [+] Ядро: без `SessionManager`, `Authenticator`, состояний REAUTH и NEEDS_MANUAL, запасного источника
+- [+] Настройки и секреты: без браузера, входа, API, номера документа и пароля
+- [+] CLI: без `login` и `discover`; `init` спрашивает только токен, @username, этап и заявку; `doctor` без браузеров
+- [+] Telegram: без `/relogin`, «Войти заново» и кнопки «Готово»
+- [+] Playwright убран из зависимостей, `uv.lock`, шагов setup, CI и `quickstart.ps1`
+- [+] Сверх плана: `init` и `uninstall` удаляют из Credential Manager номер паспорта и пароль прежних
+      версий; `purge` удаляет остатки (`data/quarantine/`, `data/discovery/`, `.browsers/`); удалён
+      неиспользуемый порт `TargetRepository`
 
 ## Проверка
 
-- [ ] Тесты пути bpmgob удалены, остальные обновлены; сквозной стенд на SAE
-- [ ] `check --once` и `simulate` работают на машине разработки
-- [ ] Полный `dev.py quality-gate` на Windows и в Linux-контейнере
+- [+] Тесты пути bpmgob удалены, остальные обновлены; сквозной стенд на настоящем `SaeSource`
+- [-] `check --once` и `simulate` на машине разработки: не запускались после чистки — это живой
+      сайт и реальные каналы, их запускает владелец (инструкция в отчёте)
+- [+] Полный `dev.py quality-gate`: Windows — 2406 тестов rcbot, покрытие 99,5 %; Linux-контейнер
+      (Python 3.14.10, как в CI) — зелёный, 44 пропуска — тесты только для Windows
 
 ## Завершение
 
-- [ ] Документы: SPEC, README, `.env.example`, overview, invariants, ROADMAP, CHANGELOG, testing, правила бота, агенты rcbot-* в обоих зеркалах
-- [ ] Слияние в `main` fast-forward, пуш, CI зелёный
-- [ ] Инструкция владельцу на подключение
+- [+] Документы: SPEC, README, `.env.example`, overview, invariants, ROADMAP, CHANGELOG, testing, правила бота, агенты rcbot-* в обоих зеркалах
+- [+] Слияние в `main` fast-forward, пуш (CI проверяется после пуша), рабочие ветки удалены
+- [+] Инструкция владельцу на подключение — в итоговом отчёте
+
+## Оговорки
+
+- [-] Разбор дат на странице SAE не написан (Q-S1): ждёт снимок страницы с местами
+- [-] Настройка «месяцев вперёд» на SAE не влияет, но осталась (Q-S2): её удаление требует миграции БД
+- [-] Столбец `poll_stats_hourly.relogins` остался в схеме (пишется 0): схема меняется только миграцией
