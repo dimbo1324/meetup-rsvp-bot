@@ -28,7 +28,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"rcbot {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="команда")
 
-    sub.add_parser("init", help="мастер: секреты в Credential Manager, тема ntfy, chat_id")
+    init = sub.add_parser("init", help="мастер: секреты в Credential Manager, тема ntfy, chat_id")
+    init.add_argument(
+        "--new-ntfy-topic",
+        action="store_true",
+        help="создать новую тему ntfy (если старая стала известна посторонним)",
+    )
     doctor = sub.add_parser("doctor", help="проверка окружения, браузера, секретов, хостов")
     doctor.add_argument("--full", action="store_true", help="ещё и pip-audit зависимостей")
     doctor.add_argument("--offline", action="store_true", help="без проверки доступа к хостам")

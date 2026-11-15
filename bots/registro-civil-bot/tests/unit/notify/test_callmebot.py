@@ -379,3 +379,24 @@ async def test_прогрев_успешен_и_это_head_без_параме�
 
 def test_канал_это_звонок() -> None:
     assert CallMeBotNotifier(OkHttp(), USER, RU).channel is Channel.CALL  # type: ignore[arg-type]
+
+
+# --- диагностика отказа ---
+
+
+async def test_текст_отказа_виден_в_логе_без_адресата_и_разметки(
+    server: LocalTlsServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    from rcbot.infrastructure.logging.redaction import REDACTOR
+
+    REDACTOR.register(f"@{USER}")
+    page = f"<html><body><p>Error: @{USER} has not authorized the bot to call</p></body></html>"
+    server.respond("GET", PATH, text=page, content_type="text/html")
+    notifier = make(server)
+    alert = Alert(AlertKind.APPEARED, "текст", call_text="звонок", call_fallback_text="")
+    with caplog.at_level(logging.WARNING, logger=callmebot.logger.name):
+        result = await notifier.send(alert, 1)
+    await notifier.close()
+    assert not result.ok and result.error == "сервис ответил ошибкой"
+    assert "has not authorized the bot to call" in caplog.text
+    assert USER not in caplog.text and "<p>" not in caplog.text

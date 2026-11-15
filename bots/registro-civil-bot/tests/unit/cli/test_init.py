@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import builtins
 import getpass
@@ -726,3 +727,38 @@ def test_init_не_спрашивает_то_что_уже_задано(
     assert run_init(capsys)[0] == 0
     assert wizard.case_questions == []
     assert paths.env_file.read_text(encoding="utf-8").count(STAGE) == 1
+
+
+# --- смена темы ntfy ---
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_new_ntfy_topic_заменяет_засвеченную_тему(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    memory_keyring: MemoryKeyring,
+) -> None:
+    store = SecretStore()
+    for key in REQUIRED:
+        store.set(key, f"synthetic-{key.value}")
+    store.set(SecretKey.NTFY_TOPIC, "rcbot-old-synthetic-topic-0123456789abcdef")
+    Wizard(FULL).install(monkeypatch)
+    assert setup.cmd_init(argparse.Namespace(new_ntfy_topic=True)) == 0
+    topic = stored(SecretStore(), SecretKey.NTFY_TOPIC)
+    assert topic and topic != "rcbot-old-synthetic-topic-0123456789abcdef"
+    assert topic.startswith("rcbot-") and topic in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("env_example")
+def test_init_без_флага_тему_не_трогает(
+    monkeypatch: pytest.MonkeyPatch, memory_keyring: MemoryKeyring
+) -> None:
+    store = SecretStore()
+    for key in REQUIRED:
+        store.set(key, f"synthetic-{key.value}")
+    store.set(SecretKey.NTFY_TOPIC, "rcbot-kept-synthetic-topic-0123456789abcdef")
+    Wizard(FULL).install(monkeypatch)
+    assert setup.cmd_init(argparse.Namespace(new_ntfy_topic=False)) == 0
+    assert (
+        stored(SecretStore(), SecretKey.NTFY_TOPIC) == "rcbot-kept-synthetic-topic-0123456789abcdef"
+    )

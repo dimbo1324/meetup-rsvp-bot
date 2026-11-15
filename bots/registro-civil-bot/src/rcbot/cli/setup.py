@@ -113,12 +113,12 @@ def _ask_case(core: Core) -> None:
             print("  Записано в .env: RCBOT_TRAMITE_ID.")
 
 
-def cmd_init(_: argparse.Namespace) -> int:
+def cmd_init(args: argparse.Namespace) -> int:
     with build_core(command="init") as core:
-        return _init(core)
+        return _init(core, new_ntfy_topic=bool(getattr(args, "new_ntfy_topic", False)))
 
 
-def _init(core: Core) -> int:
+def _init(core: Core, *, new_ntfy_topic: bool = False) -> int:
     if not core.paths.env_file.exists():
         example = core.paths.home / ".env.example"
         shutil.copyfile(example, core.paths.env_file)
@@ -139,7 +139,8 @@ def _init(core: Core) -> int:
         elif not present[key] and key in REQUIRED:
             print(f"Пропущено обязательное: {DESCRIPTIONS[key]}. Запустите init ещё раз.")
 
-    if not present[SecretKey.NTFY_TOPIC]:
+    # Новая тема — если старой нет или она стала известна посторонним (`init --new-ntfy-topic`)
+    if new_ntfy_topic or not present[SecretKey.NTFY_TOPIC]:
         topic = f"rcbot-{secrets.token_urlsafe(30)}"
         core.secrets.set(SecretKey.NTFY_TOPIC, topic)
         print(

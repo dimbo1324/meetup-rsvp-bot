@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from rcbot.application.messages import CALL_MAX_CHARS
 from rcbot.config.settings import CALLMEBOT_HOST
 from rcbot.domain.models import Alert, Channel, DeliveryResult
 from rcbot.infrastructure.http.client import SafeHttp
+from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.infrastructure.notify._result import error_of, measured
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,13 @@ FALLBACK_LANG = "en-US-Standard-B"
 # в общий лимит отправки оркестратора (12 с), и отказ успевает записаться как ошибка канала
 CALLMEBOT_TIMEOUT_SEC = 5
 _ERROR_MARKERS = ("error", "not authorized", "invalid", "you need to")
+_TAG = re.compile(r"<[^>]*>")
+EXCERPT_CHARS = 300
+
+
+def _excerpt(body: str) -> str:
+    """Видимый текст ответа без разметки, коротко и без секретов."""
+    return REDACTOR.redact(" ".join(_TAG.sub(" ", body).split()))[:EXCERPT_CHARS]
 
 
 class CallMeBotNotifier:
@@ -44,6 +53,9 @@ class CallMeBotNotifier:
             if response.status != 200:
                 return f"HTTP {response.status}"
             if any(marker in body for marker in _ERROR_MARKERS):
+                # Текст ответа виден в логе: без него причину отказа (настройки звонков Telegram,
+                # активация CallMeBot) не понять. Адресат — секрет и вырезается фильтром
+                logger.warning("CallMeBot: ответ сервиса: %s", _excerpt(body))
                 return "сервис ответил ошибкой"
         return ""
 
