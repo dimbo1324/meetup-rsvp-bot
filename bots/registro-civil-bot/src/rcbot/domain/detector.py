@@ -1,6 +1,7 @@
 """Детектор (SPEC 2.3, модель инцидента): сравнение снимков без побочных эффектов.
 
-- Инцидент открывается, когда множество слотов стало непустым → `SlotsAppeared`.
+- Инцидент открывается, когда множество слотов стало непустым или источник видит места без дат
+  → `SlotsAppeared`.
 - Новые слоты в открытом инциденте → `SlotsChanged` (новое уведомление). Пропажа части слотов
   тревоги не вызывает: множество обновляется молча.
 - Инцидент закрывается после трёх пустых проверок подряд → `SlotsGone` (защита от дребезга).
@@ -50,7 +51,7 @@ class Detector:
         self.last_fingerprint = ""
 
     def compare(self, snapshot: AvailabilitySnapshot) -> DomainEvent | None:
-        if snapshot.has_slots:
+        if snapshot.is_open:
             self.empty_streak = 0
             if self.incident_open and snapshot.fingerprint == self.last_fingerprint:
                 return None

@@ -67,7 +67,8 @@ class Settings(BaseSettings):
     sentry_enabled: bool = False
     sentry_dsn: str = ""
     watchdog_url: str = ""
-    sae_source_enabled: bool = False
+    # Главный источник — публичная страница записи SAE (решение R12): вход в bpmgob не нужен
+    sae_source_enabled: bool = True
     sae_url: str = "https://sae.mec.gub.uy/sae/agendarReserva/Paso1.xhtml?e=9&a=82"
     headless: bool = True
     # Браузер (решение R8): auto — Chrome, затем Edge, затем встроенный Chromium Playwright
@@ -105,10 +106,19 @@ class Settings(BaseSettings):
             raise ValueError(f"неизвестный часовой пояс: {value!r}") from error
         return value
 
-    @field_validator("login_url", "ntfy_server", "sae_url")
+    @field_validator("login_url", "ntfy_server")
     @classmethod
     def _https_only(cls, value: str) -> str:
         return _require_https(value)
+
+    @field_validator("sae_url")
+    @classmethod
+    def _sae_on_sae_host(cls, value: str) -> str:
+        """Страница записи SAE только на своём хосте: список разрешённых хостов не расширяется."""
+        _require_https(value)
+        if (urlparse(value).hostname or "") != SAE_HOST:
+            raise ValueError(f"адрес страницы SAE должен быть на {SAE_HOST}")
+        return value
 
     @field_validator("watchdog_url")
     @classmethod
@@ -148,6 +158,8 @@ class Settings(BaseSettings):
         hosts = {*GUBUY_HOSTS, TELEGRAM_HOST, CALLMEBOT_HOST, _host(self.ntfy_server)}
         if self.watchdog_url:
             hosts.add(_host(self.watchdog_url))
+        if self.sae_source_enabled:
+            hosts.add(SAE_HOST)
         return frozenset(hosts)
 
 

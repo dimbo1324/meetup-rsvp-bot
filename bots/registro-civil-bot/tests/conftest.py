@@ -85,6 +85,9 @@ def bot_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # В тестах журнал пишется синхронно: файлы читаются сразу. Фоновый режим проверяют
     # отдельные тесты (tests/unit/storage/test_journal_background.py, e2e)
     monkeypatch.setenv("RCBOT_JOURNAL_BACKGROUND", "false")
+    # Большинство тестов проверяет путь через вход в bpmgob (API и DomSource); источник SAE (R12),
+    # главный по умолчанию в работе, тесты включают явно
+    monkeypatch.setenv("RCBOT_SAE_SOURCE_ENABLED", "false")
     return home
 
 

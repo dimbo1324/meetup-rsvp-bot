@@ -18,7 +18,7 @@ from rcbot.application.ports import AvailabilitySource, Journal, NullJournal
 from rcbot.application.session_manager import SessionManager
 from rcbot.config.paths import Paths
 from rcbot.config.secrets import SecretStore
-from rcbot.config.settings import BPMGOB_HOST, Settings, load_settings
+from rcbot.config.settings import BPMGOB_HOST, SAE_HOST, Settings, load_settings
 from rcbot.domain.models import WatchTarget
 from rcbot.infrastructure.clock import SystemClock
 from rcbot.infrastructure.db.engine import create_engine, create_session_factory
@@ -34,6 +34,7 @@ from rcbot.infrastructure.gubuy.api_source import ApiSource
 from rcbot.infrastructure.gubuy.auth import PlaywrightAuthenticator
 from rcbot.infrastructure.gubuy.browser import BrowserOptions
 from rcbot.infrastructure.gubuy.dom_source import DomSource
+from rcbot.infrastructure.gubuy.sae_source import SaeSource
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.journal.desktop import journal_dir
 from rcbot.infrastructure.journal.files import FileJournal
@@ -203,8 +204,20 @@ def build_dom_source(core: Core) -> DomSource:
     )
 
 
+def build_sae_source(core: Core) -> SaeSource:
+    s = core.settings
+    http = SafeHttp([SAE_HOST], timeout_sec=s.request_timeout_sec)
+    return SaeSource(http, s.sae_url, core.paths.shots, core.clock)
+
+
 async def build_sources(core: Core) -> tuple[AvailabilitySource, AvailabilitySource | None]:
-    """Основной источник и запасной: после разведки — API и DomSource, до неё — только DomSource."""
+    """Основной источник и запасной.
+
+    По умолчанию — публичная страница SAE без входа (R12), запасного нет: календарь bpmgob после
+    входа закрыт контрольным вопросом шага 1. Без SAE — API и DomSource bpmgob, как до R12.
+    """
+    if core.settings.sae_source_enabled:
+        return build_sae_source(core), None
     api, dom = build_api_source(core), build_dom_source(core)
     if api.configured:
         return api, dom

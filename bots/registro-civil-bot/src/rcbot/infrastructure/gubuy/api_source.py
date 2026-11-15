@@ -51,7 +51,7 @@ _PAGE_TEXTS = {
 MAX_RESPONSE_BYTES = 1024 * 1024
 
 
-async def _read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
+async def read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
     """Тело не длиннее `MAX_RESPONSE_BYTES` и признак «ответ больше предела»."""
     declared = response.content_length
     if declared is not None and declared > MAX_RESPONSE_BYTES:
@@ -117,7 +117,7 @@ class ApiSource:
                 status = response.status
                 location = response.headers.get("Location", "")
                 content_type = response.headers.get("Content-Type", "")
-                body, too_large = await _read_limited(response)
+                body, too_large = await read_limited(response)
         except (aiohttp.ClientError, TimeoutError) as error:
             raise SiteUnavailable(f"API недоступен: {type(error).__name__}") from None
         latency_ms = (monotonic_time.perf_counter() - started) * 1000

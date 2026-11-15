@@ -40,6 +40,11 @@ CALL_MAX_CHARS = 256
 TELEGRAM_ONLY = frozenset({Channel.TELEGRAM})
 
 
+# Источник видит места, но даты не разобрал (страница SAE без надписи «нет мест», R12)
+DATES_UNKNOWN_LINE = "• Даты не разобраны: на странице записи пропала надпись «нет мест»."
+DATES_UNKNOWN_PUSH = "Похоже, появились места. Срочно проверьте запись."
+
+
 def _day_lines(slots: frozenset[Slot]) -> list[str]:
     by_day: dict[date, list[str]] = defaultdict(list)
     for slot in sorted(slots):
@@ -79,6 +84,8 @@ class MessageComposer:
             else "🟢 Registro Civil: появились места!"
         )
         lines = [title, *_day_lines(snapshot.slots)]
+        if not snapshot.slots:
+            lines.append(DATES_UNKNOWN_LINE)
         if changed and added:
             lines.append("Новые: " + _short_days(added))
         application = f"Заявка {self.tramite_id}" if self.tramite_id else "Заявка"
@@ -98,7 +105,9 @@ class MessageComposer:
             call_text=CALL_TEXT_RU[:CALL_MAX_CHARS],
             call_fallback_text=CALL_TEXT_EN[:CALL_MAX_CHARS],
             push_title="Registro Civil: появились места",
-            push_text=f"Свободные даты: {days}. Срочно записывайтесь.",
+            push_text=(
+                f"Свободные даты: {days}. Срочно записывайтесь." if days else DATES_UNKNOWN_PUSH
+            ),
             action=AlertAction.ACK,
         )
 

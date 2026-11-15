@@ -118,7 +118,9 @@ def test_необязательные_адреса_могут_быть_пуст�
 )
 def test_схема_https_в_любом_регистре_допустима(field: str) -> None:
     # API календаря и адрес этапа допустимы только на bpmgob (SPEC 2.6)
-    host = "bpmgob.mec.gub.uy" if field in ("api_url", "agenda_url") else "host.example"
+    hosts = {"api_url": "bpmgob.mec.gub.uy", "agenda_url": "bpmgob.mec.gub.uy"}
+    hosts["sae_url"] = "sae.mec.gub.uy"  # страница SAE только на своём хосте (R12)
+    host = hosts.get(field, "host.example")
     assert getattr(Settings(**{field: f"HTTPS://{host}/a"}), field)
 
 
@@ -202,7 +204,7 @@ def test_значения_по_умолчанию_совпадают_с_env_exam
     assert (s.ntfy_server, s.ntfy_repeat_sec, s.ntfy_repeat_max) == ("https://ntfy.sh", 120.0, 10)
     assert (s.call_repeat_sec, s.call_repeat_max, s.call_lang) == (180.0, 5, "ru-RU-Standard-A")
     assert (s.daily_report_hour, s.timezone) == (9, "America/Montevideo")
-    assert (s.sentry_enabled, s.sae_source_enabled, s.headless) == (False, False, True)
+    assert (s.sentry_enabled, s.headless) == (False, True)
     assert s.watchdog_url == "" and s.api_url == ""
     assert (s.doc_country, s.doc_type) == ("Rusia", "Pasaporte")
     assert s.location_text == "Oficina Tramite Extranjeros"
@@ -295,10 +297,29 @@ def test_api_на_чужом_хосте_отклоняется(url: str) -> None
         Settings(api_url=url)
 
 
-def test_sae_не_расширяет_список_пока_источник_не_реализован() -> None:
-    # Решение владельца (Q-A1): чтение SAE не написано, поэтому флаг не открывает сеть до него
-    assert "sae.mec.gub.uy" not in Settings().allowed_hosts()
-    assert Settings(sae_source_enabled=True).allowed_hosts() == Settings().allowed_hosts()
+def test_sae_главный_источник_по_умолчанию(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Решение R12: в работе по умолчанию SAE включён (тесты выключают его в conftest)
+    monkeypatch.delenv("RCBOT_SAE_SOURCE_ENABLED", raising=False)
+    assert Settings().sae_source_enabled is True
+    assert "sae.mec.gub.uy" in Settings().allowed_hosts()
+
+
+def test_хост_sae_в_списке_только_когда_источник_включён() -> None:
+    assert "sae.mec.gub.uy" not in Settings(sae_source_enabled=False).allowed_hosts()
+    assert "sae.mec.gub.uy" in Settings(sae_source_enabled=True).allowed_hosts()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/sae",
+        "https://sae.mec.gub.uy.evil.example/x",
+        "http://sae.mec.gub.uy/x",
+    ],
+)
+def test_адрес_sae_только_на_своём_хосте_и_https(url: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(sae_url=url)
 
 
 @pytest.mark.parametrize("value", ["", "<НОМЕР_ЗАЯВКИ>", "TEST-TRAMITE", "ABCD", "1" * 40])
@@ -325,8 +346,8 @@ def test_все_необязательные_источники_вместе() -
         api_url="https://bpmgob.mec.gub.uy/x",
         sae_source_enabled=True,
     ).allowed_hosts()
-    assert len(hosts) == 6
-    assert "w.example.org" in hosts and "sae.mec.gub.uy" not in hosts
+    assert len(hosts) == 7
+    assert {"w.example.org", "sae.mec.gub.uy"} <= hosts
 
 
 def test_хосты_не_зависят_от_адреса_входа() -> None:

@@ -91,6 +91,9 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[index]
 
 
+DATES_UNKNOWN_MARK = "dates-unknown"
+
+
 def fingerprint_of(slots: frozenset[Slot]) -> str:
     joined = "|".join(slot.label() for slot in sorted(slots))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
@@ -104,16 +107,25 @@ class AvailabilitySnapshot:
     source: SourceKind
     latency_ms: float
     fingerprint: str = field(default="")
+    # Места есть, но даты источник разобрать не смог (страница SAE без надписи «нет мест», R12):
+    # тревога всё равно нужна, а даты владелец увидит на странице записи
+    dates_unknown: bool = False
 
     def __post_init__(self) -> None:
         if self.observed_at.tzinfo is None:
             raise ValueError("observed_at должен быть aware-datetime в UTC")
         if not self.fingerprint:
-            object.__setattr__(self, "fingerprint", fingerprint_of(self.slots))
+            mark = DATES_UNKNOWN_MARK if self.dates_unknown and not self.slots else ""
+            object.__setattr__(self, "fingerprint", mark or fingerprint_of(self.slots))
 
     @property
     def has_slots(self) -> bool:
         return bool(self.slots)
+
+    @property
+    def is_open(self) -> bool:
+        """Места есть: известны слоты или источник видит места без дат."""
+        return self.has_slots or self.dates_unknown
 
 
 @dataclass
