@@ -84,7 +84,12 @@ def _discover(core: Core) -> int:
 def _print_snapshot(snapshot: AvailabilitySnapshot) -> None:
     print(f"Источник: {snapshot.source.value}, проверка заняла {snapshot.latency_ms:.0f} мс.")
     if not snapshot.slots:
-        print("Свободных мест нет.")
+        if snapshot.dates_unknown:
+            print(
+                "Места появились: надпись «нет мест» пропала, даты не разобраны — откройте запись."
+            )
+        else:
+            print("Свободных мест нет.")
         return
     by_month: dict[tuple[int, int], list[Slot]] = defaultdict(list)
     for slot in sorted(snapshot.slots):
@@ -102,7 +107,9 @@ async def _check_once(core: Core) -> tuple[SourceKind, AvailabilitySnapshot | Rc
     session.subscribe(source.use_cookies)
     target = transient_target(core)
     try:
-        await session.ensure()
+        # Странице SAE вход не нужен (R12): без этой проверки ручной check входил бы на bpmgob зря
+        if source.kind is not SourceKind.SAE:
+            await session.ensure()
         try:
             return source.kind, await source.fetch(target)
         except SessionExpired:

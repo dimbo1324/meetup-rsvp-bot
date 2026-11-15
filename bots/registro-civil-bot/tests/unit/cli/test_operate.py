@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Callable, Coroutine
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -28,7 +29,7 @@ from rcbot.domain.errors import (
     SessionExpired,
     SiteUnavailable,
 )
-from rcbot.domain.models import Channel, DeliveryResult, SourceKind
+from rcbot.domain.models import AvailabilitySnapshot, Channel, DeliveryResult, SourceKind
 from rcbot.infrastructure.gubuy.discovery import DiscoveryResult
 from rcbot.infrastructure.gubuy.pages import PageKind
 from rcbot.infrastructure.logging.redaction import MASK, REDACTOR
@@ -689,3 +690,41 @@ def test_namespace_команд_не_ломается_без_атрибутов(
     parsed = cli._parser().parse_args(["login"])
     assert isinstance(parsed, argparse.Namespace)
     assert parsed.check is False
+
+
+# --- check с главным источником SAE (R12) ---
+
+
+def _sae_only(monkeypatch: pytest.MonkeyPatch, source: FakeSource) -> CheckEnv:
+    env = CheckEnv(monkeypatch, dom=FakeSource([frozenset()]))
+
+    async def build_sources(core: Core) -> tuple[FakeSource, None]:
+        return source, None
+
+    monkeypatch.setattr(operate, "build_sources", build_sources)
+    return env
+
+
+def test_check_с_sae_не_входит_на_сайт(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sae = FakeSource([frozenset()], kind=SourceKind.SAE)
+    env = _sae_only(monkeypatch, sae)
+    assert cli.main(["check"]) == 0
+    assert env.auth.logins == 0  # публичной странице вход не нужен
+    out = capsys.readouterr().out
+    assert "Источник: sae" in out and "Свободных мест нет." in out
+    assert sae.closed == 1
+
+
+def test_check_с_sae_места_без_дат_так_и_говорит(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class OpenSae(FakeSource):
+        async def fetch(self, target: Any) -> AvailabilitySnapshot:
+            shot = await super().fetch(target)
+            return replace(shot, dates_unknown=True, fingerprint="")
+
+    _sae_only(monkeypatch, OpenSae([frozenset()], kind=SourceKind.SAE))
+    assert cli.main(["check"]) == 0
+    assert "Места появились" in capsys.readouterr().out
