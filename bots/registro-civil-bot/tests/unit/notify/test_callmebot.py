@@ -400,3 +400,15 @@ async def test_текст_отказа_виден_в_логе_без_адрес�
     assert not result.ok and result.error == "сервис ответил ошибкой"
     assert "has not authorized the bot to call" in caplog.text
     assert USER not in caplog.text and "<p>" not in caplog.text
+
+
+async def test_слово_error_в_скрипте_страницы_не_считается_отказом(server: LocalTlsServer) -> None:
+    page = (
+        "<html><head><script>window.onerror = function(){}; gtag('js');</script></head>"
+        "<body><p>Autorization OK. Text to speech: prueba. Call queued</p></body></html>"
+    )
+    server.respond("GET", PATH, text=page, content_type="text/html")
+    notifier = make(server)
+    result = await notifier.send(Alert(AlertKind.APPEARED, "текст", call_text="звонок"), 1)
+    await notifier.close()
+    assert result.ok and result.error == ""

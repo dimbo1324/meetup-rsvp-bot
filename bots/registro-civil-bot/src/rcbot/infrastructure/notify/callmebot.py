@@ -9,11 +9,11 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from rcbot.application.messages import CALL_MAX_CHARS
 from rcbot.config.settings import CALLMEBOT_HOST
 from rcbot.domain.models import Alert, Channel, DeliveryResult
+from rcbot.infrastructure.gubuy.sae_source import visible_text
 from rcbot.infrastructure.http.client import SafeHttp
 from rcbot.infrastructure.logging.redaction import REDACTOR
 from rcbot.infrastructure.notify._result import error_of, measured
@@ -27,13 +27,15 @@ FALLBACK_LANG = "en-US-Standard-B"
 # в общий лимит отправки оркестратора (12 с), и отказ успевает записаться как ошибка канала
 CALLMEBOT_TIMEOUT_SEC = 5
 _ERROR_MARKERS = ("error", "not authorized", "invalid", "you need to")
-_TAG = re.compile(r"<[^>]*>")
-EXCERPT_CHARS = 300
+EXCERPT_CHARS = 200
 
 
 def _excerpt(body: str) -> str:
-    """Видимый текст ответа без разметки, коротко и без секретов."""
-    return REDACTOR.redact(" ".join(_TAG.sub(" ", body).split()))[:EXCERPT_CHARS]
+    """Видимый текст ответа (без скриптов страницы) вокруг слова-отказа, без секретов."""
+    text = visible_text(body)
+    hit = min((i for i in (text.find(m) for m in _ERROR_MARKERS) if i >= 0), default=0)
+    start = max(0, hit - EXCERPT_CHARS)
+    return REDACTOR.redact(text[start : hit + EXCERPT_CHARS])
 
 
 class CallMeBotNotifier:
@@ -52,11 +54,15 @@ class CallMeBotNotifier:
             body = (await response.text(errors="replace")).lower()
             if response.status != 200:
                 return f"HTTP {response.status}"
-            if any(marker in body for marker in _ERROR_MARKERS):
+            # Слова-отказы ищем в видимом тексте: в скриптах страницы (аналитика) «error» бывает
+            # и при успешном звонке
+            text_seen = visible_text(body)
+            if any(marker in text_seen for marker in _ERROR_MARKERS):
                 # Текст ответа виден в логе: без него причину отказа (настройки звонков Telegram,
                 # активация CallMeBot) не понять. Адресат — секрет и вырезается фильтром
                 logger.warning("CallMeBot: ответ сервиса: %s", _excerpt(body))
                 return "сервис ответил ошибкой"
+            logger.info("CallMeBot: ответ сервиса: %s", _excerpt(body))
         return ""
 
     async def _attempt(self, text: str, lang: str) -> str:
