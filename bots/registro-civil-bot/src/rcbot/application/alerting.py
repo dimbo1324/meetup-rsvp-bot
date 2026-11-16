@@ -110,8 +110,10 @@ class AlertOrchestrator:
         self._journal.event("alert.ack", "владелец подтвердил тревогу: повторы остановлены")
         return had_repeats or incident is not None
 
-    async def service(self, text: str) -> None:
-        await self._wave(self._composer.service(text), attempt=1)
+    async def service(self, text: str) -> bool:
+        """Служебное сообщение в Telegram; `True`, если оно доставлено (или слать было некуда)."""
+        results = await self._wave(self._composer.service(text), attempt=1)
+        return not results or any(result.ok for result in results)
 
     async def test(self, channels: set[Channel] | None = None) -> list[DeliveryResult]:
         alert = self._composer.test(self._clock.now())

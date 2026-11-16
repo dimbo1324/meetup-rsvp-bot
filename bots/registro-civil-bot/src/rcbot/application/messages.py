@@ -44,6 +44,15 @@ DATES_UNKNOWN_LINE = "• Даты не разобраны: на страниц�
 DATES_UNKNOWN_PUSH = "Похоже, появились места. Срочно проверьте запись."
 
 
+def duration_text(seconds: float) -> str:
+    """«13 ч 34 мин», «47 мин», «меньше минуты»: для сообщений о сне и простое."""
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} ч {minutes} мин"
+    return f"{minutes} мин" if minutes else "меньше минуты"
+
+
 def _day_lines(slots: frozenset[Slot]) -> list[str]:
     by_day: dict[date, list[str]] = defaultdict(list)
     for slot in sorted(slots):
@@ -123,6 +132,22 @@ class MessageComposer:
     @staticmethod
     def poll_hung(problem: str) -> str:
         return f"⚠️ Цикл опроса завис ({problem}). Перезапускаю его."
+
+    @staticmethod
+    def slept(started: datetime, ended: datetime, slept_sec: float, tz: ZoneInfo) -> str:
+        """Ноутбук спал: когда и сколько; даты в тексте — если сон перешёл через полночь."""
+        begin, end = started.astimezone(tz), ended.astimezone(tz)
+        same_day = begin.date() == end.date()
+        span = (
+            f"с {begin:%H:%M} до {end:%H:%M}"
+            if same_day
+            else f"с {begin:%d.%m %H:%M} до {end:%d.%m %H:%M}"
+        )
+        return (
+            f"😴 Ноутбук спал {span} ({duration_text(slept_sec)}): наблюдение было "
+            "приостановлено, места, открывшиеся за это время, могли пройти мимо. "
+            "Держите ноутбук на зарядке и не закрывайте крышку."
+        )
 
     @staticmethod
     def daily_report(

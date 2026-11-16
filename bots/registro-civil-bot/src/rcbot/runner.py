@@ -28,6 +28,7 @@ from rcbot.application.messages import MessageComposer
 from rcbot.application.poll_loop import PollLoop
 from rcbot.application.ports import NoopCoordinator, Notifier
 from rcbot.application.runtime import RuntimeStore
+from rcbot.application.sleep_watch import SleepWatch
 from rcbot.application.supervisor import Supervisor
 from rcbot.bootstrap import Core, build_source, ensure_target, open_storage
 from rcbot.bot import texts
@@ -43,6 +44,7 @@ from rcbot.infrastructure.notify.callmebot import CALLMEBOT_TIMEOUT_SEC, CallMeB
 from rcbot.infrastructure.notify.ntfy import NTFY_TIMEOUT_SEC, NtfyNotifier
 from rcbot.infrastructure.notify.telegram import TelegramNotifier
 from rcbot.infrastructure.notify.watchdog import HttpWatchdog
+from rcbot.infrastructure.win.sleep import awake_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +216,14 @@ async def run_app(
             }
 
         liveness = LivenessMonitor(
-            loop, core.journal, clock, alerts.service, restart_poll, liveness_extra
+            loop,
+            core.journal,
+            clock,
+            alerts.service,
+            restart_poll,
+            liveness_extra,
+            sleep=SleepWatch(clock, awake_seconds),
+            tz=s.tz,
         )
         controller = Controller(
             loop,

@@ -54,7 +54,7 @@ class HealthMonitor:
         clock: Clock,
         tz: ZoneInfo,
         report_hour: int,
-        send: Callable[[str], Awaitable[None]],
+        send: Callable[[str], Awaitable[object]],
         current_hour: Callable[[], PollStatsHour | None],
         folder_size: Callable[[], int],
         watchdog: WatchdogPinger | None,

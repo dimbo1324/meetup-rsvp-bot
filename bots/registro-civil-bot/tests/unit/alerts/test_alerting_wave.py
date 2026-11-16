@@ -256,6 +256,19 @@ async def test_произвольное_служебное_сообщение_и
     assert _only_telegram(rig) == ["бот запущен"]
 
 
+async def test_служебное_сообщение_сообщает_доставлено_ли_оно() -> None:
+    assert await make_rig().alerts.service("бот запущен") is True
+    failing = make_rig(notifier_kwargs={Channel.TELEGRAM: {"ok": False, "error": "сеть"}})
+    assert await failing.alerts.service("бот запущен") is False
+
+
+async def test_служебное_сообщение_некуда_слать_это_не_недоставка() -> None:
+    rig = make_rig(
+        channels={Channel.NTFY}
+    )  # Telegram не подключён: повторять отправку бессмысленно
+    assert await rig.alerts.service("бот запущен") is True
+
+
 _SLOW = PollState.BACKOFF
 _COMBOS = [(o, n) for o, n in itertools.product(PollState, PollState) if o is not n]
 
